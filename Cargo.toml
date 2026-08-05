@@ -1,0 +1,17 @@
+[package]
+name = "mux"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+bincode = { version = "2.0", features = ["serde"] }
+crossterm = "0.29"
+nix = { version = "0.30", features = ["fs", "process", "signal", "user"] }
+portable-pty = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.9"
+vt100 = "0.16"
+
+[patch.crates-io]
+vt100 = { path = "vendor/vt100" }
