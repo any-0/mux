@@ -1,0 +1,16 @@
+# Preset derived from the motion mappings in ~/nix/dotfiles/nvim/init.lua.
+clipboard_command = ["yank"]
+
+[vim]
+"§" = "first-nonblank"
+"Shift-§" = "first-nonblank"
+";" = "repeat-find-backward"
+"," = "repeat-find-forward"
+"Ctrl-d" = "half-page-down-center"
+"Ctrl-u" = "half-page-up-center"
+"Ctrl-Left" = "word-backward"
+"Ctrl-Right" = "word-end"
+"Ctrl-Up" = "up-3"
+"Ctrl-Down" = "down-3"
+"Shift-Up" = "up-10"
+"Shift-Down" = "down-10"
