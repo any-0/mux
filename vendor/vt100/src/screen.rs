@@ -129,6 +129,16 @@ impl Screen {
         self.grid().history_bytes()
     }
 
+    /// Releases all retained scrollback while preserving the live terminal.
+    pub fn clear_history(&mut self) {
+        self.grid.clear_history();
+    }
+
+    /// Changes how many rows of future scrollback are retained.
+    pub fn set_history_limit(&mut self, lines: usize) {
+        self.grid.set_history_limit(lines);
+    }
+
     /// Returns the text contents of the terminal.
     ///
     /// This will not include any formatting information, and will be in plain

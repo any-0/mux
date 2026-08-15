@@ -162,10 +162,19 @@ impl Server {
             KeyCode::End => rename.cursor = rename.text.chars().count(),
             KeyCode::Backspace => rename.backspace(),
             KeyCode::Delete => rename.delete(),
-            KeyCode::Char('u') if key.modifiers & CTRL != 0 => {
-                rename.text.clear();
-                rename.cursor = 0;
+            KeyCode::Char('a') if key.modifiers & CTRL != 0 => rename.cursor = 0,
+            KeyCode::Char('e') if key.modifiers & CTRL != 0 => {
+                rename.cursor = rename.text.chars().count();
             }
+            KeyCode::Char('w') if key.modifiers & CTRL != 0 => {
+                rename.delete_word_before_cursor();
+            }
+            KeyCode::Char('u') if key.modifiers & CTRL != 0 => {
+                rename.delete_before_cursor();
+            }
+            KeyCode::Char('k') if key.modifiers & CTRL != 0 => rename.delete_after_cursor(),
+            KeyCode::Char('h') if key.modifiers & CTRL != 0 => rename.backspace(),
+            KeyCode::Char('d') if key.modifiers & CTRL != 0 => rename.delete(),
             KeyCode::Char(character) if key.modifiers & (ALT | CTRL) == 0 => {
                 rename.insert(character);
             }
@@ -338,7 +347,7 @@ impl Server {
                 return Ok(());
             };
             self.sessions[session_index].windows[window_index].select_pane(pane_id);
-            self.remember_active_pane(id);
+            self.remember_active_pane(id)?;
             self.save_state_soon();
         }
         // Vim mode is mux's own; the program underneath does not see it.

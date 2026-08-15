@@ -267,6 +267,19 @@ impl Grid {
         self.scrollback.heap_bytes()
     }
 
+    pub fn clear_history(&mut self) {
+        self.scrollback = crate::scrollback::Scrollback::default();
+        self.scrollback_offset = 0;
+    }
+
+    pub fn set_history_limit(&mut self, lines: usize) {
+        self.scrollback_len = lines;
+        while self.scrollback.len() > lines {
+            self.scrollback.pop_front();
+        }
+        self.scrollback_offset = self.scrollback_offset.min(self.scrollback.len());
+    }
+
     pub fn set_scrollback(&mut self, rows: usize) {
         self.scrollback_offset = rows.min(self.scrollback.len());
         if self.scrollback_offset == 0 {

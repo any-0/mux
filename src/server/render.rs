@@ -128,6 +128,10 @@ impl Server {
 
     fn render_popup(&self, id: usize, frame: &mut Frame, rows: u16, cols: u16) {
         let active_vim_pane = self.active_vim_pane_id(id);
+        let cursor_shape = self
+            .active_pane(id)
+            .map(|pane| pane.parser.callbacks().cursor_shape)
+            .unwrap_or_default();
         let client = &self.clients[&id];
         let theme = client.rendered_theme();
         let popup = if let Some(confirmation) = &client.confirmation {
@@ -144,6 +148,7 @@ impl Server {
                 Popup::Rename {
                     text: format!("{prefix}{}", rename.text),
                     cursor: prefix.chars().count() + rename.cursor,
+                    shape: cursor_shape,
                 },
                 PopupAnchor::Center,
             ))
