@@ -3,6 +3,9 @@
 use std::{
     fs::File,
     io::{BufReader, BufWriter, ErrorKind, Read, Write},
+    sync::mpsc::{self, Receiver, Sender, SyncSender},
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -20,7 +23,7 @@ pub(super) const JOURNAL_RESIZE: u8 = 2;
 
 const MAX_JOURNAL_RECORD: usize = 16 * 1024 * 1024;
 
-/// Journal size that triggers compaction the next time the daemon is idle.
+/// Journal size that triggers compaction before the next event loop starts.
 pub(super) const MAX_JOURNAL_BYTES: u64 = 32 * 1024 * 1024;
 
 pub(super) fn encode_journal_record(kind: u8, payload: &[u8]) -> Result<Vec<u8>> {
@@ -41,24 +44,33 @@ fn resize_payload(rows: u16, cols: u16) -> [u8; 4] {
 
 /// A pane's append-only record of everything its terminal has shown.
 ///
-/// Records are buffered so a flood of small PTY chunks becomes a handful of
-/// writes; the daemon flushes as soon as it goes idle, which is exactly when
-/// unflushed output would otherwise be at risk.
+/// Records are written on a worker so storage latency never stalls terminal
+/// parsing, input, or rendering in the daemon thread.
 pub(super) struct PaneJournal {
-    pub(super) file: BufWriter<File>,
+    sender: Sender<JournalCommand>,
+    failures: Receiver<String>,
     pub(super) length: u64,
-    pub(super) unflushed: bool,
     /// Set once a write has failed. The pane keeps running with a history that
     /// stops here, which is a far smaller loss than the pane itself.
     pub(super) abandoned: bool,
 }
 
+enum JournalCommand {
+    Write(Vec<u8>),
+    Flush(SyncSender<std::io::Result<()>>),
+    Replace(File, Vec<u8>, SyncSender<std::io::Result<()>>),
+    Truncate(u64, SyncSender<std::io::Result<()>>),
+}
+
 impl PaneJournal {
     pub(super) fn new(file: File, length: u64) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let (failure_sender, failures) = mpsc::channel();
+        thread::spawn(move || journal_writer(file, receiver, failure_sender));
         Self {
-            file: BufWriter::with_capacity(64 * 1024, file),
+            sender,
+            failures,
             length,
-            unflushed: false,
             abandoned: false,
         }
     }
@@ -70,7 +82,11 @@ impl PaneJournal {
         if self.abandoned {
             return Ok(());
         }
-        match self.write_record(kind, payload) {
+        if let Some(error) = self.worker_failure() {
+            self.abandoned = true;
+            return Err(anyhow::anyhow!(error));
+        }
+        match self.queue_record(kind, payload) {
             Ok(()) => Ok(()),
             Err(error) => {
                 self.abandoned = true;
@@ -79,11 +95,13 @@ impl PaneJournal {
         }
     }
 
-    fn write_record(&mut self, kind: u8, payload: &[u8]) -> Result<()> {
+    fn queue_record(&mut self, kind: u8, payload: &[u8]) -> Result<()> {
         let record = encode_journal_record(kind, payload)?;
-        self.file.write_all(&record)?;
-        self.length += record.len() as u64;
-        self.unflushed = true;
+        let length = record.len() as u64;
+        self.sender
+            .send(JournalCommand::Write(record))
+            .context("pane journal writer stopped")?;
+        self.length += length;
         Ok(())
     }
 
@@ -96,14 +114,22 @@ impl PaneJournal {
     }
 
     pub(super) fn flush(&mut self) -> Result<()> {
-        if !self.unflushed || self.abandoned {
+        if self.abandoned {
             return Ok(());
         }
-        match self.file.flush().context("flush pane journal") {
-            Ok(()) => {
-                self.unflushed = false;
-                Ok(())
-            }
+        let (sender, receiver) = mpsc::sync_channel(0);
+        let result = self
+            .sender
+            .send(JournalCommand::Flush(sender))
+            .context("pane journal writer stopped")
+            .and_then(|()| {
+                receiver
+                    .recv()
+                    .context("pane journal writer stopped")?
+                    .context("flush pane journal")
+            });
+        match result {
+            Ok(()) => Ok(()),
             Err(error) => {
                 self.abandoned = true;
                 Err(error)
@@ -115,24 +141,127 @@ impl PaneJournal {
         !self.abandoned && self.length > MAX_JOURNAL_BYTES
     }
 
+    pub(super) fn poll_failure(&mut self) -> Result<()> {
+        if self.abandoned {
+            return Ok(());
+        }
+        if let Some(error) = self.worker_failure() {
+            self.abandoned = true;
+            return Err(anyhow::anyhow!(error));
+        }
+        Ok(())
+    }
+
     /// Replaces the journal with `records`, which must replay to the same
     /// screen the pane is showing now.
     pub(super) fn replace(&mut self, file: File, records: &[u8]) -> Result<()> {
-        self.file = BufWriter::with_capacity(64 * 1024, file);
-        self.length = 0;
-        self.unflushed = false;
-        self.file.write_all(records)?;
+        let (sender, receiver) = mpsc::sync_channel(0);
+        self.sender
+            .send(JournalCommand::Replace(file, records.to_vec(), sender))
+            .context("pane journal writer stopped")?;
+        receiver
+            .recv()
+            .context("pane journal writer stopped")?
+            .context("replace pane journal")?;
         self.length = records.len() as u64;
-        self.unflushed = true;
-        self.flush()
+        Ok(())
     }
 
     pub(super) fn truncate(&mut self, length: u64) -> Result<()> {
-        self.flush()?;
-        self.file.get_ref().set_len(length)?;
+        let (sender, receiver) = mpsc::sync_channel(0);
+        self.sender
+            .send(JournalCommand::Truncate(length, sender))
+            .context("pane journal writer stopped")?;
+        receiver
+            .recv()
+            .context("pane journal writer stopped")?
+            .context("truncate pane journal")?;
         self.length = length;
         Ok(())
     }
+
+    fn worker_failure(&self) -> Option<String> {
+        self.failures.try_recv().ok()
+    }
+}
+
+fn journal_writer(file: File, receiver: Receiver<JournalCommand>, failures: Sender<String>) {
+    let mut file = BufWriter::with_capacity(64 * 1024, file);
+    let mut failure = None;
+    let mut dirty = false;
+    loop {
+        match receiver.recv_timeout(Duration::from_millis(8)) {
+            Ok(JournalCommand::Write(record)) => {
+                if failure.is_none() {
+                    match file.write_all(&record) {
+                        Ok(()) => dirty = true,
+                        Err(error) => record_failure(&mut failure, &failures, error),
+                    }
+                }
+            }
+            Ok(JournalCommand::Flush(reply)) => {
+                let result = flush_journal(&mut file, &mut dirty, &mut failure, &failures);
+                let _ = reply.send(result);
+            }
+            Ok(JournalCommand::Replace(new_file, records, reply)) => {
+                file = BufWriter::with_capacity(64 * 1024, new_file);
+                failure = None;
+                dirty = false;
+                let result = file.write_all(&records).and_then(|()| file.flush());
+                if let Err(error) = &result {
+                    record_failure(
+                        &mut failure,
+                        &failures,
+                        std::io::Error::new(error.kind(), error.to_string()),
+                    );
+                }
+                let _ = reply.send(result);
+            }
+            Ok(JournalCommand::Truncate(length, reply)) => {
+                let result = flush_journal(&mut file, &mut dirty, &mut failure, &failures)
+                    .and_then(|()| file.get_ref().set_len(length));
+                let _ = reply.send(result);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = flush_journal(&mut file, &mut dirty, &mut failure, &failures);
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = flush_journal(&mut file, &mut dirty, &mut failure, &failures);
+                return;
+            }
+        }
+    }
+}
+
+fn flush_journal(
+    file: &mut BufWriter<File>,
+    dirty: &mut bool,
+    failure: &mut Option<String>,
+    failures: &Sender<String>,
+) -> std::io::Result<()> {
+    if let Some(error) = failure.as_ref() {
+        return Err(std::io::Error::other(error.clone()));
+    }
+    if !*dirty {
+        return Ok(());
+    }
+    match file.flush() {
+        Ok(()) => {
+            *dirty = false;
+            Ok(())
+        }
+        Err(error) => {
+            let returned = std::io::Error::new(error.kind(), error.to_string());
+            record_failure(failure, failures, error);
+            Err(returned)
+        }
+    }
+}
+
+fn record_failure(failure: &mut Option<String>, failures: &Sender<String>, error: std::io::Error) {
+    let message = error.to_string();
+    *failure = Some(message.clone());
+    let _ = failures.send(message);
 }
 
 /// Builds a journal that replays to the current screen and the complete

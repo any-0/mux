@@ -18,7 +18,7 @@ The session tree hides the strip and uses the full terminal.
 The separator uses the active window color and becomes a left-pointing `┤` on
 the active row without coloring the terminal background. One blank vertical
 column separates that line from the content on its right. A terminal bell sends
-an enchanted pink-and-orchid shimmer across the window label. Its highlight
+an enchanted pink-and-orchid shimmer across both rows of the window label. Its highlight
 moves smoothly along the horizontal axis. The active window plays the shimmer
 once; unseen windows rest on the bright magenta-and-white end of that cycle
 between passes, then repeat the animation until selected. Bells from other

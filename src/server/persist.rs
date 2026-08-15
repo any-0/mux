@@ -7,6 +7,12 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, Sender, SyncSender},
+    },
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -221,6 +227,16 @@ pub(super) struct Persistence {
     pub(super) state_file: PathBuf,
 }
 
+pub(super) struct StateWriter {
+    sender: Sender<StateCommand>,
+    failures: Receiver<String>,
+}
+
+enum StateCommand {
+    Save(PersistedState),
+    Flush(PersistedState, SyncSender<Result<()>>),
+}
+
 impl Persistence {
     pub(super) fn open() -> Result<Self> {
         let state_home = env::var_os("XDG_STATE_HOME")
@@ -287,6 +303,17 @@ impl Persistence {
         Ok(())
     }
 
+    pub(super) fn state_writer(&self) -> StateWriter {
+        let persistence = Self {
+            directory: self.directory.clone(),
+            state_file: self.state_file.clone(),
+        };
+        let (sender, receiver) = mpsc::channel();
+        let (failure_sender, failures) = mpsc::channel();
+        thread::spawn(move || state_writer(persistence, receiver, failure_sender));
+        StateWriter { sender, failures }
+    }
+
     fn pane_history_path(&self, pane_id: usize) -> PathBuf {
         self.directory.join(format!("pane-{pane_id}.ansi"))
     }
@@ -305,6 +332,27 @@ impl Persistence {
             .append(true)
             .open(&path)
             .with_context(|| format!("open pane history {}", path.display()))
+    }
+
+    /// Creates an unlinked file for scrollback blocks. The open handle keeps
+    /// the bytes alive, while a crash or normal exit leaves no cache file to
+    /// clean up or mistake for durable pane history.
+    pub(super) fn new_scrollback_backing(&self) -> Result<File> {
+        static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
+        let number = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+        let path = self
+            .directory
+            .join(format!(".scrollback-{}-{number}", std::process::id()));
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("create scrollback backing {}", path.display()))?;
+        set_private_permissions(&path)?;
+        fs::remove_file(&path)
+            .with_context(|| format!("unlink scrollback backing {}", path.display()))?;
+        Ok(file)
     }
 
     pub(super) fn restored_pane_history(&self, pane_id: usize) -> Result<(File, u64)> {
@@ -343,6 +391,59 @@ impl Persistence {
                 Err(error).with_context(|| format!("remove pane history {}", path.display()))
             }
         }
+    }
+}
+
+fn state_writer(
+    persistence: Persistence,
+    receiver: Receiver<StateCommand>,
+    failures: Sender<String>,
+) {
+    while let Ok(command) = receiver.recv() {
+        match command {
+            StateCommand::Save(mut state) => loop {
+                match receiver.recv_timeout(Duration::from_millis(50)) {
+                    Ok(StateCommand::Save(newer)) => state = newer,
+                    Ok(StateCommand::Flush(final_state, reply)) => {
+                        let _ = reply.send(persistence.save(&final_state));
+                        break;
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if let Err(error) = persistence.save(&state) {
+                            let _ = failures.send(format!("{error:#}"));
+                        }
+                        break;
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        let _ = persistence.save(&state);
+                        return;
+                    }
+                }
+            },
+            StateCommand::Flush(state, reply) => {
+                let _ = reply.send(persistence.save(&state));
+            }
+        }
+    }
+}
+
+impl StateWriter {
+    pub(super) fn save(&self, state: PersistedState) -> Result<()> {
+        self.sender
+            .send(StateCommand::Save(state))
+            .context("mux state writer stopped")
+    }
+
+    pub(super) fn flush(&self, state: PersistedState) -> Result<()> {
+        let (sender, receiver) = mpsc::sync_channel(0);
+        self.sender
+            .send(StateCommand::Flush(state, sender))
+            .context("mux state writer stopped")?;
+        receiver.recv().context("mux state writer stopped")?
+    }
+
+    pub(super) fn poll_failure(&self) -> Option<anyhow::Error> {
+        self.failures.try_recv().ok().map(anyhow::Error::msg)
     }
 }
 
