@@ -395,6 +395,7 @@ fn accept_clients(listener: UnixListener, sender: Sender<Event>) {
 
 impl Server {
     fn restore(&mut self, state: PersistedState) -> Result<()> {
+        let last_active_pane = state.last_active_pane;
         let mut session_ids = HashSet::new();
         let mut pane_ids = HashSet::new();
         let mut sessions = Vec::with_capacity(state.sessions.len());
@@ -458,6 +459,11 @@ impl Server {
                         saved_pane.cols,
                         saved_pane.rows,
                         history,
+                        if last_active_pane == Some(saved_pane.id) {
+                            SCROLLBACK_LINES
+                        } else {
+                            0
+                        },
                     )?;
                     if let Some((history_reader, _)) = restored_history {
                         match replay_pane_journal(
@@ -473,7 +479,15 @@ impl Server {
                             // is dropped rather than blocking the restore.
                             Err(_) => {
                                 let _ = pane.history.truncate(0);
-                                pane.parser = new_parser(saved_pane.rows, saved_pane.cols);
+                                pane.parser = new_parser_with_scrollback(
+                                    saved_pane.rows,
+                                    saved_pane.cols,
+                                    if last_active_pane == Some(saved_pane.id) {
+                                        SCROLLBACK_LINES
+                                    } else {
+                                        0
+                                    },
+                                );
                                 pane.parser_prefix.clear();
                             }
                         }
@@ -520,7 +534,8 @@ impl Server {
         self.sessions = sessions;
         self.next_session_id = state.next_session_id;
         self.next_pane_id = state.next_pane_id;
-        self.last_active_pane = state.last_active_pane;
+        self.last_active_pane = last_active_pane;
+        self.release_inactive_history();
         Ok(())
     }
 
@@ -686,11 +701,15 @@ impl Server {
             .map(|pane| pane.id)
             .collect();
         for pane_id in overgrown {
+            let (history_reader, _) = self.persistence.restored_pane_history(pane_id)?;
+            let mut parser = new_parser(1, 1);
+            let mut prefix = Vec::new();
+            replay_pane_journal(&mut parser, &mut prefix, history_reader)?;
+            let records = compacted_journal_records(parser.screen_mut())?;
             let file = self.persistence.new_pane_history(pane_id)?;
-            let Some(pane) = self.pane_mut(pane_id) else {
-                continue;
-            };
-            let records = compacted_journal_records(pane.parser.screen_mut())?;
+            let pane = self
+                .pane_mut(pane_id)
+                .context("pane vanished during compaction")?;
             pane.history.replace(file, &records)?;
         }
         Ok(())
@@ -788,7 +807,7 @@ impl Server {
                 );
             }
             Event::Disconnected(id) => {
-                if self.remember_active_pane(id) {
+                if self.remember_active_pane(id)? {
                     self.save_state_soon();
                 }
                 self.clients.remove(&id);
@@ -922,7 +941,7 @@ impl Server {
                 self.dirty = true;
             }
             Event::Client(id, ClientMessage::Key(key)) => {
-                if self.remember_active_pane(id) {
+                if self.remember_active_pane(id)? {
                     self.save_state_soon();
                 }
                 self.handle_key(id, key)?;
@@ -932,7 +951,7 @@ impl Server {
                 self.dirty = true;
             }
             Event::Client(id, ClientMessage::Paste(text)) => {
-                if self.remember_active_pane(id) {
+                if self.remember_active_pane(id)? {
                     self.save_state_soon();
                 }
                 self.handle_paste(id, text)?;
@@ -997,7 +1016,7 @@ impl Server {
         {
             play_bell_once(&mut session.windows[session.current_window].bell, shimmer);
         }
-        self.remember_active_pane(id);
+        self.remember_active_pane(id)?;
         self.resize_active(id)?;
         self.save_state_soon();
         self.dirty = true;
@@ -1054,7 +1073,7 @@ impl Server {
         self.next_pane_id += 1;
         let mut history = PaneJournal::new(self.persistence.new_pane_history(id)?, 0);
         history.append_resize(rows.max(1), cols.max(1))?;
-        self.spawn_pane(id, cwd, cols, rows, history)
+        self.spawn_pane(id, cwd, cols, rows, history, SCROLLBACK_LINES)
     }
 
     fn spawn_pane(
@@ -1064,6 +1083,7 @@ impl Server {
         cols: u16,
         rows: u16,
         history: PaneJournal,
+        scrollback_lines: usize,
     ) -> Result<Pane> {
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -1124,7 +1144,7 @@ impl Server {
             writer,
             child,
             child_pid,
-            parser: new_parser(rows, cols),
+            parser: new_parser_with_scrollback(rows, cols, scrollback_lines),
             parser_prefix: Vec::new(),
             query_prefix: Vec::new(),
             cwd: cwd.to_path_buf(),
@@ -1420,7 +1440,7 @@ impl Server {
         };
         self.set_client_session(id, session_id);
         self.clients.get_mut(&id).unwrap().tree = None;
-        self.remember_active_pane(id);
+        self.remember_active_pane(id)?;
         self.resize_active(id)?;
         self.save_state_soon();
         Ok(())
@@ -1436,7 +1456,7 @@ impl Server {
         session.windows.push(window);
         let new_window = session.windows.len() - 1;
         visit_window(session, new_window);
-        self.remember_active_pane(id);
+        self.remember_active_pane(id)?;
         self.save_state_soon();
         Ok(())
     }
@@ -1449,7 +1469,7 @@ impl Server {
         let (cols, rows) = self.client_size(id);
         let session_id = self.create_session(name, root, cols, rows)?;
         self.set_client_session(id, session_id);
-        self.remember_active_pane(id);
+        self.remember_active_pane(id)?;
         self.save_state_soon();
         Ok(())
     }
@@ -1481,7 +1501,7 @@ impl Server {
             );
         }
         self.clients.get_mut(&id).unwrap().tree = None;
-        self.remember_active_pane(id);
+        self.remember_active_pane(id)?;
         self.resize_active(id)?;
         self.save_state_soon();
         Ok(())
@@ -1695,7 +1715,7 @@ impl Server {
         }
         window.panes.push(pane);
         window.select_pane(pane_id);
-        self.remember_active_pane(id);
+        self.remember_active_pane(id)?;
         self.resize_active(id)?;
         self.save_state_soon();
         Ok(())
@@ -1715,7 +1735,7 @@ impl Server {
             direction,
         ) {
             self.sessions[session_index].windows[window_index].select_pane(pane_id);
-            self.remember_active_pane(id);
+            self.remember_active_pane(id)?;
             self.save_state_soon();
         }
         Ok(())
@@ -1784,7 +1804,7 @@ impl Server {
         });
         let new_window = session.windows.len() - 1;
         visit_window(session, new_window);
-        self.remember_active_pane(id);
+        self.remember_active_pane(id)?;
         self.resize_active(id)?;
         self.save_state_soon();
         Ok(())
@@ -1831,7 +1851,7 @@ impl Server {
         window.zoomed = false;
         window.select_pane(pane_id);
         visit_window(session, target);
-        self.remember_active_pane(id);
+        self.remember_active_pane(id)?;
         self.resize_active(id)?;
         self.save_state_soon();
         Ok(())
@@ -1949,7 +1969,7 @@ impl Server {
             let session = &mut self.sessions[session_index];
             visit_window(session, number - 1);
             play_bell_once(&mut session.windows[session.current_window].bell, shimmer);
-            self.remember_active_pane(id);
+            self.remember_active_pane(id)?;
             self.resize_active(id)?;
             self.save_state_soon();
         }
@@ -2052,7 +2072,7 @@ fn run_clipboard_command(command: &[String], text: &str) -> Result<()> {
 
 impl Server {
     fn detach(&mut self, id: usize) -> Result<()> {
-        if self.remember_active_pane(id) {
+        if self.remember_active_pane(id)? {
             self.save_state_soon();
         }
         if let Some(client) = self.clients.get_mut(&id) {
@@ -2081,7 +2101,7 @@ impl Server {
             play_bell_once(&mut session.windows[session.current_window].bell, shimmer);
             self.set_client_session(id, item.session_id);
             self.clients.get_mut(&id).unwrap().tree = None;
-            self.remember_active_pane(id);
+            self.remember_active_pane(id)?;
             self.resize_active(id)?;
             self.save_state_soon();
         }
@@ -2106,13 +2126,72 @@ impl Server {
         })
     }
 
-    fn remember_active_pane(&mut self, client_id: usize) -> bool {
+    fn remember_active_pane(&mut self, client_id: usize) -> Result<bool> {
         let Some(pane_id) = self.active_pane(client_id).map(|pane| pane.id) else {
-            return false;
+            return Ok(false);
         };
         let changed = self.last_active_pane != Some(pane_id);
+        if !changed {
+            return Ok(false);
+        }
+
+        if let Some(previous) = self.last_active_pane {
+            let records = {
+                let pane = self
+                    .pane_mut(previous)
+                    .context("previous active pane vanished")?;
+                compacted_journal_records(pane.parser.screen_mut())?
+            };
+            let file = self.persistence.new_pane_history(previous)?;
+            self.pane_mut(previous)
+                .context("previous active pane vanished")?
+                .history
+                .replace(file, &records)?;
+        }
+
+        if let Some(pane) = self.pane_mut(pane_id) {
+            pane.history.flush()?;
+        }
+        let (history_reader, history_length) = self.persistence.restored_pane_history(pane_id)?;
+        let (rows, cols) = self
+            .pane_mut(pane_id)
+            .map(|pane| pane.parser.screen().size())
+            .context("active pane vanished")?;
+        let mut parser = new_parser(rows, cols);
+        let mut parser_prefix = Vec::new();
+        let valid_length = replay_pane_journal(&mut parser, &mut parser_prefix, history_reader)?;
+        if valid_length != history_length {
+            self.pane_mut(pane_id)
+                .context("active pane vanished")?
+                .history
+                .truncate(valid_length)?;
+        }
+        let pane = self.pane_mut(pane_id).context("active pane vanished")?;
+        pane.parser = parser;
+        pane.parser_prefix = parser_prefix;
+
         self.last_active_pane = Some(pane_id);
-        changed
+        self.release_inactive_history();
+        release_unused_memory();
+        Ok(true)
+    }
+
+    fn release_inactive_history(&mut self) {
+        let active = self.last_active_pane;
+        for pane in self
+            .sessions
+            .iter_mut()
+            .flat_map(|session| &mut session.windows)
+            .flat_map(|window| &mut window.panes)
+            .filter(|pane| Some(pane.id) != active)
+        {
+            pane.parser.screen_mut().clear_history();
+            pane.parser.screen_mut().set_history_limit(0);
+            if let Some(checkpoint) = pane.parser.callbacks_mut().prompt_checkpoint.as_mut() {
+                checkpoint.clear_history();
+                checkpoint.set_history_limit(0);
+            }
+        }
     }
 
     fn active_cwd(&self, id: usize) -> Option<PathBuf> {
@@ -2287,6 +2366,23 @@ impl Server {
         items
     }
 }
+
+/// Returns pages from large, short-lived history replays to the operating
+/// system instead of leaving them cached in macOS's allocator indefinitely.
+#[cfg(target_os = "macos")]
+fn release_unused_memory() {
+    use std::ffi::c_void;
+
+    unsafe extern "C" {
+        fn malloc_zone_pressure_relief(zone: *mut c_void, goal: usize) -> usize;
+    }
+    unsafe {
+        malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn release_unused_memory() {}
 
 fn visit_window(session: &mut Session, window: usize) {
     session.current_window = window.min(session.windows.len() - 1);

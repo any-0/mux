@@ -32,7 +32,7 @@ impl Default for Scrollback {
     fn default() -> Self {
         Self {
             blocks: VecDeque::new(),
-            tail: Vec::with_capacity(BLOCK_ROWS),
+            tail: Vec::new(),
             len: 0,
         }
     }

@@ -9,7 +9,10 @@ use anyhow::{Context, Result, bail};
 
 use crate::frame::{ColorDepth, write_cell_attributes};
 
-use super::{snapshot::snapshot_screen, terminal::process_terminal_bytes};
+use super::{
+    snapshot::snapshot_screen,
+    terminal::{SCROLLBACK_LINES, process_terminal_bytes},
+};
 
 pub(super) const JOURNAL_OUTPUT: u8 = 1;
 
@@ -19,9 +22,6 @@ const MAX_JOURNAL_RECORD: usize = 16 * 1024 * 1024;
 
 /// Journal size that triggers compaction the next time the daemon is idle.
 pub(super) const MAX_JOURNAL_BYTES: u64 = 32 * 1024 * 1024;
-
-/// Terminal rows a compacted journal keeps.
-const COMPACTED_JOURNAL_ROWS: usize = 5_000;
 
 pub(super) fn encode_journal_record(kind: u8, payload: &[u8]) -> Result<Vec<u8>> {
     let length = u32::try_from(payload.len()).context("pane journal record is too large")?;
@@ -135,13 +135,14 @@ impl PaneJournal {
     }
 }
 
-/// Builds a journal that replays to the current screen and the newest
-/// `COMPACTED_JOURNAL_ROWS` rows of its scrollback, discarding everything the
-/// terminal has already scrolled away.
+/// Builds a journal that replays to the current screen and the complete
+/// configured scrollback, discarding only rows beyond that limit.
 pub(super) fn compacted_journal_records(screen: &mut vt100::Screen) -> Result<Vec<u8>> {
     let (rows, cols) = screen.size();
     let (lines, _) = snapshot_screen(screen);
-    let start = lines.len().saturating_sub(COMPACTED_JOURNAL_ROWS);
+    let start = lines
+        .len()
+        .saturating_sub(SCROLLBACK_LINES + usize::from(rows));
     let kept = &lines[start..];
     let last_content = kept.iter().rposition(|line| {
         line.cells

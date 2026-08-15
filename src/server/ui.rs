@@ -82,6 +82,38 @@ impl RenameState {
         let end = character_byte_index(&self.text, self.cursor + 1);
         self.text.replace_range(start..end, "");
     }
+
+    pub(super) fn delete_word_before_cursor(&mut self) {
+        while self.cursor > 0
+            && self
+                .text
+                .chars()
+                .nth(self.cursor - 1)
+                .is_some_and(char::is_whitespace)
+        {
+            self.backspace();
+        }
+        while self.cursor > 0
+            && self
+                .text
+                .chars()
+                .nth(self.cursor - 1)
+                .is_some_and(|character| !character.is_whitespace())
+        {
+            self.backspace();
+        }
+    }
+
+    pub(super) fn delete_before_cursor(&mut self) {
+        let end = character_byte_index(&self.text, self.cursor);
+        self.text.replace_range(..end, "");
+        self.cursor = 0;
+    }
+
+    pub(super) fn delete_after_cursor(&mut self) {
+        let start = character_byte_index(&self.text, self.cursor);
+        self.text.truncate(start);
+    }
 }
 
 impl TreeState {
@@ -134,7 +166,11 @@ pub(super) struct TreeDisplayRow {
 pub(super) enum Popup {
     Status(String),
     Warning(String),
-    Rename { text: String, cursor: usize },
+    Rename {
+        text: String,
+        cursor: usize,
+        shape: CursorShape,
+    },
 }
 
 /// Where a popup sits. Anything that asks a question or takes input holds the
@@ -402,10 +438,14 @@ pub(super) fn render_popup_box(
     popup: &Popup,
     theme: &Theme,
 ) {
-    let (text, cursor, warning) = match popup {
-        Popup::Status(text) => (text.as_str(), None, false),
-        Popup::Warning(text) => (text.as_str(), None, true),
-        Popup::Rename { text, cursor } => (text.as_str(), Some(*cursor), false),
+    let (text, cursor, cursor_shape, warning) = match popup {
+        Popup::Status(text) => (text.as_str(), None, CursorShape::Block, false),
+        Popup::Warning(text) => (text.as_str(), None, CursorShape::Block, true),
+        Popup::Rename {
+            text,
+            cursor,
+            shape,
+        } => (text.as_str(), Some(*cursor), *shape, false),
     };
     if rows < 3 || cols < 6 {
         let width = cols as usize;
@@ -424,7 +464,7 @@ pub(super) fn render_popup_box(
             frame.set_cursor(FrameCursor {
                 row,
                 col: cursor as u16 + 1,
-                shape: CursorShape::Bar,
+                shape: cursor_shape,
                 visible: true,
             });
         }
@@ -472,7 +512,7 @@ pub(super) fn render_popup_box(
         frame.set_cursor(FrameCursor {
             row: top + 1,
             col: left + cursor as u16 + 2,
-            shape: CursorShape::Bar,
+            shape: cursor_shape,
             visible: true,
         });
     }

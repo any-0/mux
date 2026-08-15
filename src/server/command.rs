@@ -36,7 +36,7 @@ impl Server {
                     let (cols, rows) = self.client_size(id);
                     let session_id = self.create_session(name, root, cols, rows)?;
                     self.set_client_session(id, session_id);
-                    self.remember_active_pane(id);
+                    self.remember_active_pane(id)?;
                     self.save_state_soon();
                 } else {
                     self.new_session(id)?;

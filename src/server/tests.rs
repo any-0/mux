@@ -498,6 +498,37 @@ fn rename_input_edits_at_a_unicode_character_cursor() {
 }
 
 #[test]
+fn rename_input_supports_terminal_style_line_editing() {
+    let mut rename = RenameState {
+        target: RenameTarget::Session { session_id: 1 },
+        text: "one  twö three".into(),
+        cursor: 9,
+    };
+    rename.delete_word_before_cursor();
+    assert_eq!(rename.text, "one  three");
+    assert_eq!(rename.cursor, 5);
+    rename.delete_before_cursor();
+    assert_eq!(rename.text, "three");
+    assert_eq!(rename.cursor, 0);
+    rename.cursor = 2;
+    rename.delete_after_cursor();
+    assert_eq!(rename.text, "th");
+}
+
+#[test]
+fn disabled_history_stays_empty_as_terminal_output_arrives() {
+    let mut parser = vt100::Parser::new(2, 20, SCROLLBACK_LINES);
+    parser.process(b"one\r\ntwo\r\nthree\r\nfour");
+    assert!(parser.screen().history_bytes() > 0);
+    parser.screen_mut().clear_history();
+    parser.screen_mut().set_history_limit(0);
+    parser.process(b"\r\nfive\r\nsix");
+    parser.screen_mut().set_scrollback(usize::MAX);
+    assert_eq!(parser.screen().scrollback(), 0);
+    assert_eq!(parser.screen().history_bytes(), 0);
+}
+
+#[test]
 fn popup_text_scrolls_to_keep_the_cursor_visible() {
     assert_eq!(
         popup_text_window("rename session: abcdef", Some(22), 8),
@@ -527,13 +558,14 @@ fn popup_text_scrolls_to_keep_the_cursor_visible() {
             &Popup::Rename {
                 text: "rename session: smoke".into(),
                 cursor: 21,
+                shape: CursorShape::Block,
             },
             &Theme::default(),
         )
     });
     assert!(output.contains("rename session: smoke"), "{output:?}");
     // The rename cursor is placed on the character it will insert before.
-    assert!(output.contains("\x1b[6 q"), "{output:?}");
+    assert!(output.contains("\x1b[2 q"), "{output:?}");
 }
 
 #[test]
@@ -605,6 +637,7 @@ fn a_popup_without_an_input_field_leaves_the_pane_cursor_alone() {
             &Popup::Rename {
                 text: "rename session: smoke".into(),
                 cursor: 21,
+                shape: CursorShape::Block,
             },
             &Theme::default(),
         );
