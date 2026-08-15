@@ -168,18 +168,10 @@ pub(super) fn mouse_report(screen: &vt100::Screen, mouse: Mouse) -> Option<Vec<u
 }
 
 pub(super) fn new_parser(rows: u16, cols: u16) -> vt100::Parser<TerminalCallbacks> {
-    new_parser_with_scrollback(rows, cols, SCROLLBACK_LINES)
-}
-
-pub(super) fn new_parser_with_scrollback(
-    rows: u16,
-    cols: u16,
-    scrollback_lines: usize,
-) -> vt100::Parser<TerminalCallbacks> {
     vt100::Parser::new_with_callbacks(
         rows.max(1),
         cols.max(1),
-        scrollback_lines,
+        SCROLLBACK_LINES,
         TerminalCallbacks::default(),
     )
 }

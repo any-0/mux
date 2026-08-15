@@ -516,19 +516,6 @@ fn rename_input_supports_terminal_style_line_editing() {
 }
 
 #[test]
-fn disabled_history_stays_empty_as_terminal_output_arrives() {
-    let mut parser = vt100::Parser::new(2, 20, SCROLLBACK_LINES);
-    parser.process(b"one\r\ntwo\r\nthree\r\nfour");
-    assert!(parser.screen().history_bytes() > 0);
-    parser.screen_mut().clear_history();
-    parser.screen_mut().set_history_limit(0);
-    parser.process(b"\r\nfive\r\nsix");
-    parser.screen_mut().set_scrollback(usize::MAX);
-    assert_eq!(parser.screen().scrollback(), 0);
-    assert_eq!(parser.screen().history_bytes(), 0);
-}
-
-#[test]
 fn popup_text_scrolls_to_keep_the_cursor_visible() {
     assert_eq!(
         popup_text_window("rename session: abcdef", Some(22), 8),
@@ -1945,6 +1932,36 @@ fn block_compressed_scrollback_preserves_terminal_cells_losslessly() {
     );
     assert!(last.text.contains("line 300"));
     assert_eq!(parser.screen().history_bytes(), compressed_bytes);
+}
+
+#[test]
+fn file_backed_scrollback_leaves_the_heap_and_reads_back_losslessly() {
+    let mut parser = vt100::Parser::new(3, 20, SCROLLBACK_LINES);
+    for line in 0..600 {
+        parser.process(format!("{line:04}\r\n").as_bytes());
+    }
+    let heap_before = parser.screen().history_bytes();
+    let path = env::temp_dir().join(format!("mux-scrollback-backing-{}", std::process::id()));
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    fs::remove_file(path).unwrap();
+    parser.screen_mut().set_history_backing(file);
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while parser.screen().history_bytes() >= heap_before && Instant::now() < deadline {
+        thread::yield_now();
+    }
+    assert!(parser.screen().history_bytes() < heap_before);
+
+    parser.screen_mut().set_scrollback(usize::MAX);
+    assert!(parser.screen().contents().contains("0000"));
+    parser.screen_mut().set_scrollback(0);
+    assert!(parser.screen().contents().contains("0599"));
 }
 
 #[test]

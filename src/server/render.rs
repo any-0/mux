@@ -278,10 +278,33 @@ impl Server {
             let icon = session_index
                 .map(|session| self.sessions[session].windows[window].active_process_icon())
                 .unwrap_or(IDLE_ICON);
-            let attributes = CellAttributes::colors(theme.bar_label_foreground, background);
-            frame.fill(row + 1, 1, 3, attributes);
-            let icon_col = if icon.chars().count() == 3 { 1 } else { 2 };
-            frame.set_text(row + 1, icon_col, icon, attributes);
+            let icon_label = if icon.chars().count() == 3 {
+                icon.to_owned()
+            } else {
+                format!(" {icon} ")
+            };
+            let icon_row = row + 1;
+            if let Some(visual) = bell {
+                render_bell_label(
+                    frame,
+                    (icon_row, 1),
+                    &icon_label,
+                    BellLabel {
+                        visual,
+                        animation_width: if window == current_window {
+                            active_animation_width
+                        } else {
+                            label_width
+                        },
+                        resting: (background, theme.bar_label_foreground),
+                        bold: false,
+                    },
+                    &theme,
+                );
+            } else {
+                let attributes = CellAttributes::colors(theme.bar_label_foreground, background);
+                frame.set_text(icon_row, 1, &icon_label, attributes);
+            }
         }
         if let Some((count, bell)) = self.other_session_bells(id)
             && let Some(visual) = bell_visual(bell, bell_style)

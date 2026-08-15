@@ -129,14 +129,14 @@ impl Screen {
         self.grid().history_bytes()
     }
 
-    /// Releases all retained scrollback while preserving the live terminal.
-    pub fn clear_history(&mut self) {
-        self.grid.clear_history();
+    /// Moves immutable scrollback blocks to `file` on a background writer.
+    pub fn set_history_backing(&mut self, file: std::fs::File) {
+        self.grid.set_history_backing(file);
     }
 
-    /// Changes how many rows of future scrollback are retained.
-    pub fn set_history_limit(&mut self, lines: usize) {
-        self.grid.set_history_limit(lines);
+    /// Waits until all immutable scrollback blocks have reached their backing.
+    pub fn flush_history_backing(&self) {
+        self.grid().flush_history_backing();
     }
 
     /// Returns the text contents of the terminal.

@@ -81,6 +81,8 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(8);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 /// Shortest gap between two working-directory samples of one pane.
 const CWD_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Shortest gap between two process-icon refreshes for one pane.
+const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// Frames a client may fall behind before the daemon stops waiting for it.
 const CLIENT_QUEUE_DEPTH: usize = 8;
 /// How long one write to a client may take before it is considered gone.
@@ -96,6 +98,7 @@ enum Event {
     Disconnected(usize),
     PtyOutput(usize, Vec<u8>),
     PtyClosed(usize),
+    ProcessIcon(usize, &'static str),
     ClipboardCopied(usize, usize, Result<(), String>),
     ThemeSwitched(usize, String, Result<(), String>),
 }
@@ -111,7 +114,15 @@ struct Pane {
     query_prefix: Vec<u8>,
     cwd: PathBuf,
     cwd_sampled: Instant,
+    process_icon: &'static str,
+    process_sampled: Instant,
     history: PaneJournal,
+}
+
+struct ProcessSample {
+    pane_id: usize,
+    group: Option<i32>,
+    child_pid: Option<u32>,
 }
 
 struct Window {
@@ -155,24 +166,10 @@ impl Window {
     }
 
     fn active_process_icon(&self) -> &'static str {
-        let pane = self.panes.iter().find(|pane| pane.id == self.active_pane);
-        // The whole foreground group, not just the process leading it: a shell
-        // keeps the lead while the script or direnv hook it started is what the
-        // window is really busy with.
-        let commands = pane
-            .and_then(|pane| {
-                pane.master
-                    .process_group_leader()
-                    .map(process_group_info)
-                    .filter(|commands| !commands.is_empty())
-                    .or_else(|| {
-                        pane.child_pid
-                            .and_then(|pid| process_info(pid as i32))
-                            .map(|command| vec![command])
-                    })
-            })
-            .unwrap_or_default();
-        process_group_icon(&commands)
+        self.panes
+            .iter()
+            .find(|pane| pane.id == self.active_pane)
+            .map_or(IDLE_ICON, |pane| pane.process_icon)
     }
 
     /// Where this window's panes sit inside `area`.
@@ -288,6 +285,8 @@ struct Server {
     socket_path: PathBuf,
     zsh_startup: ZshStartup,
     persistence: Persistence,
+    state_writer: StateWriter,
+    process_sampler: Sender<ProcessSample>,
     events: Sender<Event>,
     sessions: Vec<Session>,
     clients: HashMap<usize, Client>,
@@ -332,13 +331,17 @@ pub fn run(socket_path: &Path) -> Result<()> {
     set_private_permissions(socket_path)?;
     let zsh_startup = ZshStartup::create(&persistence.directory)?;
     let persisted_state = persistence.load()?;
+    let state_writer = persistence.state_writer();
 
     let (sender, receiver) = mpsc::channel();
     accept_clients(listener, sender.clone());
+    let process_sampler = process_icon_sampler(sender.clone());
     let mut server = Server {
         socket_path: socket_path.to_path_buf(),
         zsh_startup,
         persistence,
+        state_writer,
+        process_sampler,
         events: sender,
         sessions: Vec::new(),
         clients: HashMap::new(),
@@ -352,6 +355,16 @@ pub fn run(socket_path: &Path) -> Result<()> {
     if let Some(state) = persisted_state {
         server.restore(state)?;
     }
+    server.compact_journals()?;
+    for pane in server
+        .sessions
+        .iter()
+        .flat_map(|session| &session.windows)
+        .flat_map(|window| &window.panes)
+    {
+        pane.parser.screen().flush_history_backing();
+    }
+    release_unused_memory();
     let result = server.event_loop(receiver);
     let _ = fs::remove_file(socket_path);
     result
@@ -393,9 +406,37 @@ fn accept_clients(listener: UnixListener, sender: Sender<Event>) {
     });
 }
 
+fn process_icon_sampler(events: Sender<Event>) -> Sender<ProcessSample> {
+    let (sender, receiver) = mpsc::channel::<ProcessSample>();
+    thread::spawn(move || {
+        while let Ok(sample) = receiver.recv() {
+            let commands = sample
+                .group
+                .map(process_group_info)
+                .filter(|commands| !commands.is_empty())
+                .or_else(|| {
+                    sample
+                        .child_pid
+                        .and_then(|pid| process_info(pid as i32))
+                        .map(|command| vec![command])
+                })
+                .unwrap_or_default();
+            if events
+                .send(Event::ProcessIcon(
+                    sample.pane_id,
+                    process_group_icon(&commands),
+                ))
+                .is_err()
+            {
+                return;
+            }
+        }
+    });
+    sender
+}
+
 impl Server {
     fn restore(&mut self, state: PersistedState) -> Result<()> {
-        let last_active_pane = state.last_active_pane;
         let mut session_ids = HashSet::new();
         let mut pane_ids = HashSet::new();
         let mut sessions = Vec::with_capacity(state.sessions.len());
@@ -459,11 +500,6 @@ impl Server {
                         saved_pane.cols,
                         saved_pane.rows,
                         history,
-                        if last_active_pane == Some(saved_pane.id) {
-                            SCROLLBACK_LINES
-                        } else {
-                            0
-                        },
                     )?;
                     if let Some((history_reader, _)) = restored_history {
                         match replay_pane_journal(
@@ -479,14 +515,9 @@ impl Server {
                             // is dropped rather than blocking the restore.
                             Err(_) => {
                                 let _ = pane.history.truncate(0);
-                                pane.parser = new_parser_with_scrollback(
-                                    saved_pane.rows,
-                                    saved_pane.cols,
-                                    if last_active_pane == Some(saved_pane.id) {
-                                        SCROLLBACK_LINES
-                                    } else {
-                                        0
-                                    },
+                                pane.parser = new_parser(saved_pane.rows, saved_pane.cols);
+                                pane.parser.screen_mut().set_history_backing(
+                                    self.persistence.new_scrollback_backing()?,
                                 );
                                 pane.parser_prefix.clear();
                             }
@@ -534,12 +565,11 @@ impl Server {
         self.sessions = sessions;
         self.next_session_id = state.next_session_id;
         self.next_pane_id = state.next_pane_id;
-        self.last_active_pane = last_active_pane;
-        self.release_inactive_history();
+        self.last_active_pane = state.last_active_pane;
         Ok(())
     }
 
-    fn persist_state(&self) -> Result<()> {
+    fn persisted_state(&self) -> PersistedState {
         let sessions = self
             .sessions
             .iter()
@@ -573,13 +603,13 @@ impl Server {
                 current_window: session.current_window,
             })
             .collect();
-        self.persistence.save(&PersistedState {
+        PersistedState {
             version: STATE_VERSION,
             next_session_id: self.next_session_id,
             next_pane_id: self.next_pane_id,
             sessions,
             last_active_pane: self.last_active_pane,
-        })
+        }
     }
 
     fn event_loop(&mut self, receiver: Receiver<Event>) -> Result<()> {
@@ -670,7 +700,7 @@ impl Server {
             .flat_map(|session| &mut session.windows)
             .flat_map(|window| &mut window.panes)
         {
-            if let Err(error) = pane.history.flush() {
+            if let Err(error) = pane.history.poll_failure() {
                 failure = Some((pane.id, error));
             }
         }
@@ -678,14 +708,14 @@ impl Server {
             self.note_failure(&format!("pane {pane_id} history"), error);
         }
         if self.state_dirty {
-            // Staying dirty on failure means the next settle tries again.
-            match self.persist_state() {
+            match self.state_writer.save(self.persisted_state()) {
                 Ok(()) => self.state_dirty = false,
                 Err(error) => self.note_failure("save sessions", error),
             }
         }
-        if let Err(error) = self.compact_journals() {
-            self.note_failure("compact history", error);
+        if let Some(error) = self.state_writer.poll_failure() {
+            self.state_dirty = true;
+            self.note_failure("save sessions", error);
         }
     }
 
@@ -701,15 +731,11 @@ impl Server {
             .map(|pane| pane.id)
             .collect();
         for pane_id in overgrown {
-            let (history_reader, _) = self.persistence.restored_pane_history(pane_id)?;
-            let mut parser = new_parser(1, 1);
-            let mut prefix = Vec::new();
-            replay_pane_journal(&mut parser, &mut prefix, history_reader)?;
-            let records = compacted_journal_records(parser.screen_mut())?;
             let file = self.persistence.new_pane_history(pane_id)?;
             let pane = self
                 .pane_mut(pane_id)
                 .context("pane vanished during compaction")?;
+            let records = compacted_journal_records(pane.parser.screen_mut())?;
             pane.history.replace(file, &records)?;
         }
         Ok(())
@@ -816,6 +842,7 @@ impl Server {
                 let mut cwd_changed = false;
                 let mut bell_events = 0;
                 let mut failure = None;
+                let mut sample_process = false;
                 let colors = TerminalColors::from(&self.theme);
                 if let Some(pane) = self.pane_mut(pane_id) {
                     failure = pane.history.append_output(&bytes).err();
@@ -854,6 +881,12 @@ impl Server {
                             cwd_changed = true;
                         }
                     }
+                    // A command can start and finish before the periodic poll
+                    // interval elapses.  The prompt marker is the reliable
+                    // transition back to the shell, so refresh immediately or
+                    // a short-lived command's icon can remain stuck forever.
+                    sample_process =
+                        reached_prompt || pane.process_sampled.elapsed() >= PROCESS_POLL_INTERVAL;
                     self.dirty = true;
                 }
                 if let Some(error) = failure {
@@ -865,10 +898,19 @@ impl Server {
                 if cwd_changed {
                     self.save_state_soon();
                 }
+                if sample_process {
+                    self.sample_process_icon(pane_id);
+                }
             }
             Event::PtyClosed(pane_id) => {
                 self.close_pane(pane_id)?;
                 self.dirty = true;
+            }
+            Event::ProcessIcon(pane_id, icon) => {
+                if let Some(pane) = self.pane_mut(pane_id) {
+                    pane.process_icon = icon;
+                    self.dirty = true;
+                }
             }
             Event::ClipboardCopied(id, bytes, result) => {
                 self.set_message(
@@ -892,7 +934,7 @@ impl Server {
             }
             Event::Client(_, ClientMessage::Shutdown) => {
                 // The last chance to reach the disk, so this one is not deferred.
-                self.persist_state()?;
+                self.state_writer.flush(self.persisted_state())?;
                 for pane in self
                     .sessions
                     .iter_mut()
@@ -1073,7 +1115,7 @@ impl Server {
         self.next_pane_id += 1;
         let mut history = PaneJournal::new(self.persistence.new_pane_history(id)?, 0);
         history.append_resize(rows.max(1), cols.max(1))?;
-        self.spawn_pane(id, cwd, cols, rows, history, SCROLLBACK_LINES)
+        self.spawn_pane(id, cwd, cols, rows, history)
     }
 
     fn spawn_pane(
@@ -1083,7 +1125,6 @@ impl Server {
         cols: u16,
         rows: u16,
         history: PaneJournal,
-        scrollback_lines: usize,
     ) -> Result<Pane> {
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -1138,17 +1179,23 @@ impl Server {
                 }
             }
         });
+        let mut parser = new_parser(rows, cols);
+        parser
+            .screen_mut()
+            .set_history_backing(self.persistence.new_scrollback_backing()?);
         Ok(Pane {
             id,
             master: pair.master,
             writer,
             child,
             child_pid,
-            parser: new_parser_with_scrollback(rows, cols, scrollback_lines),
+            parser,
             parser_prefix: Vec::new(),
             query_prefix: Vec::new(),
             cwd: cwd.to_path_buf(),
             cwd_sampled: Instant::now(),
+            process_icon: IDLE_ICON,
+            process_sampled: Instant::now() - PROCESS_POLL_INTERVAL,
             history,
         })
     }
@@ -2131,67 +2178,8 @@ impl Server {
             return Ok(false);
         };
         let changed = self.last_active_pane != Some(pane_id);
-        if !changed {
-            return Ok(false);
-        }
-
-        if let Some(previous) = self.last_active_pane {
-            let records = {
-                let pane = self
-                    .pane_mut(previous)
-                    .context("previous active pane vanished")?;
-                compacted_journal_records(pane.parser.screen_mut())?
-            };
-            let file = self.persistence.new_pane_history(previous)?;
-            self.pane_mut(previous)
-                .context("previous active pane vanished")?
-                .history
-                .replace(file, &records)?;
-        }
-
-        if let Some(pane) = self.pane_mut(pane_id) {
-            pane.history.flush()?;
-        }
-        let (history_reader, history_length) = self.persistence.restored_pane_history(pane_id)?;
-        let (rows, cols) = self
-            .pane_mut(pane_id)
-            .map(|pane| pane.parser.screen().size())
-            .context("active pane vanished")?;
-        let mut parser = new_parser(rows, cols);
-        let mut parser_prefix = Vec::new();
-        let valid_length = replay_pane_journal(&mut parser, &mut parser_prefix, history_reader)?;
-        if valid_length != history_length {
-            self.pane_mut(pane_id)
-                .context("active pane vanished")?
-                .history
-                .truncate(valid_length)?;
-        }
-        let pane = self.pane_mut(pane_id).context("active pane vanished")?;
-        pane.parser = parser;
-        pane.parser_prefix = parser_prefix;
-
         self.last_active_pane = Some(pane_id);
-        self.release_inactive_history();
-        release_unused_memory();
-        Ok(true)
-    }
-
-    fn release_inactive_history(&mut self) {
-        let active = self.last_active_pane;
-        for pane in self
-            .sessions
-            .iter_mut()
-            .flat_map(|session| &mut session.windows)
-            .flat_map(|window| &mut window.panes)
-            .filter(|pane| Some(pane.id) != active)
-        {
-            pane.parser.screen_mut().clear_history();
-            pane.parser.screen_mut().set_history_limit(0);
-            if let Some(checkpoint) = pane.parser.callbacks_mut().prompt_checkpoint.as_mut() {
-                checkpoint.clear_history();
-                checkpoint.set_history_limit(0);
-            }
-        }
+        Ok(changed)
     }
 
     fn active_cwd(&self, id: usize) -> Option<PathBuf> {
@@ -2286,6 +2274,21 @@ impl Server {
             .flat_map(|session| session.windows.iter_mut())
             .flat_map(|window| window.panes.iter_mut())
             .find(|pane| pane.id == pane_id)
+    }
+
+    fn sample_process_icon(&mut self, pane_id: usize) {
+        let Some(pane) = self.pane_mut(pane_id) else {
+            return;
+        };
+        pane.process_sampled = Instant::now();
+        let sample = ProcessSample {
+            pane_id,
+            group: pane.master.process_group_leader(),
+            child_pid: pane.child_pid,
+        };
+        // The whole foreground group, not just its leader: a shell keeps the
+        // lead while the script or direnv hook it started is busy.
+        let _ = self.process_sampler.send(sample);
     }
 
     fn resize_active(&mut self, id: usize) -> Result<()> {
