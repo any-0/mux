@@ -118,6 +118,10 @@ type ProcessIcon = (fn(&str) -> bool, &'static str);
 /// window running a script shows what the script is doing.
 const PROCESS_ICONS: &[ProcessIcon] = &[
     (
+        |command| command.contains("opencode"),
+        "\u{e02b}\u{e02c}\u{e02d}",
+    ),
+    (
         |command| command.contains("codex"),
         "\u{e015}\u{e016}\u{e017}",
     ),

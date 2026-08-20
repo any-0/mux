@@ -189,6 +189,7 @@ the screen, from the moment leader is pressed:
 | `b` | Jump to the first pending bell, including its session and pane |
 | `x` | Kill the active pane after confirmation |
 | `d` | Detach this client while its sessions keep running |
+| `Alt-a` | Send the leader key to the active pane |
 | Arrow keys | Focus the pane in that direction |
 | `Ctrl` + arrow keys | Move the divider next to the active pane; leader stays held so this repeats |
 
@@ -386,7 +387,7 @@ mux maps the palette to its own interface: the window strip idles in
 highlights, and pane edges are `surface_raised`; panels and popups sit on
 `surface` in `foreground` with `muted` headings; the selected row and a Vim
 selection are `selection`; popup borders are `success` and anything asking a
-question is `warning`; and a bell rings in `danger`, shimmering towards
+question is `warning`; and a bell rings in `accent`, shimmering towards
 `foreground`. Point `theme` at a file to use it, or override roles in the
 `[palette]` table of the config itself.
 
