@@ -866,6 +866,7 @@ fn bar_width_and_vertical_center_follow_window_count() {
     assert_eq!(icon("jj"), "");
     assert_eq!(icon("codex"), "\u{e015}\u{e016}\u{e017}");
     assert_eq!(icon("claude"), "\u{e012}\u{e013}\u{e014}");
+    assert_eq!(icon("opencode"), "\u{e02b}\u{e02c}\u{e02d}");
     assert_eq!(icon("/bin/bash -l"), "$");
     assert_eq!(icon("nix build .#mux"), "\u{e019}\u{e01a}\u{e01b}");
     assert_eq!(icon("nixos-rebuild switch"), "\u{e019}\u{e01a}\u{e01b}");
@@ -1060,12 +1061,11 @@ fn terminal_bells_ignore_osc_terminators_and_render_truecolor_shimmer() {
         })
     }));
     assert!(frames.iter().copied().collect::<HashSet<_>>().len() > 80);
-    assert!(frames.iter().flatten().all(|color| color.0 >= color.1));
     assert!(
         frames
             .iter()
             .flatten()
-            .all(|color| { *color != (203, 163, 210) && *color != (110, 88, 113) })
+            .any(|color| *color == theme.bell_base)
     );
     assert!(frames.windows(2).all(|pair| {
         pair[0].iter().zip(pair[1]).all(|(previous, current)| {

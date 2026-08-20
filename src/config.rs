@@ -329,11 +329,10 @@ impl Theme {
             vim_jump: palette.secondary,
             vim_search: palette.surface_raised,
             vim_search_current: palette.warning,
-            // A bell is an alert, so it gets the palette's alarming colour
-            // rather than the same grey as the dividers, and the shimmer sweeps
+            // A bell uses the palette's accent colour, and the shimmer sweeps
             // it towards the text colour.
-            bell_base: palette.danger,
-            bell_highlight: blend(palette.danger, palette.foreground, 45),
+            bell_base: palette.accent,
+            bell_highlight: blend(palette.accent, palette.foreground, 45),
             bell_text: palette.ink(),
         }
     }
@@ -1209,6 +1208,7 @@ mod tests {
         assert_eq!(theme.vim_selection, (0xc4, 0xff, 0xff));
         assert_eq!(theme.popup_warning, (0x66, 0x44, 0x00));
         assert_eq!(theme.vim_search_current, (0x66, 0x44, 0x00));
+        assert_eq!(theme.bell_base, Palette::default().accent);
         // A light theme writes on its saturated fills in white; a dark one uses
         // its own background.
         assert_eq!(theme.bar_label_foreground, (0xff, 0xff, 0xff));

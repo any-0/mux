@@ -49,8 +49,8 @@ impl Server {
         let action = client.bindings.get(mode, &key);
         match mode {
             Mode::Normal => self.handle_normal_key(id, action, key)?,
-            Mode::Leader => self.handle_leader_key(id, action)?,
-            Mode::Tree => self.handle_tree_key(id, action)?,
+            Mode::Leader => self.handle_leader_key(id, action, &key)?,
+            Mode::Tree => self.handle_tree_key(id, action, &key)?,
             Mode::Theme => self.handle_theme_key(id, action)?,
             Mode::Vim => self.handle_vim_key(id, action, key)?,
         }
@@ -60,7 +60,7 @@ impl Server {
 
     fn handle_normal_key(&mut self, id: usize, action: Option<Action>, key: Key) -> Result<()> {
         match action {
-            Some(Action::EnterLeader) => self.enter_leader(id),
+            Some(Action::EnterLeader) => self.enter_leader(id, &key),
             Some(Action::SessionTree) => self.open_session_tree(id),
             Some(Action::NewWindow) => self.new_window(id)?,
             Some(Action::NewSession) => self.new_session(id)?,
@@ -76,11 +76,19 @@ impl Server {
         Ok(())
     }
 
-    fn enter_leader(&mut self, id: usize) {
-        self.clients.get_mut(&id).unwrap().leader = true;
+    fn enter_leader(&mut self, id: usize, key: &Key) {
+        let client = self.clients.get_mut(&id).unwrap();
+        client.leader = true;
+        client.leader_key = Some(key.clone());
     }
 
-    fn handle_leader_key(&mut self, id: usize, action: Option<Action>) -> Result<()> {
+    fn handle_leader_key(&mut self, id: usize, action: Option<Action>, key: &Key) -> Result<()> {
+        if self.clients[&id].leader_key.as_ref() == Some(key) {
+            let client = self.clients.get_mut(&id).unwrap();
+            client.leader = false;
+            client.leader_key = None;
+            return self.send_key_to_pty(id, key);
+        }
         // Resizing is worth repeating, so those keys keep the leader held for
         // the next press; everything else is a one-shot.
         let repeatable = matches!(
@@ -95,7 +103,9 @@ impl Server {
         // A repeat keeps the time leader was first entered, so holding it down
         // to resize still brings the help out instead of restarting its wait.
         if !repeatable {
-            self.clients.get_mut(&id).unwrap().leader = false;
+            let client = self.clients.get_mut(&id).unwrap();
+            client.leader = false;
+            client.leader_key = None;
         }
         match action {
             Some(Action::ResizePaneLeft) => {
@@ -183,7 +193,7 @@ impl Server {
         Ok(())
     }
 
-    fn handle_tree_key(&mut self, id: usize, action: Option<Action>) -> Result<()> {
+    fn handle_tree_key(&mut self, id: usize, action: Option<Action>, key: &Key) -> Result<()> {
         let items = {
             let tree = self.clients[&id].tree.as_ref().unwrap();
             self.tree_items(&tree.expanded)
@@ -242,7 +252,7 @@ impl Server {
                 self.start_kill_session(id, item.session_id);
             }
             Some(Action::SessionTree) => self.switch_to_previous_session(id)?,
-            Some(Action::EnterLeader) => self.enter_leader(id),
+            Some(Action::EnterLeader) => self.enter_leader(id, key),
             Some(Action::ThemePicker) => self.open_theme_picker(id),
             Some(Action::TreeCancel) => self.clients.get_mut(&id).unwrap().tree = None,
             _ => {}
@@ -277,7 +287,7 @@ impl Server {
 
     fn handle_vim_key(&mut self, id: usize, action: Option<Action>, key: Key) -> Result<()> {
         if let Some(Action::EnterLeader) = action {
-            self.enter_leader(id);
+            self.enter_leader(id, &key);
             return Ok(());
         }
         if let Some(Action::SelectWindow(number)) = action {
