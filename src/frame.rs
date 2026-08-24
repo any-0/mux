@@ -66,6 +66,7 @@ struct FrameCell {
 pub struct CellAttributes {
     pub foreground: vt100::Color,
     pub background: vt100::Color,
+    pub underline_color: vt100::Color,
     pub bold: bool,
     pub dim: bool,
     pub italic: bool,
@@ -110,6 +111,7 @@ impl From<&vt100::Cell> for CellAttributes {
         Self {
             foreground: cell.fgcolor(),
             background: cell.bgcolor(),
+            underline_color: cell.underline_color(),
             bold: cell.bold(),
             dim: cell.dim(),
             italic: cell.italic(),
@@ -432,13 +434,30 @@ pub fn write_cell_attributes(output: &mut Vec<u8>, attributes: CellAttributes, c
     }
     write_color(output, attributes.foreground, true, colors);
     write_color(output, attributes.background, false, colors);
+    if attributes.underline_color != vt100::Color::Default {
+        write_color_parameter(output, attributes.underline_color, 58, colors);
+    }
     output.push(b'm');
 }
 
 fn write_color(output: &mut Vec<u8>, color: vt100::Color, foreground: bool, colors: ColorDepth) {
     let parameter = if foreground { 38 } else { 48 };
+    write_color_parameter(output, color, parameter, colors);
+}
+
+fn write_color_parameter(
+    output: &mut Vec<u8>,
+    color: vt100::Color,
+    parameter: u8,
+    colors: ColorDepth,
+) {
     match color {
-        vt100::Color::Default => output.extend_from_slice(if foreground { b";39" } else { b";49" }),
+        vt100::Color::Default => output.extend_from_slice(match parameter {
+            38 => b";39",
+            48 => b";49",
+            58 => b";59",
+            _ => unreachable!(),
+        }),
         vt100::Color::Idx(index) => {
             output.extend_from_slice(format!(";{parameter};5;{index}").as_bytes())
         }
@@ -853,13 +872,15 @@ mod tests {
     #[test]
     fn curly_underlines_survive_a_pane_repaint() {
         let mut parser = vt100::Parser::new(1, 5, 0);
-        parser.process(b"\x1b[4:3mwave");
+        parser.process(b"\x1b[4:3;58:2::255:0:0mwave");
         let cell = parser.screen().cell(0, 0).unwrap();
         assert_eq!(cell.underline_style(), vt100::UnderlineStyle::Curly);
+        assert_eq!(cell.underline_color(), vt100::Color::Rgb(255, 0, 0));
 
         let mut current = frame(1, 5);
         current.set_text(1, 1, "wave", CellAttributes::from(&cell));
         let output = String::from_utf8(diff(&mut current, &Frame::default())).unwrap();
         assert!(output.contains("4:3"), "{output:?}");
+        assert!(output.contains("58;2;255;0;0"), "{output:?}");
     }
 }
