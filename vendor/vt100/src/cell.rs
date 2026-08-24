@@ -1,6 +1,6 @@
 use unicode_width::UnicodeWidthChar as _;
 
-// chosen to make the size of the cell struct 32 bytes
+// chosen to keep the size of the cell struct bounded
 const CONTENT_BYTES: usize = 22;
 
 const IS_WIDE: u8 = 0b1000_0000;
@@ -14,7 +14,7 @@ pub struct Cell {
     len: u8,
     attrs: crate::attrs::Attrs,
 }
-const _: () = assert!(std::mem::size_of::<Cell>() == 32);
+const _: () = assert!(std::mem::size_of::<Cell>() <= 40);
 
 impl PartialEq<Self> for Cell {
     fn eq(&self, other: &Self) -> bool {
@@ -155,6 +155,12 @@ impl Cell {
     #[must_use]
     pub fn bgcolor(&self) -> crate::Color {
         self.attrs.bgcolor
+    }
+
+    /// Returns the explicit color of the cell's underline, if one was set.
+    #[must_use]
+    pub fn underline_color(&self) -> crate::Color {
+        self.attrs.underline_color
     }
 
     /// Returns whether the cell should be rendered with the bold text

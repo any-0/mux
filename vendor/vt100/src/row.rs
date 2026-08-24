@@ -717,6 +717,7 @@ impl ExactSizeIterator for Cells<'_> {}
 fn encode_attrs(output: &mut Vec<u8>, attrs: crate::attrs::Attrs) {
     encode_color(output, attrs.fgcolor);
     encode_color(output, attrs.bgcolor);
+    encode_color(output, attrs.underline_color);
     output.push(attrs.mode);
 }
 
@@ -724,6 +725,7 @@ fn decode_attrs(input: &mut &[u8]) -> crate::attrs::Attrs {
     crate::attrs::Attrs {
         fgcolor: decode_color(input),
         bgcolor: decode_color(input),
+        underline_color: decode_color(input),
         mode: take(input, 1)[0],
     }
 }

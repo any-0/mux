@@ -1331,6 +1331,35 @@ impl Screen {
                 [39] => {
                     self.attrs.fgcolor = crate::Color::Default;
                 }
+                [58, 2, r, g, b] => {
+                    self.attrs.underline_color =
+                        crate::Color::Rgb(to_u8!(*r), to_u8!(*g), to_u8!(*b));
+                }
+                [58, 2, _, r, g, b] => {
+                    self.attrs.underline_color =
+                        crate::Color::Rgb(to_u8!(*r), to_u8!(*g), to_u8!(*b));
+                }
+                [58, 5, i] => {
+                    self.attrs.underline_color = crate::Color::Idx(to_u8!(*i));
+                }
+                [58] => match next_param!() {
+                    [2] => {
+                        let r = next_param_u8!();
+                        let g = next_param_u8!();
+                        let b = next_param_u8!();
+                        self.attrs.underline_color = crate::Color::Rgb(r, g, b);
+                    }
+                    [5] => {
+                        self.attrs.underline_color = crate::Color::Idx(next_param_u8!());
+                    }
+                    _ => {
+                        unhandled(self);
+                        return;
+                    }
+                },
+                [59] => {
+                    self.attrs.underline_color = crate::Color::Default;
+                }
                 [n] if (40..=47).contains(n) => {
                     self.attrs.bgcolor = crate::Color::Idx(to_u8!(*n) - 40);
                 }

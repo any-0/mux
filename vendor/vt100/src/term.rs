@@ -116,6 +116,7 @@ pub enum Intensity {
 pub struct Attrs {
     fgcolor: Option<crate::Color>,
     bgcolor: Option<crate::Color>,
+    underline_color: Option<crate::Color>,
     intensity: Option<Intensity>,
     italic: Option<bool>,
     underline: Option<crate::attrs::UnderlineStyle>,
@@ -130,6 +131,11 @@ impl Attrs {
 
     pub fn bgcolor(mut self, bgcolor: crate::Color) -> Self {
         self.bgcolor = Some(bgcolor);
+        self
+    }
+
+    pub fn underline_color(mut self, underline_color: crate::Color) -> Self {
+        self.underline_color = Some(underline_color);
         self
     }
 
@@ -160,6 +166,7 @@ impl BufWrite for Attrs {
     fn write_buf(&self, buf: &mut Vec<u8>) {
         if self.fgcolor.is_none()
             && self.bgcolor.is_none()
+            && self.underline_color.is_none()
             && self.intensity.is_none()
             && self.italic.is_none()
             && self.underline.is_none()
@@ -226,6 +233,24 @@ impl BufWrite for Attrs {
                 }
                 crate::Color::Rgb(r, g, b) => {
                     write_param!(48);
+                    write_param!(2);
+                    write_param!(r);
+                    write_param!(g);
+                    write_param!(b);
+                }
+            }
+        }
+
+        if let Some(underline_color) = self.underline_color {
+            match underline_color {
+                crate::Color::Default => write_param!(59),
+                crate::Color::Idx(i) => {
+                    write_param!(58);
+                    write_param!(5);
+                    write_param!(i);
+                }
+                crate::Color::Rgb(r, g, b) => {
+                    write_param!(58);
                     write_param!(2);
                     write_param!(r);
                     write_param!(g);
