@@ -20,6 +20,40 @@ const TEXT_MODE_DIM: u8 = 0b0000_0010;
 const TEXT_MODE_ITALIC: u8 = 0b0000_0100;
 const TEXT_MODE_UNDERLINE: u8 = 0b0000_1000;
 const TEXT_MODE_INVERSE: u8 = 0b0001_0000;
+const TEXT_MODE_UNDERLINE_STYLE: u8 = 0b1110_0000;
+
+/// The visual form of an underline.
+#[derive(Eq, PartialEq, Debug, Copy, Clone, Default)]
+#[repr(u8)]
+pub enum UnderlineStyle {
+    /// No underline.
+    #[default]
+    None = 0,
+    /// A single straight line.
+    Straight = 1,
+    /// Two straight lines.
+    Double = 2,
+    /// A wavy line.
+    Curly = 3,
+    /// A dotted line.
+    Dotted = 4,
+    /// A dashed line.
+    Dashed = 5,
+}
+
+impl UnderlineStyle {
+    fn from_sgr(value: u16) -> Option<Self> {
+        match value {
+            0 => Some(Self::None),
+            1 => Some(Self::Straight),
+            2 => Some(Self::Double),
+            3 => Some(Self::Curly),
+            4 => Some(Self::Dotted),
+            5 => Some(Self::Dashed),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Attrs {
@@ -68,15 +102,42 @@ impl Attrs {
     }
 
     pub fn underline(&self) -> bool {
-        self.mode & TEXT_MODE_UNDERLINE != 0
+        self.underline_style() != UnderlineStyle::None
     }
 
     pub fn set_underline(&mut self, underline: bool) {
-        if underline {
-            self.mode |= TEXT_MODE_UNDERLINE;
+        self.set_underline_style(if underline {
+            UnderlineStyle::Straight
         } else {
-            self.mode &= !TEXT_MODE_UNDERLINE;
+            UnderlineStyle::None
+        });
+    }
+
+    pub fn underline_style(&self) -> UnderlineStyle {
+        match (self.mode & TEXT_MODE_UNDERLINE_STYLE) >> 5 {
+            1 => UnderlineStyle::Straight,
+            2 => UnderlineStyle::Double,
+            3 => UnderlineStyle::Curly,
+            4 => UnderlineStyle::Dotted,
+            5 => UnderlineStyle::Dashed,
+            _ => UnderlineStyle::None,
         }
+    }
+
+    pub fn set_underline_style(&mut self, style: UnderlineStyle) {
+        self.mode &= !(TEXT_MODE_UNDERLINE | TEXT_MODE_UNDERLINE_STYLE);
+        self.mode |= (style as u8) << 5;
+        if style != UnderlineStyle::None {
+            self.mode |= TEXT_MODE_UNDERLINE;
+        }
+    }
+
+    pub fn set_underline_style_sgr(&mut self, value: u16) -> bool {
+        let Some(style) = UnderlineStyle::from_sgr(value) else {
+            return false;
+        };
+        self.set_underline_style(style);
+        true
     }
 
     pub fn inverse(&self) -> bool {
@@ -128,10 +189,10 @@ impl Attrs {
         } else {
             attrs.italic(self.italic())
         };
-        let attrs = if self.underline() == other.underline() {
+        let attrs = if self.underline_style() == other.underline_style() {
             attrs
         } else {
-            attrs.underline(self.underline())
+            attrs.underline(self.underline_style())
         };
         let attrs = if self.inverse() == other.inverse() {
             attrs
