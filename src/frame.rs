@@ -69,7 +69,7 @@ pub struct CellAttributes {
     pub bold: bool,
     pub dim: bool,
     pub italic: bool,
-    pub underline: bool,
+    pub underline: vt100::UnderlineStyle,
     pub inverse: bool,
 }
 
@@ -113,7 +113,7 @@ impl From<&vt100::Cell> for CellAttributes {
             bold: cell.bold(),
             dim: cell.dim(),
             italic: cell.italic(),
-            underline: cell.underline(),
+            underline: cell.underline_style(),
             inverse: cell.inverse(),
         }
     }
@@ -419,8 +419,13 @@ pub fn write_cell_attributes(output: &mut Vec<u8>, attributes: CellAttributes, c
     if attributes.italic {
         output.extend_from_slice(b";3");
     }
-    if attributes.underline {
-        output.extend_from_slice(b";4");
+    match attributes.underline {
+        vt100::UnderlineStyle::None => {}
+        vt100::UnderlineStyle::Straight => output.extend_from_slice(b";4"),
+        style => {
+            output.extend_from_slice(b";4:");
+            output.push(b'0' + style as u8);
+        }
     }
     if attributes.inverse {
         output.extend_from_slice(b";7");
@@ -843,5 +848,18 @@ mod tests {
         current.set_text(1, 1, "abcd", attributes);
         let output = String::from_utf8(diff(&mut current, &Frame::default())).unwrap();
         assert_eq!(output.matches("38;2;1;2;3").count(), 1, "{output:?}");
+    }
+
+    #[test]
+    fn curly_underlines_survive_a_pane_repaint() {
+        let mut parser = vt100::Parser::new(1, 5, 0);
+        parser.process(b"\x1b[4:3mwave");
+        let cell = parser.screen().cell(0, 0).unwrap();
+        assert_eq!(cell.underline_style(), vt100::UnderlineStyle::Curly);
+
+        let mut current = frame(1, 5);
+        current.set_text(1, 1, "wave", CellAttributes::from(&cell));
+        let output = String::from_utf8(diff(&mut current, &Frame::default())).unwrap();
+        assert!(output.contains("4:3"), "{output:?}");
     }
 }

@@ -185,6 +185,12 @@ impl Cell {
         self.attrs.underline()
     }
 
+    /// Returns the visual style of the cell's underline.
+    #[must_use]
+    pub fn underline_style(&self) -> crate::attrs::UnderlineStyle {
+        self.attrs.underline_style()
+    }
+
     /// Returns whether the cell should be rendered with the inverse text
     /// attribute.
     #[must_use]

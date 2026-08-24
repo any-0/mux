@@ -1379,7 +1379,7 @@ fn vim_snapshot_preserves_terminal_formatting() {
     assert_eq!(attributes.background, vt100::Color::Idx(4));
     assert!(attributes.bold);
     assert!(attributes.italic);
-    assert!(attributes.underline);
+    assert_eq!(attributes.underline, vt100::UnderlineStyle::Straight);
 
     let theme = Theme::default();
     let selected = vim_selected_cell_attributes(attributes, &theme);

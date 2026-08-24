@@ -118,7 +118,7 @@ pub struct Attrs {
     bgcolor: Option<crate::Color>,
     intensity: Option<Intensity>,
     italic: Option<bool>,
-    underline: Option<bool>,
+    underline: Option<crate::attrs::UnderlineStyle>,
     inverse: Option<bool>,
 }
 
@@ -143,7 +143,7 @@ impl Attrs {
         self
     }
 
-    pub fn underline(mut self, underline: bool) -> Self {
+    pub fn underline(mut self, underline: crate::attrs::UnderlineStyle) -> Self {
         self.underline = Some(underline);
         self
     }
@@ -251,10 +251,18 @@ impl BufWrite for Attrs {
         }
 
         if let Some(underline) = self.underline {
-            if underline {
-                write_param!(4);
-            } else {
-                write_param!(24);
+            match underline {
+                crate::attrs::UnderlineStyle::None => write_param!(24),
+                crate::attrs::UnderlineStyle::Straight => write_param!(4),
+                style => {
+                    if first {
+                        first = false;
+                    } else {
+                        buf.push(b';');
+                    }
+                    buf.extend_from_slice(b"4:");
+                    extend_itoa(buf, style as u8);
+                }
             }
         }
 

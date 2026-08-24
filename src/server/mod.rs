@@ -1140,7 +1140,6 @@ impl Server {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         let mut command = CommandBuilder::new(shell);
         command.cwd(cwd);
-        command.env("TERM", "xterm-256color");
         command.env("MUX", self.socket_path.as_os_str());
         command.env("MUX_PANE", id.to_string());
         // Started from inside tmux, the inherited variables would point programs
