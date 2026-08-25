@@ -10,16 +10,18 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-use crate::frame::{ColorDepth, write_cell_attributes};
 
 use super::{
-    snapshot::snapshot_screen,
-    terminal::{SCROLLBACK_LINES, process_terminal_bytes},
+    terminal::process_terminal_bytes,
 };
 
 pub(super) const JOURNAL_OUTPUT: u8 = 1;
 
 pub(super) const JOURNAL_RESIZE: u8 = 2;
+/// A pane's scrollback, packed the way the scrollback itself stores it. It
+/// costs a read and a decompression to restore, where the same rows written as
+/// terminal output cost a full parse.
+pub(super) const JOURNAL_HISTORY: u8 = 3;
 
 const MAX_JOURNAL_RECORD: usize = 16 * 1024 * 1024;
 
@@ -273,48 +275,19 @@ fn record_failure(failure: &mut Option<String>, failures: &Sender<String>, error
     let _ = failures.send(message);
 }
 
-/// Builds a journal that replays to the current screen and the complete
-/// configured scrollback, discarding only rows beyond that limit.
+/// Builds a journal that restores the current screen and scrollback.
+///
+/// The scrollback goes in packed, as the rows it already is; only the visible
+/// screen is written as terminal output, because that is the part a parser has
+/// to work through to put the cursor and its attributes back.
 pub(super) fn compacted_journal_records(screen: &mut vt100::Screen) -> Result<Vec<u8>> {
     let (rows, cols) = screen.size();
-    let (buffer, _) = snapshot_screen(screen);
-    let start = buffer
-        .len()
-        .saturating_sub(SCROLLBACK_LINES + usize::from(rows));
-    let last_content = (start..buffer.len()).rposition(|row| {
-        let line = buffer.line(row);
-        line.cells
-            .iter()
-            .any(|cell| !cell.contents(&line.text).is_empty())
-    });
-    let end = start + last_content.map_or(0, |index| index + 1);
-    let mut output = Vec::new();
-    for (index, line) in (start..end).map(|row| buffer.line(row)).enumerate() {
-        if index > 0 {
-            output.extend_from_slice(b"\r\n");
-        }
-        let mut attributes = None;
-        for cell in &line.cells {
-            if cell.wide_continuation {
-                continue;
-            }
-            if attributes != Some(cell.attributes) {
-                // A journal is replayed back through the parser rather than
-                // sent to a terminal, so it keeps its exact colours.
-                write_cell_attributes(&mut output, cell.attributes, ColorDepth::TrueColor);
-                attributes = Some(cell.attributes);
-            }
-            let contents = cell.contents(&line.text);
-            output.extend_from_slice(if contents.is_empty() {
-                b" "
-            } else {
-                contents.as_bytes()
-            });
-        }
-    }
-    output.extend_from_slice(b"\x1b[0m");
+    screen.set_scrollback(0);
+    let history = screen.encode_history();
+    let contents = screen.contents_formatted();
     let mut records = encode_journal_record(JOURNAL_RESIZE, &resize_payload(rows, cols))?;
-    records.extend_from_slice(&encode_journal_record(JOURNAL_OUTPUT, &output)?);
+    records.extend_from_slice(&encode_journal_record(JOURNAL_HISTORY, &history)?);
+    records.extend_from_slice(&encode_journal_record(JOURNAL_OUTPUT, &contents)?);
     Ok(records)
 }
 
@@ -351,6 +324,11 @@ pub(super) fn replay_pane_journal<CB: vt100::Callbacks>(
         }
         match kind {
             JOURNAL_OUTPUT => process_terminal_bytes(parser, parser_prefix, &payload),
+            JOURNAL_HISTORY => {
+                if !parser.screen_mut().restore_history(&payload) {
+                    bail!("pane journal contains an unreadable scrollback record");
+                }
+            }
             JOURNAL_RESIZE => {
                 if payload.len() != 4 {
                     bail!("pane journal contains an invalid resize record");

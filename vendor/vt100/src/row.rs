@@ -1,6 +1,8 @@
 use crate::term::BufWrite as _;
 
 #[derive(Clone, Debug)]
+/// One row of a terminal: its cells, how wide it is, and whether the line it
+/// belongs to carries on into the next row.
 pub struct Row {
     cells: RowCells,
     cols: u16,
@@ -31,6 +33,7 @@ struct AttrSpan {
     attrs: crate::attrs::Attrs,
 }
 
+/// The cells of a [`Row`], unpacked as they are walked.
 pub struct Cells<'a> {
     row: &'a Row,
     col: u16,
@@ -73,7 +76,7 @@ impl CompactCells {
 }
 
 impl Row {
-    pub fn new(cols: u16) -> Self {
+    pub(crate) fn new(cols: u16) -> Self {
         Self {
             cells: RowCells::Active(vec![crate::Cell::new(); usize::from(cols)]),
             cols,
@@ -97,13 +100,14 @@ impl Row {
         }
     }
 
-    pub fn clear(&mut self, attrs: crate::attrs::Attrs) {
+    pub(crate) fn clear(&mut self, attrs: crate::attrs::Attrs) {
         for cell in self.active_cells() {
             cell.clear(attrs);
         }
         self.wrapped = false;
     }
 
+    /// Every cell in the row, unpacked as it is reached.
     pub fn cells(&self) -> Cells<'_> {
         Cells {
             row: self,
@@ -116,7 +120,7 @@ impl Row {
         }
     }
 
-    pub fn get(&self, col: u16) -> Option<crate::Cell> {
+    pub(crate) fn get(&self, col: u16) -> Option<crate::Cell> {
         if col >= self.cols {
             return None;
         }
@@ -126,22 +130,22 @@ impl Row {
         }
     }
 
-    pub fn get_mut(&mut self, col: u16) -> Option<&mut crate::Cell> {
+    pub(crate) fn get_mut(&mut self, col: u16) -> Option<&mut crate::Cell> {
         self.active_cells().get_mut(usize::from(col))
     }
 
-    pub fn insert(&mut self, i: u16, cell: crate::Cell) {
+    pub(crate) fn insert(&mut self, i: u16, cell: crate::Cell) {
         self.active_cells().insert(usize::from(i), cell);
         self.wrapped = false;
     }
 
-    pub fn remove(&mut self, i: u16) {
+    pub(crate) fn remove(&mut self, i: u16) {
         self.clear_wide(i);
         self.active_cells().remove(usize::from(i));
         self.wrapped = false;
     }
 
-    pub fn erase(&mut self, i: u16, attrs: crate::attrs::Attrs) {
+    pub(crate) fn erase(&mut self, i: u16, attrs: crate::attrs::Attrs) {
         let wide = self.get(i).unwrap().is_wide();
         self.clear_wide(i);
         self.active_cells()[usize::from(i)].clear(attrs);
@@ -150,7 +154,7 @@ impl Row {
         }
     }
 
-    pub fn truncate(&mut self, len: u16) {
+    pub(crate) fn truncate(&mut self, len: u16) {
         self.active_cells().truncate(usize::from(len));
         self.cols = len;
         self.wrapped = false;
@@ -160,17 +164,17 @@ impl Row {
         }
     }
 
-    pub fn resize(&mut self, len: u16, cell: crate::Cell) {
+    pub(crate) fn resize(&mut self, len: u16, cell: crate::Cell) {
         self.active_cells().resize(usize::from(len), cell);
         self.cols = len;
         self.wrapped = false;
     }
 
-    pub fn wrap(&mut self, wrap: bool) {
+    pub(crate) fn wrap(&mut self, wrap: bool) {
         self.wrapped = wrap;
     }
 
-    pub fn wrapped(&self) -> bool {
+    pub(crate) fn wrapped(&self) -> bool {
         self.wrapped
     }
 
@@ -199,7 +203,7 @@ impl Row {
         row
     }
 
-    pub fn clear_wide(&mut self, col: u16) {
+    pub(crate) fn clear_wide(&mut self, col: u16) {
         let cell = self.get(col).unwrap();
         let other_col = if cell.is_wide() {
             col + 1
@@ -342,7 +346,7 @@ impl Row {
         cells
     }
 
-    pub fn write_contents(&self, contents: &mut String, start: u16, width: u16, wrapping: bool) {
+    pub(crate) fn write_contents(&self, contents: &mut String, start: u16, width: u16, wrapping: bool) {
         let mut prev_was_wide = false;
 
         let mut prev_col = start;
@@ -375,7 +379,7 @@ impl Row {
         }
     }
 
-    pub fn write_contents_formatted(
+    pub(crate) fn write_contents_formatted(
         &self,
         contents: &mut Vec<u8>,
         start: u16,
@@ -506,7 +510,7 @@ impl Row {
     // while it's true that most of the logic in this is identical to
     // write_contents_formatted, i can't figure out how to break out the
     // common parts without making things noticeably slower.
-    pub fn write_contents_diff(
+    pub(crate) fn write_contents_diff(
         &self,
         contents: &mut Vec<u8>,
         prev: &Self,

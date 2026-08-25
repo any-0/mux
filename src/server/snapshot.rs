@@ -14,13 +14,13 @@ pub(super) struct VimState {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct VimLine {
-    pub(super) text: String,
-    pub(super) cells: Vec<VimCell>,
+pub(crate) struct VimLine {
+    pub(crate) text: String,
+    pub(crate) cells: Vec<VimCell>,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct VimCell {
+pub(crate) struct VimCell {
     pub(super) attributes: CellAttributes,
     pub(super) text_start: u32,
     pub(super) text_length: u32,
@@ -61,7 +61,14 @@ impl VimBuffer {
 
     /// An empty buffer, which is what a pane with nothing in it looks like.
     pub(crate) fn blank() -> Self {
-        Self::new(vec![vt100::Row::new(0)], 0)
+        Self {
+            rows: Vec::new(),
+            cols: 0,
+            lines: vec![OnceCell::from(VimLine {
+                text: String::new(),
+                cells: Vec::new(),
+            })],
+        }
     }
 
     /// A buffer of plain text, for tests that care about motions rather than
@@ -104,11 +111,8 @@ impl VimBuffer {
         &self.line(row).text
     }
 
-    pub(crate) fn get_text(&self, row: usize) -> Option<&str> {
-        (row < self.len()).then(|| self.text(row))
-    }
-
     /// Every line, unpacked as it is reached.
+    #[cfg(test)]
     pub(crate) fn lines(&self) -> impl Iterator<Item = &VimLine> {
         (0..self.len()).map(|row| self.line(row))
     }
@@ -137,6 +141,7 @@ pub(super) fn snapshot_screen(screen: &mut vt100::Screen) -> (VimBuffer, Positio
     (buffer, cursor)
 }
 
+#[cfg(test)]
 pub(super) fn snapshot_vim_line(screen: &vt100::Screen, row: u16, cols: u16) -> VimLine {
     let cells: Vec<_> = screen
         .row_cells(row)
