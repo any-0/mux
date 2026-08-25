@@ -703,6 +703,14 @@ impl Server {
         if let Some((pane_id, error)) = failure {
             self.note_failure(&format!("pane {pane_id} history"), error);
         }
+        // Nothing is happening, so this is the moment to rewrite a journal that
+        // has outgrown what it holds. Left alone it is replayed in full at every
+        // startup, which is the slowest thing the daemon ever does.
+        if let Some(pane_id) = self.overgrown_journals().first().copied()
+            && let Err(error) = self.compact_journal(pane_id)
+        {
+            self.note_failure(&format!("pane {pane_id} history"), error);
+        }
         if self.state_dirty {
             match self.state_writer.save(self.persisted_state()) {
                 Ok(()) => self.state_dirty = false,
@@ -718,23 +726,30 @@ impl Server {
     /// Rewrites journals that have outgrown [`MAX_JOURNAL_BYTES`] so restoring
     /// a long-lived pane stays fast and its history stays bounded on disk.
     fn compact_journals(&mut self) -> Result<()> {
-        let overgrown: Vec<usize> = self
-            .sessions
+        let overgrown = self.overgrown_journals();
+        for pane_id in overgrown {
+            self.compact_journal(pane_id)?;
+        }
+        Ok(())
+    }
+
+    fn overgrown_journals(&self) -> Vec<usize> {
+        self.sessions
             .iter()
             .flat_map(|session| &session.windows)
             .flat_map(|window| &window.panes)
             .filter(|pane| pane.history.needs_compaction())
             .map(|pane| pane.id)
-            .collect();
-        for pane_id in overgrown {
-            let file = self.persistence.new_pane_history(pane_id)?;
-            let pane = self
-                .pane_mut(pane_id)
-                .context("pane vanished during compaction")?;
-            let records = compacted_journal_records(pane.parser.screen_mut())?;
-            pane.history.replace(file, &records)?;
-        }
-        Ok(())
+            .collect()
+    }
+
+    fn compact_journal(&mut self, pane_id: usize) -> Result<()> {
+        let file = self.persistence.new_pane_history(pane_id)?;
+        let pane = self
+            .pane_mut(pane_id)
+            .context("pane vanished during compaction")?;
+        let records = compacted_journal_records(pane.parser.screen_mut())?;
+        pane.history.replace(file, &records)
     }
 
     fn expire_messages(&mut self) -> bool {
