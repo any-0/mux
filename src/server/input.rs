@@ -35,6 +35,12 @@ impl Server {
             self.dirty = true;
             return Ok(());
         }
+        if client.literal {
+            self.clients.get_mut(&id).unwrap().literal = false;
+            self.send_key_to_pty(id, &key)?;
+            self.dirty = true;
+            return Ok(());
+        }
         let mode = if client.leader {
             Mode::Leader
         } else if client.themes.is_some() {
@@ -83,11 +89,14 @@ impl Server {
     }
 
     fn handle_leader_key(&mut self, id: usize, action: Option<Action>, key: &Key) -> Result<()> {
+        // Leader twice, like tmux's prefix twice: the next key combo goes to
+        // the pane untouched, so a binding can be typed through.
         if self.clients[&id].leader_key.as_ref() == Some(key) {
             let client = self.clients.get_mut(&id).unwrap();
             client.leader = false;
             client.leader_key = None;
-            return self.send_key_to_pty(id, key);
+            client.literal = true;
+            return Ok(());
         }
         // Resizing is worth repeating, so those keys keep the leader held for
         // the next press; everything else is a one-shot.

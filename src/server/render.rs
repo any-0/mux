@@ -152,10 +152,15 @@ impl Server {
                 },
                 PopupAnchor::Center,
             ))
+        } else if client.literal {
+            Some((
+                Popup::Status("literal: next key goes to the pane".into()),
+                PopupAnchor::Bottom,
+            ))
         } else if client.leader {
             Some((
                 Popup::Status(
-                    "leader: $ session · , window · -/| split · z zoom · b bell · x kill · d detach · arrows focus · ctrl-arrows resize"
+                    "leader: $ session · , window · -/| split · z zoom · b bell · x kill · d detach · arrows focus · ctrl-arrows resize · leader again for literal key"
                         .into(),
                 ),
                 PopupAnchor::Bottom,
