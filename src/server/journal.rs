@@ -268,19 +268,19 @@ fn record_failure(failure: &mut Option<String>, failures: &Sender<String>, error
 /// configured scrollback, discarding only rows beyond that limit.
 pub(super) fn compacted_journal_records(screen: &mut vt100::Screen) -> Result<Vec<u8>> {
     let (rows, cols) = screen.size();
-    let (lines, _) = snapshot_screen(screen);
-    let start = lines
+    let (buffer, _) = snapshot_screen(screen);
+    let start = buffer
         .len()
         .saturating_sub(SCROLLBACK_LINES + usize::from(rows));
-    let kept = &lines[start..];
-    let last_content = kept.iter().rposition(|line| {
+    let last_content = (start..buffer.len()).rposition(|row| {
+        let line = buffer.line(row);
         line.cells
             .iter()
             .any(|cell| !cell.contents(&line.text).is_empty())
     });
-    let kept = &kept[..last_content.map_or(0, |index| index + 1)];
+    let end = start + last_content.map_or(0, |index| index + 1);
     let mut output = Vec::new();
-    for (index, line) in kept.iter().enumerate() {
+    for (index, line) in (start..end).map(|row| buffer.line(row)).enumerate() {
         if index > 0 {
             output.extend_from_slice(b"\r\n");
         }

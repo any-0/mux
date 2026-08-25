@@ -31,7 +31,7 @@ struct AttrSpan {
     attrs: crate::attrs::Attrs,
 }
 
-pub(crate) struct Cells<'a> {
+pub struct Cells<'a> {
     row: &'a Row,
     col: u16,
     shape_index: usize,
@@ -104,7 +104,7 @@ impl Row {
         self.wrapped = false;
     }
 
-    pub(crate) fn cells(&self) -> Cells<'_> {
+    pub fn cells(&self) -> Cells<'_> {
         Cells {
             row: self,
             col: 0,

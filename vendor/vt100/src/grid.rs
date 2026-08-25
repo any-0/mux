@@ -181,6 +181,10 @@ impl Grid {
         self.origin_mode = self.saved_origin_mode;
     }
 
+    pub fn all_rows(&self) -> impl Iterator<Item = &crate::row::Row> {
+        self.scrollback.iter().chain(self.rows.iter())
+    }
+
     pub fn visible_rows(&self) -> impl Iterator<Item = &crate::row::Row> {
         let scrollback_len = self.scrollback.len();
         let rows_len = self.rows.len();
@@ -253,6 +257,12 @@ impl Grid {
     pub fn drawing_cell_mut(&mut self, pos: Pos) -> Option<&mut crate::Cell> {
         self.drawing_row_mut(pos.row)
             .and_then(|r| r.get_mut(pos.col))
+    }
+
+    /// How many rows of history the grid is holding right now, as opposed to
+    /// the most it would hold.
+    pub fn history_rows(&self) -> usize {
+        self.scrollback.len()
     }
 
     pub fn scrollback_len(&self) -> usize {

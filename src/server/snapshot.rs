@@ -1,6 +1,8 @@
 //! A still copy of a pane's screen and scrollback, which is what Vim mode
 //! moves around in.
 
+use std::cell::OnceCell;
+
 use crate::{
     config::Theme,
     frame::{CellAttributes, rgb},
@@ -9,14 +11,15 @@ use crate::{
 
 pub(super) struct VimState {
     pub(super) mode: VimMode,
-    pub(super) lines: Vec<VimLine>,
 }
 
+#[derive(Clone, Debug)]
 pub(super) struct VimLine {
     pub(super) text: String,
     pub(super) cells: Vec<VimCell>,
 }
 
+#[derive(Clone, Debug)]
 pub(super) struct VimCell {
     pub(super) attributes: CellAttributes,
     pub(super) text_start: u32,
@@ -37,56 +40,120 @@ impl VimCell {
     }
 }
 
-pub(super) fn snapshot_screen(screen: &mut vt100::Screen) -> (Vec<VimLine>, Position) {
-    screen.set_scrollback(usize::MAX);
-    let history = screen.scrollback();
-    let (rows, cols) = screen.size();
-    let screen_cursor = screen.cursor_position();
-    let total = history + rows as usize;
-    let mut lines = Vec::with_capacity(total);
-    // One buffer for every row: a snapshot of a long scrollback is otherwise
-    // three allocations per line, and there can be hundreds of thousands.
-    let mut scratch = Vec::with_capacity(cols as usize);
-    let mut absolute = 0;
-    while absolute < total {
-        let offset = history.saturating_sub(absolute);
-        screen.set_scrollback(offset);
-        let top_absolute = history - offset;
-        let skip = absolute - top_absolute;
-        let available = (rows as usize - skip).min(total - absolute);
-        for row in skip..skip + available {
-            lines.push(snapshot_vim_line_into(screen, row as u16, cols, &mut scratch));
-        }
-        absolute += available;
+/// A pane's screen and scrollback, copied but not yet read.
+///
+/// Copying a row is cheap: the scrollback keeps its rows packed, and this
+/// takes them as they are. Reading one means unpacking every cell in it, which
+/// over a long scrollback costs more than a keypress can hide — so a line is
+/// unpacked the first time something asks for it, and kept.
+#[derive(Clone, Debug)]
+pub(crate) struct VimBuffer {
+    rows: Vec<vt100::Row>,
+    cols: u16,
+    lines: Vec<OnceCell<VimLine>>,
+}
+
+impl VimBuffer {
+    fn new(rows: Vec<vt100::Row>, cols: u16) -> Self {
+        let lines = rows.iter().map(|_| OnceCell::new()).collect();
+        Self { rows, cols, lines }
     }
+
+    /// An empty buffer, which is what a pane with nothing in it looks like.
+    pub(crate) fn blank() -> Self {
+        Self::new(vec![vt100::Row::new(0)], 0)
+    }
+
+    /// A buffer of plain text, for tests that care about motions rather than
+    /// what the cells looked like.
+    #[cfg(test)]
+    pub(crate) fn from_text(texts: Vec<String>) -> Self {
+        let lines = texts
+            .into_iter()
+            .map(|text| {
+                let cells = text
+                    .char_indices()
+                    .map(|(index, character)| VimCell {
+                        attributes: CellAttributes::default(),
+                        text_start: index as u32,
+                        text_length: character.len_utf8() as u32,
+                        character_start: Some(text[..index].chars().count() as u32),
+                        character_length: 1,
+                        wide_continuation: false,
+                    })
+                    .collect();
+                OnceCell::from(VimLine { text, cells })
+            })
+            .collect::<Vec<_>>();
+        Self {
+            rows: Vec::new(),
+            cols: 0,
+            lines,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.lines.len()
+    }
+
+    pub(crate) fn line(&self, row: usize) -> &VimLine {
+        self.lines[row].get_or_init(|| snapshot_vim_row(&self.rows[row], self.cols))
+    }
+
+    pub(crate) fn text(&self, row: usize) -> &str {
+        &self.line(row).text
+    }
+
+    pub(crate) fn get_text(&self, row: usize) -> Option<&str> {
+        (row < self.len()).then(|| self.text(row))
+    }
+
+    /// Every line, unpacked as it is reached.
+    pub(crate) fn lines(&self) -> impl Iterator<Item = &VimLine> {
+        (0..self.len()).map(|row| self.line(row))
+    }
+
+    /// Every line's text, unpacked as it is reached. Whole-buffer work — a
+    /// search, a yank of everything — pays for the lines it actually walks.
+    pub(crate) fn texts(&self) -> impl Iterator<Item = &str> {
+        (0..self.len()).map(|row| self.text(row))
+    }
+}
+
+pub(super) fn snapshot_screen(screen: &mut vt100::Screen) -> (VimBuffer, Position) {
+    let (_, cols) = screen.size();
+    let history = screen.history_rows();
+    let screen_cursor = screen.cursor_position();
+    let buffer = VimBuffer::new(screen.all_rows().cloned().collect(), cols);
+    // Taking the rows unpacks the blocks they were stored in. The copies are
+    // the snapshot's now, so the pane drops what it decoded to hand them over.
     screen.set_scrollback(0);
     let cursor_row = history + screen_cursor.0 as usize;
-    let cursor_col = vim_character_column(&lines[cursor_row], screen_cursor.1 as usize);
+    let cursor_col = vim_character_column(buffer.line(cursor_row), screen_cursor.1 as usize);
     let cursor = Position {
         row: cursor_row,
         col: cursor_col,
     };
-    (lines, cursor)
+    (buffer, cursor)
 }
 
 pub(super) fn snapshot_vim_line(screen: &vt100::Screen, row: u16, cols: u16) -> VimLine {
-    snapshot_vim_line_into(screen, row, cols, &mut Vec::new())
+    let cells: Vec<_> = screen
+        .row_cells(row)
+        .take(screen.row_used_cells(row) as usize)
+        .collect();
+    vim_line_from_cells(&cells, cols)
 }
 
-fn snapshot_vim_line_into(
-    screen: &vt100::Screen,
-    row: u16,
-    cols: u16,
-    cells: &mut Vec<vt100::Cell>,
-) -> VimLine {
-    cells.clear();
-    // Everything past the row's used cells is blank, and decoding it is the
-    // bulk of the cost of snapshotting a long scrollback.
-    cells.extend(
-        screen
-            .row_cells(row)
-            .take(screen.row_used_cells(row) as usize),
-    );
+/// Unpacks one stored row into the line Vim mode reads.
+fn snapshot_vim_row(row: &vt100::Row, cols: u16) -> VimLine {
+    // Everything past the row's used cells is blank, and unpacking it is the
+    // bulk of the cost of reading a long scrollback.
+    let cells: Vec<_> = row.cells().take(row.used_cells() as usize).collect();
+    vim_line_from_cells(&cells, cols)
+}
+
+fn vim_line_from_cells(cells: &[vt100::Cell], cols: u16) -> VimLine {
     let last_content = cells
         .iter()
         .rposition(|cell| !cell.is_wide_continuation() && cell.has_contents());

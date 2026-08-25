@@ -7,6 +7,7 @@ use std::{
 use crate::{
     config::Action,
     protocol::{Key, KeyCode},
+    server::snapshot::VimBuffer,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -149,7 +150,7 @@ pub enum VimOutcome {
 
 #[derive(Clone, Debug)]
 pub struct VimMode {
-    lines: Vec<String>,
+    buffer: VimBuffer,
     pub cursor: Position,
     pub viewport_top: usize,
     viewport_height: usize,
@@ -178,14 +179,19 @@ struct Motion {
 }
 
 impl VimMode {
-    pub fn new(lines: Vec<String>, cursor: Position, viewport_height: usize) -> Self {
-        let lines = if lines.is_empty() {
-            vec![String::new()]
+    /// The buffer a mode reads, for whoever draws it.
+    pub fn buffer(&self) -> &VimBuffer {
+        &self.buffer
+    }
+
+    pub fn new(buffer: VimBuffer, cursor: Position, viewport_height: usize) -> Self {
+        let buffer = if buffer.len() == 0 {
+            VimBuffer::blank()
         } else {
-            lines
+            buffer
         };
         let mut mode = Self {
-            lines,
+            buffer,
             cursor,
             viewport_top: 0,
             viewport_height: viewport_height.max(1),
@@ -201,7 +207,7 @@ impl VimMode {
             jump_index: 0,
         };
         mode.cursor = mode.clamp(mode.cursor);
-        mode.viewport_top = mode.lines.len().saturating_sub(mode.viewport_height);
+        mode.viewport_top = mode.buffer.len().saturating_sub(mode.viewport_height);
         mode.ensure_visible();
         mode
     }
@@ -256,7 +262,7 @@ impl VimMode {
         if query.is_empty() {
             return;
         }
-        for (row, line) in self.lines.iter().enumerate() {
+        for (row, line) in self.buffer.texts().enumerate() {
             let mut byte_start = 0;
             while let Some(offset) = line[byte_start..].find(query) {
                 let byte = byte_start + offset;
@@ -394,7 +400,7 @@ impl VimMode {
                 let row = if count == 1 {
                     0
                 } else {
-                    count.saturating_sub(1).min(self.lines.len() - 1)
+                    count.saturating_sub(1).min(self.buffer.len() - 1)
                 };
                 return VimOutcome::Yank(self.yank_motion(
                     start,
@@ -418,7 +424,7 @@ impl VimMode {
                 let row = if count == 1 {
                     0
                 } else {
-                    count.saturating_sub(1).min(self.lines.len() - 1)
+                    count.saturating_sub(1).min(self.buffer.len() - 1)
                 };
                 self.move_cursor(Motion {
                     destination: Position {
@@ -472,7 +478,7 @@ impl VimMode {
                     .cursor
                     .row
                     .saturating_add(count - 1)
-                    .min(self.lines.len() - 1);
+                    .min(self.buffer.len() - 1);
                 VimOutcome::Yank(self.yank_motion(
                     self.cursor,
                     Motion {
@@ -553,7 +559,7 @@ impl VimMode {
                         .cursor
                         .row
                         .saturating_sub(self.viewport_height / 2)
-                        .min(self.lines.len().saturating_sub(self.viewport_height));
+                        .min(self.buffer.len().saturating_sub(self.viewport_height));
                     self.record_jump(start);
                 }
                 VimOutcome::None
@@ -569,7 +575,7 @@ impl VimMode {
                     } else {
                         self.viewport_top.saturating_sub(distance)
                     }
-                    .min(self.lines.len().saturating_sub(self.viewport_height));
+                    .min(self.buffer.len().saturating_sub(self.viewport_height));
                     self.ensure_visible();
                     self.record_jump(start);
                 }
@@ -639,12 +645,12 @@ impl VimMode {
     fn jump_targets(&self, character: char) -> Vec<JumpTarget> {
         let visible_end = min(
             self.viewport_top.saturating_add(self.viewport_height),
-            self.lines.len(),
+            self.buffer.len(),
         );
         let mut forward = Vec::new();
         let mut backward = Vec::new();
         for row in self.viewport_top..visible_end {
-            for (col, candidate) in self.lines[row].chars().enumerate() {
+            for (col, candidate) in self.buffer.text(row).chars().enumerate() {
                 if candidate != character {
                     continue;
                 }
@@ -807,7 +813,7 @@ impl VimMode {
     /// Reports whether it moved: at the bottom of the buffer there is nothing
     /// left to scroll to, which is the caller's cue to leave vim mode.
     pub fn scroll(&mut self, up: bool, lines: usize) -> bool {
-        let lowest = self.lines.len().saturating_sub(self.viewport_height);
+        let lowest = self.buffer.len().saturating_sub(self.viewport_height);
         let target = if up {
             self.viewport_top.saturating_sub(lines)
         } else {
@@ -822,7 +828,7 @@ impl VimMode {
             .cursor
             .row
             .clamp(target, target + self.viewport_height.saturating_sub(1))
-            .min(self.lines.len().saturating_sub(1));
+            .min(self.buffer.len().saturating_sub(1));
         self.cursor = self.clamp(self.cursor);
         true
     }
@@ -874,17 +880,17 @@ impl VimMode {
         }
         self.viewport_top = self
             .viewport_top
-            .min(self.lines.len().saturating_sub(self.viewport_height));
+            .min(self.buffer.len().saturating_sub(self.viewport_height));
     }
 
     fn clamp(&self, mut position: Position) -> Position {
-        position.row = position.row.min(self.lines.len() - 1);
+        position.row = position.row.min(self.buffer.len() - 1);
         position.col = position.col.min(self.line_end(position.row));
         position
     }
 
     fn line_len(&self, row: usize) -> usize {
-        self.lines[row].chars().count()
+        self.buffer.text(row).chars().count()
     }
 
     fn line_end(&self, row: usize) -> usize {
@@ -892,7 +898,7 @@ impl VimMode {
     }
 
     fn first_nonblank(&self, row: usize) -> usize {
-        self.lines[row]
+        self.buffer.text(row)
             .chars()
             .position(|character| !character.is_whitespace())
             .unwrap_or(0)
@@ -914,7 +920,7 @@ impl VimMode {
                 (true, false)
             }
             Action::CursorDown => {
-                position.row = min(position.row.saturating_add(count), self.lines.len() - 1);
+                position.row = min(position.row.saturating_add(count), self.buffer.len() - 1);
                 (false, true)
             }
             Action::CursorUp => {
@@ -924,7 +930,7 @@ impl VimMode {
             Action::CursorDown3 => {
                 position.row = min(
                     position.row.saturating_add(count.saturating_mul(3)),
-                    self.lines.len() - 1,
+                    self.buffer.len() - 1,
                 );
                 (false, true)
             }
@@ -935,7 +941,7 @@ impl VimMode {
             Action::CursorDown10 => {
                 position.row = min(
                     position.row.saturating_add(count.saturating_mul(10)),
-                    self.lines.len() - 1,
+                    self.buffer.len() - 1,
                 );
                 (false, true)
             }
@@ -948,7 +954,7 @@ impl VimMode {
                     position
                         .row
                         .saturating_add((self.viewport_height / 2).max(1).saturating_mul(count)),
-                    self.lines.len() - 1,
+                    self.buffer.len() - 1,
                 );
                 (false, true)
             }
@@ -996,9 +1002,9 @@ impl VimMode {
             }
             Action::GoBottom => {
                 position.row = if count == 1 {
-                    self.lines.len() - 1
+                    self.buffer.len() - 1
                 } else {
-                    count.saturating_sub(1).min(self.lines.len() - 1)
+                    count.saturating_sub(1).min(self.buffer.len() - 1)
                 };
                 position.col = self.first_nonblank(position.row);
                 (false, true)
@@ -1015,9 +1021,9 @@ impl VimMode {
 
     fn flat(&self) -> Vec<char> {
         let mut result = Vec::new();
-        for (index, line) in self.lines.iter().enumerate() {
+        for (index, line) in self.buffer.texts().enumerate() {
             result.extend(line.chars());
-            if index + 1 < self.lines.len() {
+            if index + 1 < self.buffer.len() {
                 result.push('\n');
             }
         }
@@ -1025,8 +1031,8 @@ impl VimMode {
     }
 
     fn position_index(&self, position: Position) -> usize {
-        self.lines
-            .iter()
+        self.buffer
+            .texts()
             .take(position.row)
             .map(|line| line.chars().count() + 1)
             .sum::<usize>()
@@ -1035,7 +1041,7 @@ impl VimMode {
 
     fn index_position(&self, index: usize) -> Position {
         let mut remaining = index;
-        for (row, line) in self.lines.iter().enumerate() {
+        for (row, line) in self.buffer.texts().enumerate() {
             let len = line.chars().count();
             if remaining < len {
                 return Position {
@@ -1044,7 +1050,7 @@ impl VimMode {
                 };
             }
             if remaining == len {
-                if row + 1 < self.lines.len() {
+                if row + 1 < self.buffer.len() {
                     return Position {
                         row: row + 1,
                         col: 0,
@@ -1058,8 +1064,8 @@ impl VimMode {
             remaining = remaining.saturating_sub(len + 1);
         }
         Position {
-            row: self.lines.len() - 1,
-            col: self.line_end(self.lines.len() - 1),
+            row: self.buffer.len() - 1,
+            col: self.line_end(self.buffer.len() - 1),
         }
     }
 
@@ -1156,7 +1162,7 @@ impl VimMode {
     }
 
     fn apply_find(&mut self, find: Find, count: usize) -> bool {
-        let characters: Vec<_> = self.lines[self.cursor.row].chars().collect();
+        let characters: Vec<_> = self.buffer.text(self.cursor.row).chars().collect();
         let found = if find.forward {
             ((self.cursor.col + 1)..characters.len())
                 .filter(|index| characters[*index] == find.character)
@@ -1187,7 +1193,7 @@ impl VimMode {
     fn apply_search(&mut self, query: &str, forward: bool, count: usize) {
         self.highlight_search(query);
         let mut matches = Vec::new();
-        for (row, line) in self.lines.iter().enumerate() {
+        for (row, line) in self.buffer.texts().enumerate() {
             let mut byte_start = 0;
             while let Some(offset) = line[byte_start..].find(query) {
                 let byte = byte_start + offset;
@@ -1241,7 +1247,7 @@ impl VimMode {
                 let end_col = max(selection.anchor.col, self.cursor.col);
                 (start_row..=end_row)
                     .map(|row| {
-                        self.lines[row]
+                        self.buffer.text(row)
                             .chars()
                             .skip(start_col)
                             .take(end_col - start_col + 1)
@@ -1254,8 +1260,11 @@ impl VimMode {
     }
 
     fn yank_lines(&self, start: usize, count: usize) -> String {
-        let end = min(start.saturating_add(count), self.lines.len());
-        let mut text = self.lines[start..end].join("\n");
+        let end = min(start.saturating_add(count), self.buffer.len());
+        let mut text = (start..end)
+            .map(|row| self.buffer.text(row))
+            .collect::<Vec<_>>()
+            .join("\n");
         text.push('\n');
         text
     }
@@ -1287,8 +1296,12 @@ mod tests {
     use super::*;
     use crate::{config::Bindings, config::Mode, protocol::parse_for_test};
 
+    fn mode(lines: Vec<String>, cursor: Position, viewport_height: usize) -> VimMode {
+        VimMode::new(VimBuffer::from_text(lines), cursor, viewport_height)
+    }
+
     fn sample_vim() -> VimMode {
-        VimMode::new(
+        mode(
             vec![
                 "one two-three".into(),
                 "  alpha beta alpha".into(),
@@ -1322,7 +1335,7 @@ mod tests {
         let lines = (0..30)
             .map(|number| format!("line {number}"))
             .collect::<Vec<_>>();
-        let mut vim = VimMode::new(lines, Position { row: 20, col: 0 }, 6);
+        let mut vim = mode(lines, Position { row: 20, col: 0 }, 6);
 
         press(&mut vim, "Ctrl-u");
         assert_eq!(vim.cursor.row, 17);
@@ -1343,7 +1356,7 @@ mod tests {
         let lines = (0..30)
             .map(|number| format!("line {number}"))
             .collect::<Vec<_>>();
-        let mut vim = VimMode::new(lines, Position { row: 20, col: 0 }, 6);
+        let mut vim = mode(lines, Position { row: 20, col: 0 }, 6);
 
         press(&mut vim, "Ctrl-u");
         press(&mut vim, "G");
@@ -1374,7 +1387,7 @@ mod tests {
         let lines = (0..20)
             .map(|number| format!("line {number}"))
             .collect::<Vec<_>>();
-        let mut vim = VimMode::new(lines, Position { row: 19, col: 0 }, 6);
+        let mut vim = mode(lines, Position { row: 19, col: 0 }, 6);
         // Entering vim mode starts at the end of the buffer.
         assert_eq!(vim.viewport_top, 14);
         assert!(vim.scroll(true, 3));
@@ -1397,7 +1410,7 @@ mod tests {
         let lines = (0..20)
             .map(|number| format!("  line {number}"))
             .collect::<Vec<_>>();
-        let mut vim = VimMode::new(lines, Position { row: 10, col: 4 }, 6);
+        let mut vim = mode(lines, Position { row: 10, col: 4 }, 6);
         press(&mut vim, "0");
         assert_eq!(vim.cursor.col, 0);
         press(&mut vim, "^");
@@ -1434,7 +1447,7 @@ mod tests {
 
     #[test]
     fn word_and_big_word_classes_differ() {
-        let mut vim = VimMode::new(vec!["one-two three".into()], Position { row: 0, col: 0 }, 1);
+        let mut vim = mode(vec!["one-two three".into()], Position { row: 0, col: 0 }, 1);
         press(&mut vim, "w");
         assert_eq!(vim.cursor.col, 3);
         press(&mut vim, "0");
@@ -1484,7 +1497,7 @@ mod tests {
 
     #[test]
     fn jump_hints_alternate_forward_and_backward_from_the_cursor() {
-        let mut vim = VimMode::new(vec!["a.a.a".into()], Position { row: 0, col: 2 }, 1);
+        let mut vim = mode(vec!["a.a.a".into()], Position { row: 0, col: 2 }, 1);
         press(&mut vim, " ");
         press(&mut vim, "a");
         assert_eq!(vim.jump_hint(Position { row: 0, col: 4 }), Some("a"));
@@ -1493,7 +1506,7 @@ mod tests {
 
     #[test]
     fn jump_hints_use_two_keys_after_single_keys_run_out() {
-        let mut vim = VimMode::new(vec!["a".repeat(30)], Position { row: 0, col: 0 }, 1);
+        let mut vim = mode(vec!["a".repeat(30)], Position { row: 0, col: 0 }, 1);
         press(&mut vim, " ");
         press(&mut vim, "a");
 
@@ -1592,7 +1605,7 @@ mod tests {
             "one two-three\n  alpha beta alpha\n"
         );
 
-        let mut vim = VimMode::new(
+        let mut vim = mode(
             vec!["abcd".into(), "efgh".into()],
             Position { row: 0, col: 1 },
             2,
@@ -1648,7 +1661,7 @@ mod tests {
 
     #[test]
     fn word_motions_are_safe_on_an_empty_screen() {
-        let mut vim = VimMode::new(vec![String::new()], Position { row: 0, col: 0 }, 1);
+        let mut vim = mode(vec![String::new()], Position { row: 0, col: 0 }, 1);
         press(&mut vim, "w");
         press(&mut vim, "e");
         press(&mut vim, "b");

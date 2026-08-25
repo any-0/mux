@@ -430,7 +430,9 @@ impl Server {
             let row = rect.row + screen_row as u16 + 1;
             let left = bar_width + rect.col + 1;
             let mut skip_until = 0;
-            let Some(line) = state.lines.get(buffer_row) else {
+            let Some(line) = (buffer_row < state.mode.buffer().len())
+                .then(|| state.mode.buffer().line(buffer_row))
+            else {
                 frame.fill(row, left, rect.cols, CellAttributes::default());
                 continue;
             };
@@ -511,7 +513,7 @@ impl Server {
             .row
             .saturating_sub(vim.viewport_top)
             .min(rect.rows as usize - 1) as u16;
-        let cursor_col = vim_cursor_column(&state.lines[vim.cursor.row], vim.cursor.col)
+        let cursor_col = vim_cursor_column(vim.buffer().line(vim.cursor.row), vim.cursor.col)
             .min(width.saturating_sub(1)) as u16;
         frame.set_cursor(FrameCursor {
             row: rect.row + cursor_row + 1,

@@ -559,6 +559,18 @@ impl Screen {
             .flat_map(crate::row::Row::cells)
     }
 
+    /// How many rows of scrollback the screen is holding.
+    #[must_use]
+    pub fn history_rows(&self) -> usize {
+        self.grid().history_rows()
+    }
+
+    /// Every row in view, from the top of the scrollback to the last screen
+    /// row, without decoding any of them.
+    pub fn all_rows(&self) -> impl Iterator<Item = &crate::row::Row> {
+        self.grid().all_rows()
+    }
+
     /// How many cells of row `row` are worth reading; the rest are blank.
     #[must_use]
     pub fn row_used_cells(&self, row: u16) -> u16 {
