@@ -24,7 +24,10 @@ pub(super) const JOURNAL_RESIZE: u8 = 2;
 const MAX_JOURNAL_RECORD: usize = 16 * 1024 * 1024;
 
 /// Journal size that triggers compaction before the next event loop starts.
-pub(super) const MAX_JOURNAL_BYTES: u64 = 32 * 1024 * 1024;
+/// How large a journal may grow before it is worth rewriting. A pane's whole
+/// scrollback compacts to a few megabytes, and every byte over that is replayed
+/// again at every startup, so the bar is low and compaction is frequent.
+pub(super) const MAX_JOURNAL_BYTES: u64 = 4 * 1024 * 1024;
 
 pub(super) fn encode_journal_record(kind: u8, payload: &[u8]) -> Result<Vec<u8>> {
     let length = u32::try_from(payload.len()).context("pane journal record is too large")?;
@@ -50,6 +53,10 @@ pub(super) struct PaneJournal {
     sender: Sender<JournalCommand>,
     failures: Receiver<String>,
     pub(super) length: u64,
+    /// What this journal has to reach to be worth rewriting again. A pane whose
+    /// content genuinely compacts to near the limit would otherwise be rewritten
+    /// on every idle moment, so the bar rises with what compaction achieved.
+    compact_at: u64,
     /// Set once a write has failed. The pane keeps running with a history that
     /// stops here, which is a far smaller loss than the pane itself.
     pub(super) abandoned: bool,
@@ -71,6 +78,7 @@ impl PaneJournal {
             sender,
             failures,
             length,
+            compact_at: MAX_JOURNAL_BYTES,
             abandoned: false,
         }
     }
@@ -138,7 +146,7 @@ impl PaneJournal {
     }
 
     pub(super) fn needs_compaction(&self) -> bool {
-        !self.abandoned && self.length > MAX_JOURNAL_BYTES
+        !self.abandoned && self.length > self.compact_at
     }
 
     pub(super) fn poll_failure(&mut self) -> Result<()> {
@@ -164,6 +172,7 @@ impl PaneJournal {
             .context("pane journal writer stopped")?
             .context("replace pane journal")?;
         self.length = records.len() as u64;
+        self.compact_at = MAX_JOURNAL_BYTES.max(self.length.saturating_mul(2));
         Ok(())
     }
 
