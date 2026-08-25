@@ -147,6 +147,14 @@ impl PaneJournal {
         }
     }
 
+    /// Asks for this journal to be rewritten at the next quiet moment, however
+    /// small it is. A journal restored from the old replayable form is worth
+    /// packing even when it is well under the limit, because until it is packed
+    /// it is parsed in full at every startup.
+    pub(super) fn compact_soon(&mut self) {
+        self.compact_at = 0;
+    }
+
     pub(super) fn needs_compaction(&self) -> bool {
         !self.abandoned && self.length > self.compact_at
     }
