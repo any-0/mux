@@ -559,6 +559,18 @@ impl Screen {
             .flat_map(crate::row::Row::cells)
     }
 
+    /// Packs the scrollback for storage, without unpacking a single row.
+    #[must_use]
+    pub fn encode_history(&self) -> Vec<u8> {
+        self.grid().encode_history()
+    }
+
+    /// Puts a packed scrollback back. Returns whether it could be read; a
+    /// screen whose history cannot be read keeps the empty one it had.
+    pub fn restore_history(&mut self, packed: &[u8]) -> bool {
+        self.grid_mut().restore_history(packed)
+    }
+
     /// How many rows of scrollback the screen is holding.
     #[must_use]
     pub fn history_rows(&self) -> usize {

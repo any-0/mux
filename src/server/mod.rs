@@ -309,6 +309,17 @@ struct Server {
 }
 
 pub fn run(socket_path: &Path) -> Result<()> {
+    let boot = Instant::now();
+    let mark = |label: &str| {
+        if std::env::var_os("MUX_TIME_BOOT").is_some() {
+            use std::io::Write;
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/mux-boot-timing.txt")
+                .map(|mut file| writeln!(file, "{label}: {:?}", boot.elapsed()));
+        }
+    };
     if nix::unistd::getsid(None)? != nix::unistd::getpid() {
         nix::unistd::setsid().context("start daemon session")?;
     }
@@ -335,6 +346,7 @@ pub fn run(socket_path: &Path) -> Result<()> {
     set_private_permissions(socket_path)?;
     let zsh_startup = ZshStartup::create(&persistence.directory)?;
     let persisted_state = persistence.load()?;
+    mark("state loaded");
     let state_writer = persistence.state_writer();
 
     let (sender, receiver) = mpsc::channel();
@@ -359,6 +371,7 @@ pub fn run(socket_path: &Path) -> Result<()> {
     if let Some(state) = persisted_state {
         server.restore(state)?;
     }
+    mark("sessions restored");
     server.compact_journals()?;
     for pane in server
         .sessions
@@ -369,6 +382,7 @@ pub fn run(socket_path: &Path) -> Result<()> {
         pane.parser.screen().flush_history_backing();
     }
     release_unused_memory();
+    mark("event loop starts");
     let result = server.event_loop(receiver);
     let _ = fs::remove_file(socket_path);
     result
@@ -444,7 +458,14 @@ impl Server {
         // Replaying journals is the slow part of starting up, and panes have
         // nothing to say to each other while it happens, so every pane in the
         // saved state is replayed at once rather than one after another.
+        let restore_started = Instant::now();
         let mut replayed = self.replay_saved_panes(&state)?;
+        if std::env::var_os("MUX_TIME_BOOT").is_some() {
+            use std::io::Write;
+            let _ = std::fs::OpenOptions::new().create(true).append(true)
+                .open("/tmp/mux-boot-timing.txt")
+                .map(|mut f| writeln!(f, "  journals replayed: {:?}", restore_started.elapsed()));
+        }
         let mut session_ids = HashSet::new();
         let mut pane_ids = HashSet::new();
         let mut sessions = Vec::with_capacity(state.sessions.len());
@@ -506,6 +527,7 @@ impl Server {
                             PaneJournal::new(self.persistence.new_pane_history(saved_pane.id)?, 0)
                         }
                     };
+                    let spawn_started = Instant::now();
                     let mut pane = self.spawn_pane_with(
                         saved_pane.id,
                         &saved_pane.cwd,
@@ -516,6 +538,12 @@ impl Server {
                         parser_prefix,
                         false,
                     )?;
+                    if std::env::var_os("MUX_TIME_BOOT").is_some() {
+                        use std::io::Write;
+                        let _ = std::fs::OpenOptions::new().create(true).append(true)
+                            .open("/tmp/mux-boot-timing.txt")
+                            .map(|mut f| writeln!(f, "    pane {} spawned in {:?}", saved_pane.id, spawn_started.elapsed()));
+                    }
                     if had_history && valid_length != history_length {
                         let _ = pane.history.truncate(valid_length);
                     }

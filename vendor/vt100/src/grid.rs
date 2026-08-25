@@ -181,6 +181,70 @@ impl Grid {
         self.origin_mode = self.saved_origin_mode;
     }
 
+    /// Packs the scrollback into bytes, in the same form the blocks it is
+    /// stored in already use.
+    pub fn encode_history(&self) -> Vec<u8> {
+        let mut raw = Vec::new();
+        let mut rows: u32 = 0;
+        for row in self.scrollback.iter() {
+            row.encode(&mut raw);
+            rows += 1;
+        }
+        let uncompressed_len = raw.len();
+        let compressed =
+            zstd::bulk::compress(&raw, 1).expect("compress scrollback for persistence");
+        let (body, compressed) = if compressed.len() < raw.len() {
+            (compressed, true)
+        } else {
+            (raw, false)
+        };
+        let mut output = Vec::with_capacity(body.len() + 13);
+        output.extend_from_slice(&rows.to_le_bytes());
+        output.extend_from_slice(&u64::try_from(uncompressed_len).unwrap().to_le_bytes());
+        output.push(u8::from(compressed));
+        output.extend_from_slice(&body);
+        output
+    }
+
+    /// Puts a scrollback packed by [`Self::encode_history`] back, in place of
+    /// whatever this grid was holding.
+    pub fn restore_history(&mut self, packed: &[u8]) -> bool {
+        if packed.len() < 13 {
+            return false;
+        }
+        let rows = u32::from_le_bytes(packed[..4].try_into().unwrap());
+        let uncompressed_len =
+            usize::try_from(u64::from_le_bytes(packed[4..12].try_into().unwrap())).unwrap();
+        let compressed = packed[12] != 0;
+        let body = &packed[13..];
+        let raw = if compressed {
+            match zstd::bulk::decompress(body, uncompressed_len) {
+                Ok(raw) => raw,
+                Err(_) => return false,
+            }
+        } else {
+            body.to_vec()
+        };
+        if raw.len() != uncompressed_len {
+            return false;
+        }
+        let mut input = raw.as_slice();
+        let mut restored = Vec::with_capacity(rows as usize);
+        for _ in 0..rows {
+            // A row that ran out of bytes would decode as rubbish, and the
+            // caller can still replay what follows onto an empty scrollback.
+            if input.is_empty() {
+                return false;
+            }
+            restored.push(crate::row::Row::decode(&mut input));
+        }
+        if !input.is_empty() {
+            return false;
+        }
+        self.scrollback = restored.into_iter().collect();
+        true
+    }
+
     pub fn all_rows(&self) -> impl Iterator<Item = &crate::row::Row> {
         self.scrollback.iter().chain(self.rows.iter())
     }
