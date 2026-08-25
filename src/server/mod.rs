@@ -261,8 +261,10 @@ struct Client {
     themes: Option<ThemePicker>,
     /// Whether leader mode is held, waiting for the command that ends it.
     leader: bool,
-    /// The key that entered leader mode, which a second press sends to the pane.
+    /// The key that entered leader mode, which a second press arms literal mode with.
     leader_key: Option<crate::protocol::Key>,
+    /// Whether the next key goes straight to the pane, bindings bypassed.
+    literal: bool,
     rename: Option<RenameState>,
     confirmation: Option<Confirmation>,
     message: Option<StatusMessage>,
@@ -826,6 +828,7 @@ impl Server {
                         themes: None,
                         leader: false,
                         leader_key: None,
+                        literal: false,
                         rename: None,
                         confirmation: None,
                         message: None,
@@ -1274,6 +1277,7 @@ impl Server {
                     client.session_id = replacement;
                     client.leader = false;
                     client.leader_key = None;
+                    client.literal = false;
                     client.rename = None;
                     if replacement.is_none() {
                         client.tree = None;
