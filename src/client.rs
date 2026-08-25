@@ -294,6 +294,12 @@ fn convert_key(code: CrosstermKeyCode, modifiers: KeyModifiers) -> Option<Key> {
         modifier_bits |= CTRL;
     }
     let code = match code {
+        // Ctrl-[ is Escape's own byte, and the only way to type it on a
+        // keyboard whose Escape key is broken; mux reads the two as one key.
+        CrosstermKeyCode::Char('[') if modifier_bits & CTRL != 0 => {
+            modifier_bits &= !(CTRL | SHIFT);
+            KeyCode::Escape
+        }
         CrosstermKeyCode::Char(mut character) => {
             if modifier_bits & (ALT | CTRL) != 0
                 && modifier_bits & SHIFT != 0

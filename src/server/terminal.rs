@@ -375,6 +375,13 @@ pub(super) fn terminal_key_bytes(key: &Key, application_cursor: bool) -> Vec<u8>
             bytes.push((character.to_ascii_lowercase() as u8) & 0x1f);
         }
         KeyCode::Char(character) => {
+            // Alt-Shift-a is looked up as a lowercase binding, so the shift
+            // only survives in the modifiers; the pane still wants the capital.
+            let character = if key.modifiers & SHIFT != 0 {
+                character.to_uppercase().next().unwrap_or(character)
+            } else {
+                character
+            };
             let mut encoded = [0; 4];
             bytes.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
         }

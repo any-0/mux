@@ -264,7 +264,13 @@ pub struct Theme {
     pub palette: Palette,
     pub bar_inactive: Rgb,
     pub bar_active: Rgb,
-    pub bar_vim_background: Rgb,
+    /// The tile behind the state dot at the top of the bar, one colour per mode.
+    pub state_normal: Rgb,
+    /// The dot itself while normal; every other state writes in `ink`.
+    pub state_normal_dot: Rgb,
+    pub state_leader: Rgb,
+    pub state_passthrough: Rgb,
+    pub state_vim: Rgb,
     pub bar_label_foreground: Rgb,
     pub cursor: Rgb,
     pub divider: Rgb,
@@ -312,7 +318,14 @@ impl Theme {
             palette,
             bar_inactive: palette.surface_raised,
             bar_active: palette.secondary,
-            bar_vim_background: palette.accent,
+            // Normal sits back into the bar, so the dot only speaks up once a
+            // mode takes the keys: grey once a second leader has handed the
+            // next one over wholesale, and a colour per mode that intercepts.
+            state_normal: palette.surface,
+            state_normal_dot: palette.muted,
+            state_leader: palette.secondary,
+            state_passthrough: palette.muted,
+            state_vim: palette.accent,
             bar_label_foreground: palette.ink(),
             cursor: palette.accent,
             divider: palette.surface_raised,
@@ -1200,7 +1213,7 @@ mod tests {
         // One colour reaches every part of mux that wears it, without the file
         // having to name any of them.
         assert_eq!(theme.bar_active, (0x00, 0x93, 0x93));
-        assert_eq!(theme.bar_vim_background, Palette::default().accent);
+        assert_eq!(theme.state_vim, Palette::default().accent);
         assert_eq!(theme.vim_jump, (0x00, 0x93, 0x93));
         assert_eq!(theme.divider, (0xcc, 0xcc, 0xcc));
         assert_eq!(theme.vim_search, (0xcc, 0xcc, 0xcc));
