@@ -2153,3 +2153,17 @@ fn tree_display_adds_root_rows_without_consuming_shortcuts() {
         " work      1 window "
     );
 }
+
+#[test]
+fn snapshotting_scrollback_keeps_styled_blanks_past_the_last_character() {
+    // Rows are read only up to their used cells, and a blank cell wearing a
+    // background is used: dropping it would lose the colour behind the line.
+    let mut parser = vt100::Parser::new(2, 8, 100);
+    parser.process(b"hi\x1b[41m   \x1b[0m\r\n");
+    parser.process(b"second\r\nthird\r\n");
+    let (lines, _) = snapshot_screen(parser.screen_mut());
+    let first = &lines[0];
+    assert_eq!(first.text, "hi   ");
+    assert_eq!(first.cells.len(), 5);
+    assert_eq!(first.cells[4].attributes.background, vt100::Color::Idx(1));
+}

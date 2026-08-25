@@ -559,6 +559,14 @@ impl Screen {
             .flat_map(crate::row::Row::cells)
     }
 
+    /// How many cells of row `row` are worth reading; the rest are blank.
+    #[must_use]
+    pub fn row_used_cells(&self, row: u16) -> u16 {
+        self.grid()
+            .visible_row(row)
+            .map_or(0, crate::row::Row::used_cells)
+    }
+
     /// Returns whether the text in row `row` should wrap to the next line.
     #[must_use]
     pub fn row_wrapped(&self, row: u16) -> bool {
