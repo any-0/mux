@@ -33,7 +33,7 @@ mod layout;
 mod persist;
 mod process;
 mod render;
-mod snapshot;
+pub(crate) mod snapshot;
 mod terminal;
 mod themes;
 mod ui;
@@ -2039,17 +2039,15 @@ impl Server {
         if self.clients[&id].vim.contains_key(&pane_id) {
             return;
         }
-        let (lines, cursor) = snapshot_screen(
+        let (buffer, cursor) = snapshot_screen(
             self.sessions[session_index].windows[window_index].panes[pane_index]
                 .parser
                 .screen_mut(),
         );
-        let text = lines.iter().map(|line| line.text.clone()).collect();
         self.clients.get_mut(&id).unwrap().vim.insert(
             pane_id,
             VimState {
-                mode: VimMode::new(text, cursor, rows),
-                lines,
+                mode: VimMode::new(buffer, cursor, rows),
             },
         );
     }

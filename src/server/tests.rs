@@ -1395,11 +1395,9 @@ fn vim_snapshot_preserves_terminal_formatting() {
 fn vim_render_is_confined_to_the_active_pane_region() {
     let mut parser = vt100::Parser::new(2, 12, 0);
     parser.process(b"first\r\nsecond");
-    let (lines, cursor) = snapshot_screen(parser.screen_mut());
-    let text = lines.iter().map(|line| line.text.clone()).collect();
+    let (buffer, cursor) = snapshot_screen(parser.screen_mut());
     let state = VimState {
-        mode: VimMode::new(text, cursor, 2),
-        lines,
+        mode: VimMode::new(buffer, cursor, 2),
     };
     let region = Rect {
         row: 3,
@@ -1430,15 +1428,14 @@ fn vim_render_is_confined_to_the_active_pane_region() {
 fn vim_render_paints_full_multi_key_jump_hints() {
     let mut parser = vt100::Parser::new(1, 30, 0);
     parser.process("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".as_bytes());
-    let (lines, _) = snapshot_screen(parser.screen_mut());
-    let text = lines.iter().map(|line| line.text.clone()).collect();
-    let mut mode = VimMode::new(text, Position { row: 0, col: 0 }, 1);
+    let (buffer, _) = snapshot_screen(parser.screen_mut());
+    let mut mode = VimMode::new(buffer, Position { row: 0, col: 0 }, 1);
     let bindings = Bindings::defaults();
     for name in [" ", "a"] {
         let key = crate::protocol::parse_for_test(name);
         mode.handle(bindings.get(Mode::Vim, &key), &key);
     }
-    let state = VimState { mode, lines };
+    let state = VimState { mode };
     let rendered = repainted(1, 30, |frame| {
         Server::render_vim_region(
             &state,
@@ -1737,10 +1734,10 @@ fn compacting_a_journal_keeps_the_screen_and_recent_scrollback() {
     assert_eq!(restored.screen().contents(), before);
 
     // Scrollback survives, and so does the formatting inside it.
-    let (lines, _) = snapshot_screen(restored.screen_mut());
-    assert!(lines.iter().any(|line| line.text.contains("line 000")));
-    assert!(lines.iter().any(|line| line.text.contains("line 199")));
-    let tail = lines.last().unwrap();
+    let (buffer, _) = snapshot_screen(restored.screen_mut());
+    assert!(buffer.texts().any(|text| text.contains("line 000")));
+    assert!(buffer.texts().any(|text| text.contains("line 199")));
+    let tail = buffer.line(buffer.len() - 1);
     assert!(tail.cells.iter().any(|cell| cell.attributes.bold));
 }
 
@@ -1853,7 +1850,7 @@ fn resized_scrollback_reflows_instead_of_truncating_lines() {
     parser.process(b"abcdefg\r\nhijklmn\r\nopqrstu");
     parser.screen_mut().set_size(2, 4);
     let (lines, _) = snapshot_screen(parser.screen_mut());
-    let text: Vec<_> = lines.iter().map(|line| line.text.as_str()).collect();
+    let text: Vec<_> = lines.lines().map(|line| line.text.as_str()).collect();
     assert!(text.windows(2).any(|line| line == ["abcd", "efg"]));
 }
 
@@ -1863,7 +1860,7 @@ fn widening_a_pane_keeps_scrollback_cells_consistent() {
     parser.process(b"abc\r\ndef\r\nghi");
     parser.screen_mut().set_size(2, 8);
     let (lines, cursor) = snapshot_screen(parser.screen_mut());
-    assert!(lines.iter().any(|line| line.text == "abc"));
+    assert!(lines.lines().any(|line| line.text == "abc"));
     assert!(cursor.row < lines.len());
 }
 
@@ -1873,8 +1870,8 @@ fn resized_scrollback_keeps_wide_characters_whole() {
     parser.process("abcd界\r\nsecond\r\nthird".as_bytes());
     parser.screen_mut().set_size(2, 5);
     let (lines, _) = snapshot_screen(parser.screen_mut());
-    assert!(lines.iter().any(|line| line.text.contains('界')));
-    assert!(lines.iter().all(|line| {
+    assert!(lines.lines().any(|line| line.text.contains('界')));
+    assert!(lines.lines().all(|line| {
         !line
             .cells
             .first()
@@ -1915,11 +1912,11 @@ fn block_compressed_scrollback_preserves_terminal_cells_losslessly() {
     let compressed_bytes = parser.screen().history_bytes();
     let (lines, _) = snapshot_screen(parser.screen_mut());
     let first = lines
-        .iter()
+        .lines()
         .find(|line| line.text.starts_with("line 000"))
         .unwrap();
     let last = lines
-        .iter()
+        .lines()
         .find(|line| line.text.starts_with("line 300"))
         .unwrap();
 
@@ -1972,7 +1969,7 @@ fn block_compressed_scrollback_discards_exactly_the_oldest_rows() {
         parser.process(format!("line {line:03}\r\n").as_bytes());
     }
     let (lines, _) = snapshot_screen(parser.screen_mut());
-    let text: Vec<_> = lines.iter().map(|line| line.text.as_str()).collect();
+    let text: Vec<_> = lines.lines().map(|line| line.text.as_str()).collect();
 
     assert_eq!(lines.len(), 301);
     assert!(!text.contains(&"line 300"));
@@ -2112,7 +2109,7 @@ fn top_anchored_scroll_regions_preserve_codex_history() {
     assert_eq!(parser.screen().scrollback(), 12);
     assert!(parser.screen().contents().contains("history 00"));
     let (lines, cursor) = snapshot_screen(parser.screen_mut());
-    assert!(lines.iter().any(|line| line.text.contains("history 00")));
+    assert!(lines.lines().any(|line| line.text.contains("history 00")));
     assert!(cursor.row < lines.len());
 }
 
@@ -2162,8 +2159,30 @@ fn snapshotting_scrollback_keeps_styled_blanks_past_the_last_character() {
     parser.process(b"hi\x1b[41m   \x1b[0m\r\n");
     parser.process(b"second\r\nthird\r\n");
     let (lines, _) = snapshot_screen(parser.screen_mut());
-    let first = &lines[0];
+    let first = lines.line(0);
     assert_eq!(first.text, "hi   ");
     assert_eq!(first.cells.len(), 5);
     assert_eq!(first.cells[4].attributes.background, vt100::Color::Idx(1));
+}
+
+#[test]
+fn bench_snapshot() {
+    use std::time::Instant;
+    let mut parser = vt100::Parser::new(24, 140, 20_000);
+    for i in 0..20_000 {
+        parser.process(
+            format!("\x1b[38;5;{}mline {i} \x1b[1;34m{}\x1b[0m\r\n", i % 200, "x".repeat(100))
+                .as_bytes(),
+        );
+    }
+    for _ in 0..3 {
+        let t = Instant::now();
+        let (lines, _) = snapshot_screen(parser.screen_mut());
+        println!("decode all {} lines: {:?}", lines.len(), t.elapsed());
+    }
+    for _ in 0..3 {
+        let t = Instant::now();
+        let rows: Vec<_> = parser.screen().all_rows().cloned().collect();
+        println!("clone {} rows undecoded: {:?}", rows.len(), t.elapsed());
+    }
 }
