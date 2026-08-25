@@ -441,6 +441,10 @@ fn process_icon_sampler(events: Sender<Event>) -> Sender<ProcessSample> {
 
 impl Server {
     fn restore(&mut self, state: PersistedState) -> Result<()> {
+        // Replaying journals is the slow part of starting up, and panes have
+        // nothing to say to each other while it happens, so every pane in the
+        // saved state is replayed at once rather than one after another.
+        let mut replayed = self.replay_saved_panes(&state)?;
         let mut session_ids = HashSet::new();
         let mut pane_ids = HashSet::new();
         let mut sessions = Vec::with_capacity(state.sessions.len());
@@ -483,49 +487,37 @@ impl Server {
                 }
                 let mut panes = Vec::with_capacity(saved_window.panes.len());
                 for saved_pane in saved_window.panes {
-                    // A history that cannot be read or replayed costs this pane
-                    // its scrollback. Losing the pane, and the session around
-                    // it, would cost far more, so the pane comes back empty.
-                    let restored_history =
-                        self.persistence.restored_pane_history(saved_pane.id).ok();
-                    let history_length = restored_history.as_ref().map_or(0, |(_, length)| *length);
+                    let replayed = replayed
+                        .remove(&saved_pane.id)
+                        .context("a saved pane was not replayed")?;
+                    let ReplayedPane {
+                        parser,
+                        parser_prefix,
+                        valid_length,
+                        history_length,
+                        replayed: had_history,
+                    } = replayed;
                     let history = match self
                         .persistence
-                        .resume_pane_history(saved_pane.id, history_length)
+                        .resume_pane_history(saved_pane.id, valid_length)
                     {
-                        Ok(file) => PaneJournal::new(file, history_length),
+                        Ok(file) => PaneJournal::new(file, valid_length),
                         Err(_) => {
                             PaneJournal::new(self.persistence.new_pane_history(saved_pane.id)?, 0)
                         }
                     };
-                    let mut pane = self.spawn_pane(
+                    let mut pane = self.spawn_pane_with(
                         saved_pane.id,
                         &saved_pane.cwd,
                         saved_pane.cols,
                         saved_pane.rows,
                         history,
+                        parser,
+                        parser_prefix,
+                        false,
                     )?;
-                    if let Some((history_reader, _)) = restored_history {
-                        match replay_pane_journal(
-                            &mut pane.parser,
-                            &mut pane.parser_prefix,
-                            history_reader,
-                        ) {
-                            Ok(valid_length) if valid_length != history_length => {
-                                let _ = pane.history.truncate(valid_length);
-                            }
-                            Ok(_) => {}
-                            // A corrupt journal replays as far as it can; the rest
-                            // is dropped rather than blocking the restore.
-                            Err(_) => {
-                                let _ = pane.history.truncate(0);
-                                pane.parser = new_parser(saved_pane.rows, saved_pane.cols);
-                                pane.parser.screen_mut().set_history_backing(
-                                    self.persistence.new_scrollback_backing()?,
-                                );
-                                pane.parser_prefix.clear();
-                            }
-                        }
+                    if had_history && valid_length != history_length {
+                        let _ = pane.history.truncate(valid_length);
                     }
                     if let Some(correction) = restored_prompt_correction(&pane.parser) {
                         let _ = pane.history.append_output(&correction);
@@ -1124,6 +1116,74 @@ impl Server {
         self.spawn_pane(id, cwd, cols, rows, history)
     }
 
+    /// Every saved pane's scrollback, read back off disk side by side.
+    fn replay_saved_panes(&self, state: &PersistedState) -> Result<HashMap<usize, ReplayedPane>> {
+        let prepared: Vec<_> = state
+            .sessions
+            .iter()
+            .flat_map(|session| &session.windows)
+            .flat_map(|window| &window.panes)
+            .map(|pane| {
+                // The files are opened here: a worker only reads and parses.
+                let restored = self.persistence.restored_pane_history(pane.id).ok();
+                let backing = self.persistence.new_scrollback_backing().ok();
+                (pane.id, pane.rows, pane.cols, restored, backing)
+            })
+            .collect();
+        let mut replayed = HashMap::with_capacity(prepared.len());
+        thread::scope(|scope| {
+            let workers: Vec<_> = prepared
+                .into_iter()
+                .map(|(id, rows, cols, restored, backing)| {
+                    scope.spawn(move || {
+                        let mut parser = new_parser(rows, cols);
+                        if let Some(backing) = backing {
+                            parser.screen_mut().set_history_backing(backing);
+                        }
+                        let mut parser_prefix = Vec::new();
+                        let Some((reader, history_length)) = restored else {
+                            return (id, ReplayedPane {
+                                parser,
+                                parser_prefix,
+                                valid_length: 0,
+                                history_length: 0,
+                                replayed: false,
+                            });
+                        };
+                        match replay_pane_journal(&mut parser, &mut parser_prefix, reader) {
+                            Ok(valid_length) => (id, ReplayedPane {
+                                parser,
+                                parser_prefix,
+                                valid_length,
+                                history_length,
+                                replayed: true,
+                            }),
+                            // A corrupt journal costs this pane its scrollback
+                            // rather than the session it belongs to.
+                            Err(_) => (id, ReplayedPane {
+                                parser: new_parser(rows, cols),
+                                parser_prefix: Vec::new(),
+                                valid_length: 0,
+                                history_length,
+                                replayed: true,
+                            }),
+                        }
+                    })
+                })
+                .collect();
+            for worker in workers {
+                match worker.join() {
+                    Ok((id, pane)) => {
+                        replayed.insert(id, pane);
+                    }
+                    Err(_) => bail!("a pane's history could not be read"),
+                }
+            }
+            Ok(())
+        })?;
+        Ok(replayed)
+    }
+
     fn spawn_pane(
         &self,
         id: usize,
@@ -1131,6 +1191,24 @@ impl Server {
         cols: u16,
         rows: u16,
         history: PaneJournal,
+    ) -> Result<Pane> {
+        let parser = new_parser(rows, cols);
+        self.spawn_pane_with(id, cwd, cols, rows, history, parser, Vec::new(), true)
+    }
+
+    /// Spawns a pane around a parser someone else has already filled in, which
+    /// is how a restored pane gets its scrollback back.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_pane_with(
+        &self,
+        id: usize,
+        cwd: &Path,
+        cols: u16,
+        rows: u16,
+        history: PaneJournal,
+        mut parser: vt100::Parser<TerminalCallbacks>,
+        parser_prefix: Vec<u8>,
+        needs_backing: bool,
     ) -> Result<Pane> {
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -1184,10 +1262,11 @@ impl Server {
                 }
             }
         });
-        let mut parser = new_parser(rows, cols);
-        parser
-            .screen_mut()
-            .set_history_backing(self.persistence.new_scrollback_backing()?);
+        if needs_backing {
+            parser
+                .screen_mut()
+                .set_history_backing(self.persistence.new_scrollback_backing()?);
+        }
         Ok(Pane {
             id,
             master: pair.master,
@@ -1195,7 +1274,7 @@ impl Server {
             child,
             child_pid,
             parser,
-            parser_prefix: Vec::new(),
+            parser_prefix,
             query_prefix: Vec::new(),
             cwd: cwd.to_path_buf(),
             cwd_sampled: Instant::now(),
@@ -2071,6 +2150,17 @@ impl Server {
         self.clients.get_mut(&id).unwrap().vim.remove(&pane_id);
         self.enter_vim(id);
     }
+}
+
+/// A pane's parser, filled in from its journal before the pane exists.
+struct ReplayedPane {
+    parser: vt100::Parser<TerminalCallbacks>,
+    parser_prefix: Vec<u8>,
+    /// How much of the journal replayed cleanly, which is where the pane's
+    /// own writes carry on from.
+    valid_length: u64,
+    history_length: u64,
+    replayed: bool,
 }
 
 /// Runs the theme command off the event loop.
