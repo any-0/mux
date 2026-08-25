@@ -552,12 +552,8 @@ pub(super) fn render_bar_separator(
     bar_width: u16,
     current_row: Option<u16>,
     color: Rgb,
-    background: Option<Rgb>,
 ) {
-    let attributes = background.map_or_else(
-        || CellAttributes::foreground(color),
-        |background| CellAttributes::colors(color, background),
-    );
+    let attributes = CellAttributes::foreground(color);
     for row in 1..=rows {
         let glyph = if Some(row) == current_row {
             "\u{e010}"
@@ -607,6 +603,29 @@ pub(super) fn bar_window_label(
     } else {
         bar_label(window + 1, number_width)
     }
+}
+
+/// The colour of the tile behind the state dot at the top of the bar.
+///
+/// One tile carries the whole mode: the bar's own colour while mux is watching
+/// for its bindings, grey once a second leader has handed the next key over
+/// wholesale, and a colour of its own for each mode that intercepts keys.
+pub(super) fn state_colors(
+    passthrough: bool,
+    leader: bool,
+    vim: bool,
+    theme: &Theme,
+) -> (Rgb, Rgb) {
+    let tile = if passthrough {
+        theme.state_passthrough
+    } else if leader {
+        theme.state_leader
+    } else if vim {
+        theme.state_vim
+    } else {
+        return (theme.state_normal, theme.state_normal_dot);
+    };
+    (tile, theme.bar_label_foreground)
 }
 
 pub(super) fn other_session_bell_label(count: usize) -> String {

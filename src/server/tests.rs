@@ -376,6 +376,11 @@ fn terminal_keys_preserve_alt_and_modified_arrows() {
         terminal_key_bytes(&crate::config::parse_key("Ctrl-Left").unwrap(), false),
         b"\x1b[1;5D"
     );
+    // Bindings name this key in lowercase, but the pane is owed the capital.
+    assert_eq!(
+        terminal_key_bytes(&crate::config::parse_key("Alt-Shift-a").unwrap(), false),
+        b"\x1bA"
+    );
 }
 
 #[test]
@@ -495,6 +500,26 @@ fn rename_input_edits_at_a_unicode_character_cursor() {
     assert_eq!(rename.text, "wörk");
     rename.delete();
     assert_eq!(rename.text, "wök");
+}
+
+#[test]
+fn the_state_dot_colours_the_mode_that_owns_the_keys() {
+    let theme = Theme::default();
+    assert_eq!(
+        state_colors(false, false, false, &theme),
+        (theme.state_normal, theme.state_normal_dot)
+    );
+    let lit = |state: Rgb| (state, theme.bar_label_foreground);
+    assert_eq!(state_colors(false, false, true, &theme), lit(theme.state_vim));
+    assert_eq!(
+        state_colors(false, true, true, &theme),
+        lit(theme.state_leader)
+    );
+    // A second leader hands the next key over, so mux stops claiming it.
+    assert_eq!(
+        state_colors(true, true, true, &theme),
+        lit(theme.state_passthrough)
+    );
 }
 
 #[test]
@@ -898,7 +923,6 @@ fn bar_width_and_vertical_center_follow_window_count() {
             bar_width(1),
             Some(2),
             Theme::default().bar_active,
-            None,
         )
     });
     assert!(separator.contains("38;2;203;163;210"), "{separator:?}");
@@ -907,29 +931,6 @@ fn bar_width_and_vertical_center_follow_window_count() {
     assert!(separator.contains(""), "{separator:?}");
     assert!(!separator.contains("48;2"), "{separator:?}");
 
-    let theme = Theme::default();
-    let vim_separator = painted(1, bar_width(1), |frame| {
-        render_bar_separator(
-            frame,
-            1,
-            bar_width(1),
-            Some(1),
-            theme.bar_active,
-            Some(theme.bar_vim_background),
-        )
-    });
-    assert!(
-        vim_separator.contains(&format!(
-            "38;2;{};{};{};48;2;{};{};{}",
-            theme.bar_active.0,
-            theme.bar_active.1,
-            theme.bar_active.2,
-            theme.bar_vim_background.0,
-            theme.bar_vim_background.1,
-            theme.bar_vim_background.2,
-        )),
-        "{vim_separator:?}"
-    );
 }
 
 #[test]

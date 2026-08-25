@@ -152,15 +152,10 @@ impl Server {
                 },
                 PopupAnchor::Center,
             ))
-        } else if client.literal {
-            Some((
-                Popup::Status("literal: next key goes to the pane".into()),
-                PopupAnchor::Bottom,
-            ))
         } else if client.leader {
             Some((
                 Popup::Status(
-                    "leader: $ session · , window · -/| split · z zoom · b bell · x kill · d detach · arrows focus · ctrl-arrows resize · leader again for literal key"
+                    "leader: $ session · , window · -/| split · z zoom · b bell · x kill · d detach · arrows focus · ctrl-arrows resize"
                         .into(),
                 ),
                 PopupAnchor::Bottom,
@@ -198,13 +193,6 @@ impl Server {
         let bell_style = self.clients[&id].bell_style;
         let normal_rgb = theme.bar_inactive;
         let current_rgb = theme.bar_active;
-        let background = vim_active.then_some(theme.bar_vim_background);
-        if let Some(background) = background {
-            let attributes = CellAttributes::colors(theme.bar_label_foreground, background);
-            for row in 1..=rows {
-                frame.fill(row, 1, bar_width - 1, attributes);
-            }
-        }
         let active = self.active_indices(id);
         let windows = active
             .map(|(session, _)| self.sessions[session].windows.len())
@@ -212,9 +200,9 @@ impl Server {
         let session_index = active.map(|(session, _)| session);
         let current_window = active.map(|(_, window)| window).unwrap_or(0);
         let (first_window, first_row, visible) =
-            centered_bar_layout(windows, current_window, rows as usize);
+            centered_bar_layout(windows, current_window, rows.saturating_sub(2) as usize);
         let current_row = (visible > 0)
-            .then_some((first_row + current_window.saturating_sub(first_window) * 3 + 1) as u16);
+            .then_some((first_row + current_window.saturating_sub(first_window) * 3 + 2) as u16);
         let number_width = bar_width.saturating_sub(4) as usize;
         let label_width = number_width + 2;
         let active_animation_width = label_width + 1;
@@ -232,17 +220,13 @@ impl Server {
                 .0
             })
             .unwrap_or(current_rgb);
-        render_bar_separator(
-            frame,
-            rows,
-            bar_width,
-            current_row,
-            separator_rgb,
-            background,
-        );
+        render_bar_separator(frame, rows, bar_width, current_row, separator_rgb);
+        let client = &self.clients[&id];
+        let (tile, dot) = state_colors(client.literal, client.leader, vim_active, &theme);
+        frame.set_text(1, 1, " ● ", CellAttributes::colors(dot, tile));
         for offset in 0..visible {
             let window = first_window + offset;
-            let row = (first_row + offset * 3) as u16 + 1;
+            let row = (first_row + offset * 3) as u16 + 2;
             let zoomed =
                 active.is_some_and(|(session, _)| self.sessions[session].windows[window].zoomed);
             let label = bar_window_label(window, current_window, number_width, zoomed);
@@ -316,7 +300,7 @@ impl Server {
         {
             render_bell_label(
                 frame,
-                (1, 1),
+                (rows, 1),
                 &other_session_bell_label(count),
                 BellLabel {
                     visual,
