@@ -85,6 +85,18 @@ impl Row {
         self.cols
     }
 
+    /// How many cells from the left differ from a blank cell.
+    ///
+    /// A compacted row already knows: everything past it was dropped when the
+    /// row was compacted. Reading a long scrollback means decoding every cell
+    /// of every row, so skipping the blank tail is most of that work.
+    pub fn used_cells(&self) -> u16 {
+        match &self.cells {
+            RowCells::Active(_) => self.cols,
+            RowCells::Compact(compact) => compact.cells,
+        }
+    }
+
     pub fn clear(&mut self, attrs: crate::attrs::Attrs) {
         for cell in self.active_cells() {
             cell.clear(attrs);

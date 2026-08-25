@@ -44,6 +44,9 @@ pub(super) fn snapshot_screen(screen: &mut vt100::Screen) -> (Vec<VimLine>, Posi
     let screen_cursor = screen.cursor_position();
     let total = history + rows as usize;
     let mut lines = Vec::with_capacity(total);
+    // One buffer for every row: a snapshot of a long scrollback is otherwise
+    // three allocations per line, and there can be hundreds of thousands.
+    let mut scratch = Vec::with_capacity(cols as usize);
     let mut absolute = 0;
     while absolute < total {
         let offset = history.saturating_sub(absolute);
@@ -52,7 +55,7 @@ pub(super) fn snapshot_screen(screen: &mut vt100::Screen) -> (Vec<VimLine>, Posi
         let skip = absolute - top_absolute;
         let available = (rows as usize - skip).min(total - absolute);
         for row in skip..skip + available {
-            lines.push(snapshot_vim_line(screen, row as u16, cols));
+            lines.push(snapshot_vim_line_into(screen, row as u16, cols, &mut scratch));
         }
         absolute += available;
     }
@@ -67,7 +70,23 @@ pub(super) fn snapshot_screen(screen: &mut vt100::Screen) -> (Vec<VimLine>, Posi
 }
 
 pub(super) fn snapshot_vim_line(screen: &vt100::Screen, row: u16, cols: u16) -> VimLine {
-    let cells: Vec<_> = screen.row_cells(row).collect();
+    snapshot_vim_line_into(screen, row, cols, &mut Vec::new())
+}
+
+fn snapshot_vim_line_into(
+    screen: &vt100::Screen,
+    row: u16,
+    cols: u16,
+    cells: &mut Vec<vt100::Cell>,
+) -> VimLine {
+    cells.clear();
+    // Everything past the row's used cells is blank, and decoding it is the
+    // bulk of the cost of snapshotting a long scrollback.
+    cells.extend(
+        screen
+            .row_cells(row)
+            .take(screen.row_used_cells(row) as usize),
+    );
     let last_content = cells
         .iter()
         .rposition(|cell| !cell.is_wide_continuation() && cell.has_contents());
@@ -77,7 +96,7 @@ pub(super) fn snapshot_vim_line(screen: &vt100::Screen, row: u16, cols: u16) -> 
             || CellAttributes::from(cell) != CellAttributes::default()
     });
     let cell_count = last_cell.map_or(0, |col| col + 1).min(usize::from(cols));
-    let mut text = String::new();
+    let mut text = String::with_capacity(cell_count);
     let mut snapshot_cells = Vec::with_capacity(cell_count);
     let mut character_col = 0;
     for (col, cell) in cells.iter().take(cell_count).enumerate() {
