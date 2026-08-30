@@ -146,8 +146,8 @@ struct Window {
     active_pane: usize,
     previous_pane: usize,
     bell: Option<BellState>,
-    /// While set, the active pane is drawn over the whole window and the others
-    /// are left as they were. The layout underneath is untouched, so unzooming
+    /// While set, the active pane fills the client, the sidebar is hidden, and
+    /// keys bypass mux. The layout underneath is untouched, so leaving the mode
     /// puts everything back exactly where it was.
     zoomed: bool,
     /// A name given with `rename-window`. Without one the window goes by
@@ -2066,21 +2066,16 @@ impl Server {
         Some(pane)
     }
 
-    /// Grows the active pane to the whole window, or puts it back.
+    /// Grows the active pane to the whole client and hands its keys through, or
+    /// puts the normal mux interface back.
     fn zoom_pane(&mut self, id: usize) -> Result<()> {
         let Some((session_index, window_index, _)) = self.active_pane_indices(id) else {
             return Ok(());
         };
         let window = &mut self.sessions[session_index].windows[window_index];
-        if window.panes.len() < 2 {
-            self.set_message(id, "only one pane in this window".into());
-            return Ok(());
-        }
         window.zoomed = !window.zoomed;
-        let zoomed = window.zoomed;
         self.resize_active(id)?;
         self.rebuild_vim(id);
-        self.set_message(id, if zoomed { "zoomed" } else { "unzoomed" }.into());
         self.save_state_soon();
         Ok(())
     }
@@ -2379,7 +2374,13 @@ impl Server {
 
     fn active_bar_width(&self, client_id: usize) -> u16 {
         self.active_indices(client_id)
-            .map(|(session, _)| bar_width(self.sessions[session].windows.len()))
+            .map(|(session, window)| {
+                if self.sessions[session].windows[window].zoomed {
+                    0
+                } else {
+                    bar_width(self.sessions[session].windows.len())
+                }
+            })
             .unwrap_or_else(|| bar_width(0))
     }
 

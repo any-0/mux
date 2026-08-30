@@ -16,10 +16,22 @@ use super::*;
 impl Server {
     pub(super) fn handle_key(&mut self, id: usize, key: Key) -> Result<()> {
         let vim_active = self.vim_active(id);
+        let zoomed = self
+            .active_indices(id)
+            .is_some_and(|(session, window)| self.sessions[session].windows[window].zoomed);
         let Some(client) = self.clients.get_mut(&id) else {
             return Ok(());
         };
         if !client.initialized {
+            return Ok(());
+        }
+        if zoomed {
+            if client.bindings.get(Mode::Normal, &key) == Some(Action::ZoomPane) {
+                self.zoom_pane(id)?;
+            } else {
+                self.send_key_to_pty(id, &key)?;
+            }
+            self.dirty = true;
             return Ok(());
         }
         // A transient message has served its purpose once the next key arrives.
@@ -74,6 +86,7 @@ impl Server {
             Some(Action::SelectWindow(number)) => self.select_window(id, number as usize)?,
             Some(Action::EnterVim) => self.enter_vim(id),
             Some(Action::EnterVimJump) => self.enter_vim_jump(id),
+            Some(Action::ZoomPane) => self.zoom_pane(id)?,
             Some(Action::Detach) => self.detach(id)?,
             Some(Action::ThemePicker) => self.open_theme_picker(id),
             None => self.send_key_to_pty(id, &key)?,
@@ -135,7 +148,6 @@ impl Server {
             Some(Action::FocusPaneDown) => self.focus_pane(id, PaneDirection::Down)?,
             Some(Action::FocusPaneUp) => self.focus_pane(id, PaneDirection::Up)?,
             Some(Action::FocusPaneRight) => self.focus_pane(id, PaneDirection::Right)?,
-            Some(Action::ZoomPane) => self.zoom_pane(id)?,
             Some(Action::BreakPane) => self.break_pane(id)?,
             Some(Action::SwapWindowLeft) => self.swap_window_by(id, -1)?,
             Some(Action::SwapWindowRight) => self.swap_window_by(id, 1)?,

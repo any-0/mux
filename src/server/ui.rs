@@ -595,11 +595,9 @@ pub(super) fn bar_window_label(
     window: usize,
     current_window: usize,
     number_width: usize,
-    zoomed: bool,
 ) -> String {
     if window == current_window {
-        // The dot marks where you are; it fills in when the pane is zoomed.
-        bar_text_label(if zoomed { "▣" } else { "•" }, number_width)
+        bar_text_label("•", number_width)
     } else {
         bar_label(window + 1, number_width)
     }
