@@ -63,8 +63,11 @@ impl Server {
         let client = self.clients.get(&id).context("unknown client")?;
         let cols = frame.cols();
         let rows = frame.rows();
-        let has_vim_panes = !client.vim.is_empty();
-        let tree_active = client.tree.is_some();
+        let passthrough = self
+            .active_indices(id)
+            .is_some_and(|(session, window)| self.sessions[session].windows[window].zoomed);
+        let has_vim_panes = !passthrough && !client.vim.is_empty();
+        let tree_active = !passthrough && client.tree.is_some();
         let bar_width = if tree_active {
             0
         } else {
@@ -73,7 +76,9 @@ impl Server {
         if tree_active {
             self.render_tree(id, frame, rows, cols, bar_width);
         } else {
-            self.render_bar(id, frame, rows, vim_active, bar_width);
+            if !passthrough {
+                self.render_bar(id, frame, rows, vim_active, bar_width);
+            }
             self.render_terminal(id, frame, bar_width)?;
             if has_vim_panes {
                 self.render_vim(id, frame, bar_width)?;
@@ -81,11 +86,13 @@ impl Server {
         }
         // The picker is a dialog: it covers the screen it was opened from
         // rather than replacing it, so the panes stay in view around it.
-        if let Some(picker) = self.clients[&id].themes.as_ref() {
-            render_theme_picker(picker, frame, rows, cols);
-            frame.set_cursor(FrameCursor::default());
+        if !passthrough {
+            if let Some(picker) = self.clients[&id].themes.as_ref() {
+                render_theme_picker(picker, frame, rows, cols);
+                frame.set_cursor(FrameCursor::default());
+            }
+            self.render_popup(id, frame, rows, cols);
         }
-        self.render_popup(id, frame, rows, cols);
         Ok(())
     }
 
@@ -155,7 +162,7 @@ impl Server {
         } else if client.leader {
             Some((
                 Popup::Status(
-                    "leader: $ session · , window · -/| split · z zoom · b bell · x kill · d detach · arrows focus · ctrl-arrows resize"
+                    "leader: $ session · , window · -/| split · b bell · x kill · d detach · arrows focus · ctrl-arrows resize"
                         .into(),
                 ),
                 PopupAnchor::Bottom,
@@ -227,9 +234,7 @@ impl Server {
         for offset in 0..visible {
             let window = first_window + offset;
             let row = (first_row + offset * 3) as u16 + 2;
-            let zoomed =
-                active.is_some_and(|(session, _)| self.sessions[session].windows[window].zoomed);
-            let label = bar_window_label(window, current_window, number_width, zoomed);
+            let label = bar_window_label(window, current_window, number_width);
             let bell = active
                 .and_then(|(session, _)| self.sessions[session].windows[window].bell.as_ref())
                 .and_then(|bell| bell_visual(bell, bell_style));

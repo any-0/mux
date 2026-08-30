@@ -463,6 +463,7 @@ impl Bindings {
         bind(Mode::Normal, "Alt-Shift-r", Action::SetSessionRoot);
         bind(Mode::Normal, "Alt-w", Action::EnterVim);
         bind(Mode::Normal, "Alt-d", Action::EnterVimJump);
+        bind(Mode::Normal, "Alt-z", Action::ZoomPane);
         bind(Mode::Vim, "Alt-a", Action::EnterLeader);
         bind(Mode::Vim, "Alt-d", Action::JumpCharacter);
         for number in 1..=9 {
@@ -486,7 +487,6 @@ impl Bindings {
         bind(Mode::Leader, "Ctrl-Down", Action::ResizePaneDown);
         bind(Mode::Leader, "Ctrl-Up", Action::ResizePaneUp);
         bind(Mode::Leader, "Ctrl-Right", Action::ResizePaneRight);
-        bind(Mode::Leader, "z", Action::ZoomPane);
         bind(Mode::Leader, "!", Action::BreakPane);
         bind(Mode::Leader, "<", Action::SwapWindowLeft);
         bind(Mode::Leader, ">", Action::SwapWindowRight);
@@ -731,6 +731,7 @@ impl Action {
                     | Self::EnterVimJump
                     | Self::Detach
                     | Self::ThemePicker
+                    | Self::ZoomPane
             ),
             Mode::Leader => matches!(
                 self,
@@ -746,7 +747,6 @@ impl Action {
                     | Self::ResizePaneDown
                     | Self::ResizePaneUp
                     | Self::ResizePaneRight
-                    | Self::ZoomPane
                     | Self::BreakPane
                     | Self::SwapWindowLeft
                     | Self::SwapWindowRight

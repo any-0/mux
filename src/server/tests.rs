@@ -442,6 +442,14 @@ fn leader_defaults_cover_session_and_pane_commands() {
         Some(Action::EnterLeader)
     );
     assert_eq!(
+        bindings.get(Mode::Normal, &crate::config::parse_key("Alt-z").unwrap()),
+        Some(Action::ZoomPane)
+    );
+    assert_eq!(
+        bindings.get(Mode::Leader, &crate::config::parse_key("z").unwrap()),
+        None
+    );
+    assert_eq!(
         bindings.get(Mode::Leader, &crate::config::parse_key("$").unwrap()),
         Some(Action::RenameSession)
     );
@@ -868,10 +876,9 @@ fn bar_width_and_vertical_center_follow_window_count() {
     assert_eq!(bar_width(100), 7);
     assert_eq!(bar_label(1, 1), " 1 ");
     assert_eq!(bar_label(10, 2), " 10 ");
-    assert_eq!(bar_window_label(0, 0, 1, false), " • ");
-    assert_eq!(bar_window_label(0, 0, 1, true), " ▣ ");
-    assert_eq!(bar_window_label(1, 0, 1, false), " 2 ");
-    assert_eq!(bar_window_label(9, 0, 2, false), " 10 ");
+    assert_eq!(bar_window_label(0, 0, 1), " • ");
+    assert_eq!(bar_window_label(1, 0, 1), " 2 ");
+    assert_eq!(bar_window_label(9, 0, 2), " 10 ");
     assert_eq!(
         blend_rgb((110, 88, 113), (203, 163, 210), 80),
         (139, 111, 143)
