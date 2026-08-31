@@ -384,6 +384,25 @@ fn terminal_keys_preserve_alt_and_modified_arrows() {
 }
 
 #[test]
+fn pane_terminal_matches_the_emulator_and_backspace_matches_its_terminfo() {
+    let mut command = CommandBuilder::new("zsh");
+    configure_pane_terminal(&mut command);
+
+    assert_eq!(
+        command.get_env("TERM"),
+        Some(std::ffi::OsStr::new("xterm-256color"))
+    );
+    assert_eq!(
+        command.get_env("COLORTERM"),
+        Some(std::ffi::OsStr::new("truecolor"))
+    );
+    assert_eq!(
+        terminal_key_bytes(&crate::config::parse_key("Backspace").unwrap(), false),
+        b"\x7f"
+    );
+}
+
+#[test]
 fn zle_cursor_save_restore_keeps_the_entered_command() {
     let mut parser = vt100::Parser::new(4, 40, 0);
     let mut prefix = Vec::new();

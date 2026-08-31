@@ -192,8 +192,9 @@ fn truecolor_from(colorterm: Option<&OsStr>, term: Option<&OsStr>) -> bool {
         return true;
     }
     // Some terminals say so in TERM instead of setting COLORTERM at all.
-    term.and_then(OsStr::to_str)
-        .is_some_and(|term| term.contains("direct") || term.contains("truecolor"))
+    term.and_then(OsStr::to_str).is_some_and(|term| {
+        term == "xterm-kitty" || term.contains("direct") || term.contains("truecolor")
+    })
 }
 
 /// Connects to a daemon that is already running. Unlike attaching, a one-shot
@@ -430,6 +431,7 @@ mod tests {
         assert!(truecolor_from(colorterm("truecolor"), None));
         assert!(truecolor_from(colorterm("24bit"), None));
         assert!(truecolor_from(None, colorterm("xterm-direct")));
+        assert!(truecolor_from(None, colorterm("xterm-kitty")));
         // Anything that has not said so is painted for 256 colours.
         assert!(!truecolor_from(None, None));
         assert!(!truecolor_from(None, colorterm("xterm-256color")));

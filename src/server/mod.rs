@@ -91,6 +91,18 @@ const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const RESIZE_STEP: u16 = 2;
 /// Lines one turn of the wheel scrolls.
 const MOUSE_SCROLL_LINES: usize = 3;
+const PANE_TERM: &str = "xterm-256color";
+const PANE_COLORTERM: &str = "truecolor";
+
+fn configure_pane_terminal(command: &mut CommandBuilder) {
+    // A pane talks to mux's terminal emulator, not directly to the physical
+    // terminal that launched the client. Advertising the physical terminal
+    // makes remote panes depend on terminal-specific terminfo (for example,
+    // xterm-kitty) and can even make zsh emit malformed colour sequences when
+    // that entry is absent.
+    command.env("TERM", PANE_TERM);
+    command.env("COLORTERM", PANE_COLORTERM);
+}
 
 impl Event {
     /// Whether this came from a client rather than from a pane.
@@ -1253,6 +1265,7 @@ impl Server {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         let mut command = CommandBuilder::new(shell);
         command.cwd(cwd);
+        configure_pane_terminal(&mut command);
         command.env("MUX", self.socket_path.as_os_str());
         command.env("MUX_PANE", id.to_string());
         // Started from inside tmux, the inherited variables would point programs
