@@ -265,6 +265,9 @@ selected text on standard input. Over SSH, mux instead sends an OSC 52 clipboard
 write through the attached client so it reaches the local terminal. A yank then
 leaves Vim mode.
 
+OSC 52 clipboard writes produced inside a pane are relayed through attached mux
+clients, so copying continues to work through nested mux and SSH sessions.
+
 Vim state is pane-local. Switching panes or windows keeps each inactive pane at
 its current viewport and restores its cursor, selection, search, and jump state
 when it becomes active again.
