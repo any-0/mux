@@ -164,8 +164,8 @@ fn parse_command(arguments: &[OsString]) -> Result<Option<MuxCommand>> {
             _ => bail!("select-pane needs one of -L, -D, -U, or -R"),
         },
         "resize-pane" if matches!(rest, [flag] if flag == "-Z") => MuxCommand::ZoomPane,
-        "zoom-pane" => {
-            no_arguments("zoom-pane")?;
+        "focus-mode" => {
+            no_arguments("focus-mode")?;
             MuxCommand::ZoomPane
         }
         "resize-pane" => {
@@ -257,7 +257,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Option<MuxCommand>> {
 
 fn print_help() {
     println!(
-        "mux - a small personal terminal multiplexer\n\nUSAGE:\n    mux [--config PATH] [--session NAME]\n    mux COMMAND [ARGUMENTS]\n\nCOMMANDS:\n    kill-server                 Stop the daemon and its panes\n    list-sessions, ls           Print one line per session\n    list-windows                Print one line per window of the current session\n    list-panes                  Print one line per pane of the current window\n    choose-tree                 Open the session tree\n    detach                      Detach the active client\n    new-window                  Create a window\n    new-session [-s NAME]       Create and select a session\n    rename-session NAME         Rename the current session\n    rename-window [NAME]        Name the current window, or clear its name\n    split-window [-h|-v]        Split the active pane\n    select-pane -L|-D|-U|-R     Focus an adjacent pane\n    resize-pane -L|-D|-U|-R [N] Move the nearest divider by N cells\n    zoom-pane                   Toggle the active pane over the whole window\n    break-pane                  Move the active pane into a window of its own\n    join-pane [-h|-v] -t N      Move the active pane into window N\n    swap-window -t N            Exchange the current window with window N\n    select-window -t NUMBER     Select window 1 through 9\n    vim-mode                    Enter Vim mode\n    set-theme PATH              Apply colors to attached clients\n    kill-pane                   Kill the active pane\n    kill-session                Kill the current session\n    set-session-root            Use the active shell directory as session root\n    jump-to-bell                Jump to the first pending bell\n\nOPTIONS:\n    --config PATH    Apply user bindings after built-in defaults\n                     (default: $XDG_CONFIG_HOME/mux/config.toml)\n    --session NAME   Attach to or create a named session\n    -h, --help       Show this help"
+        "mux - a small personal terminal multiplexer\n\nUSAGE:\n    mux [--config PATH] [--session NAME]\n    mux COMMAND [ARGUMENTS]\n\nCOMMANDS:\n    kill-server                 Stop the daemon and its panes\n    list-sessions, ls           Print one line per session\n    list-windows                Print one line per window of the current session\n    list-panes                  Print one line per pane of the current window\n    choose-tree                 Open the session tree\n    detach                      Detach the active client\n    new-window                  Create a window\n    new-session [-s NAME]       Create and select a session\n    rename-session NAME         Rename the current session\n    rename-window [NAME]        Name the current window, or clear its name\n    split-window [-h|-v]        Split the active pane\n    select-pane -L|-D|-U|-R     Focus an adjacent pane\n    resize-pane -L|-D|-U|-R [N] Move the nearest divider by N cells\n    focus-mode                  Toggle focus mode for the active pane\n    break-pane                  Move the active pane into a window of its own\n    join-pane [-h|-v] -t N      Move the active pane into window N\n    swap-window -t N            Exchange the current window with window N\n    select-window -t NUMBER     Select window 1 through 9\n    vim-mode                    Enter Vim mode\n    set-theme PATH              Apply colors to attached clients\n    kill-pane                   Kill the active pane\n    kill-session                Kill the current session\n    set-session-root            Use the active shell directory as session root\n    jump-to-bell                Jump to the first pending bell\n\nOPTIONS:\n    --config PATH    Apply user bindings after built-in defaults\n                     (default: $XDG_CONFIG_HOME/mux/config.toml)\n    --session NAME   Attach to or create a named session\n    -h, --help       Show this help"
     );
 }
 
@@ -318,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn panes_can_be_resized_zoomed_and_named() {
+    fn panes_can_be_resized_focused_and_named() {
         assert_eq!(
             parse_command(&args(&["resize-pane", "-L"])).unwrap(),
             Some(MuxCommand::ResizeLeft(1))
@@ -327,13 +327,13 @@ mod tests {
             parse_command(&args(&["resize-pane", "-D", "5"])).unwrap(),
             Some(MuxCommand::ResizeDown(5))
         );
-        // tmux spells zoom as a resize; both work.
+        // tmux spells focus mode as a resize; both work.
         assert_eq!(
             parse_command(&args(&["resize-pane", "-Z"])).unwrap(),
             Some(MuxCommand::ZoomPane)
         );
         assert_eq!(
-            parse_command(&args(&["zoom-pane"])).unwrap(),
+            parse_command(&args(&["focus-mode"])).unwrap(),
             Some(MuxCommand::ZoomPane)
         );
         assert_eq!(

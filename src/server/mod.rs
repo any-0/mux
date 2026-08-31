@@ -2066,8 +2066,8 @@ impl Server {
         Some(pane)
     }
 
-    /// Grows the active pane to the whole client and hands its keys through, or
-    /// puts the normal mux interface back.
+    /// Enters focus mode for the active pane and hands its keys through, or
+    /// restores the normal mux interface.
     fn zoom_pane(&mut self, id: usize) -> Result<()> {
         let Some((session_index, window_index, _)) = self.active_pane_indices(id) else {
             return Ok(());

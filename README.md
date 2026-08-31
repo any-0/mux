@@ -13,7 +13,7 @@ label and its one-cell horizontal padding are colored; the window groups are
 centered vertically, and their width adapts when the window count gains or
 loses digits. A continuous vertical separator divides the strip from the
 terminal or pane layout. The active window keeps its colored tab but leaves
-its number blank and shows a dot. Fullscreen passthrough and the session tree
+its number blank and shows a dot. Focus mode and the session tree
 hide the strip and use the full terminal.
 The separator uses the active window color and becomes a left-pointing `┤` on
 the active row without coloring the terminal background. One blank vertical
@@ -89,7 +89,7 @@ mux split-window           # top/bottom
 mux split-window -h        # left/right
 mux select-pane -L
 mux resize-pane -L 5       # move the nearest divider five cells
-mux zoom-pane              # toggle fullscreen passthrough; also mux resize-pane -Z
+mux focus-mode             # toggle focus mode; also mux resize-pane -Z
 mux break-pane             # the active pane gets a window of its own
 mux join-pane -h -t 2      # and goes back into window 2
 mux swap-window -t 1
@@ -173,7 +173,7 @@ Normal mode:
 | `Alt-1` … `Alt-9` | Select window 1 … 9 |
 | `Alt-w` | Enter scrollback/copy mode, called Vim mode |
 | `Alt-d` | Enter Vim mode already asking which character to jump to |
-| `Alt-z` | Hide mux's sidebar, zoom the active pane, and pass every other key directly to it; press `Alt-z` again to leave |
+| `Alt-f` | Enter focus mode: hide mux's sidebar, show the active pane, and pass every other key directly to it; press `Alt-f` again to leave |
 
 Leader mode lists its available commands in a bordered popup along the bottom of
 the screen, from the moment leader is pressed:
@@ -323,7 +323,7 @@ is meaningful: `w` and `W` are distinct.
 
 Available normal actions are `session-tree`, `new-window`, `new-session`,
 `set-session-root`, `select-window-1` through `select-window-9`, `enter-vim`,
-`leader`, `zoom-pane`, and `detach`.
+`focus-mode`, `leader`, and `detach`.
 
 Available leader actions are `rename-session`, `rename-window`,
 `split-horizontal`, `split-vertical`, `focus-pane-left`, `focus-pane-down`,
