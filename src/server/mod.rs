@@ -941,13 +941,18 @@ impl Server {
                     self.note_failure(&format!("pane {pane_id} history"), error);
                 }
                 if !clipboard_writes.is_empty() {
+                    let clipboard_session = self.sessions.iter().find_map(|session| {
+                        session
+                            .windows
+                            .iter()
+                            .any(|window| window.panes.iter().any(|pane| pane.id == pane_id))
+                            .then_some(session.id)
+                    });
                     let clipboard_clients: Vec<_> = self
                         .clients
-                        .keys()
-                        .copied()
-                        .filter(|id| {
-                            self.active_pane(*id)
-                                .is_some_and(|pane| pane.id == pane_id)
+                        .iter()
+                        .filter_map(|(id, client)| {
+                            (client.session_id == clipboard_session).then_some(*id)
                         })
                         .collect();
                     for clipboard in clipboard_writes {

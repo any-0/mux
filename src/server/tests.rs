@@ -183,7 +183,12 @@ fn a_pane_reports_the_title_its_program_sets() {
 #[test]
 fn a_pane_reports_osc_52_clipboard_writes() {
     let mut parser = new_parser(4, 20);
-    parser.process(b"\x1b]52;c;Y29waWVkIHRleHQ=\x07");
+    let mut prefix = Vec::new();
+    process_terminal_bytes(
+        &mut parser,
+        &mut prefix,
+        b"\x1b]52;c;Y29waWVkIHRleHQ=\x07",
+    );
     assert_eq!(
         parser.callbacks().clipboard_writes,
         [ClipboardWrite {
