@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 bincode = { version = "2.0", features = ["serde"] }
 crossterm = "0.29"
 nix = { version = "0.30", features = ["fs", "process", "signal", "user"] }

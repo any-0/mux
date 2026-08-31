@@ -272,6 +272,7 @@ struct Client {
     previous_session_id: Option<usize>,
     bindings: Bindings,
     clipboard_command: Vec<String>,
+    terminal_clipboard: bool,
     theme: Theme,
     /// What the theme picker runs to switch theme, and where it finds the
     /// themes to offer.
@@ -853,6 +854,7 @@ impl Server {
                         previous_session_id: None,
                         bindings: Bindings::defaults(),
                         clipboard_command: vec!["yank".into()],
+                        terminal_clipboard: false,
                         theme_command: vec!["theme".into()],
                         theme_directory: None,
                         theme: Theme::default(),
@@ -1053,6 +1055,7 @@ impl Server {
             session,
             bindings,
             clipboard_command,
+            terminal_clipboard,
             theme,
             theme_command,
             theme_directory,
@@ -1082,6 +1085,7 @@ impl Server {
             client.cwd = cwd;
             client.bindings = bindings;
             client.clipboard_command = clipboard_command;
+            client.terminal_clipboard = terminal_clipboard;
             client.theme = theme;
             client.theme_command = theme_command;
             client.theme_directory = theme_directory;
