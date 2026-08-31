@@ -11,6 +11,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use crossterm::{
     cursor::{Hide, SetCursorStyle, Show},
     event::{
@@ -83,6 +84,7 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
             session,
             bindings: settings.bindings,
             clipboard_command: settings.clipboard_command,
+            terminal_clipboard: env::var_os("SSH_TTY").is_some_and(|value| !value.is_empty()),
             theme: settings.theme,
             theme_command: settings.theme_command,
             theme_directory: settings.theme_directory,
@@ -135,6 +137,9 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
                 output.write_all(&bytes)?;
                 output.flush()?;
             }
+            Ok(ClientEvent::Server(ServerMessage::Clipboard(text))) => {
+                write_terminal_clipboard(&mut output, &text)?;
+            }
             Ok(ClientEvent::Server(ServerMessage::Detached)) => return Ok(()),
             // Only a query asks for a listing, and an attached client never does.
             Ok(ClientEvent::Server(ServerMessage::Done | ServerMessage::Listing(_))) => {}
@@ -165,6 +170,11 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
             Ok(ClientEvent::TerminalError(error)) => bail!("terminal input: {error}"),
         }
     }
+}
+
+fn write_terminal_clipboard(output: &mut impl Write, text: &str) -> std::io::Result<()> {
+    write!(output, "\x1b]52;c;{}\x07", STANDARD.encode(text))?;
+    output.flush()
 }
 
 fn terminal_size() -> Result<(u16, u16)> {
@@ -452,5 +462,12 @@ mod tests {
     #[test]
     fn zero_sized_pty_reports_a_usable_terminal_size() {
         assert_eq!(usable_terminal_size(0, 0), (2, 2));
+    }
+
+    #[test]
+    fn terminal_clipboard_is_an_osc_52_write() {
+        let mut output = Vec::new();
+        write_terminal_clipboard(&mut output, "copied text").unwrap();
+        assert_eq!(output, b"\x1b]52;c;Y29waWVkIHRleHQ=\x07");
     }
 }

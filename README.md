@@ -260,9 +260,10 @@ Vim mode accepts counts and provides:
 | `Escape` | Clear an active selection; a subsequent `Escape` leaves Vim mode |
 
 Counts work with motions, find/search repeats, selections, `yy`, and
-yank-with-motion. Yanking runs `yank`, the clipboard command used by the
-inspected tmux setup, with the selected text on standard input, then leaves Vim
-mode.
+yank-with-motion. Yanking runs the configured clipboard command with the
+selected text on standard input. Over SSH, mux instead sends an OSC 52 clipboard
+write through the attached client so it reaches the local terminal. A yank then
+leaves Vim mode.
 
 Vim state is pane-local. Switching panes or windows keeps each inactive pane at
 its current viewport and restores its cursor, selection, search, and jump state

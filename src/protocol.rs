@@ -118,6 +118,8 @@ pub struct Hello {
     pub session: Option<String>,
     pub bindings: Bindings,
     pub clipboard_command: Vec<String>,
+    /// Whether clipboard writes must travel through the attached terminal.
+    pub terminal_clipboard: bool,
     pub theme: Theme,
     pub theme_command: Vec<String>,
     pub theme_directory: Option<PathBuf>,
@@ -154,6 +156,7 @@ pub enum ClientMessage {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ServerMessage {
     Render(Vec<u8>),
+    Clipboard(String),
     Listing(Vec<String>),
     Detached,
     Done,
