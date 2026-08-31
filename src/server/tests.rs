@@ -442,7 +442,7 @@ fn leader_defaults_cover_session_and_pane_commands() {
         Some(Action::EnterLeader)
     );
     assert_eq!(
-        bindings.get(Mode::Normal, &crate::config::parse_key("Alt-z").unwrap()),
+        bindings.get(Mode::Normal, &crate::config::parse_key("Alt-f").unwrap()),
         Some(Action::ZoomPane)
     );
     assert_eq!(

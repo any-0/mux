@@ -197,7 +197,7 @@ impl Server {
                             } else {
                                 ""
                             },
-                            if window.zoomed { " (zoomed)" } else { "" },
+                            if window.zoomed { " (focus mode)" } else { "" },
                         )
                     })
                     .collect()

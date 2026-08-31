@@ -463,7 +463,7 @@ impl Bindings {
         bind(Mode::Normal, "Alt-Shift-r", Action::SetSessionRoot);
         bind(Mode::Normal, "Alt-w", Action::EnterVim);
         bind(Mode::Normal, "Alt-d", Action::EnterVimJump);
-        bind(Mode::Normal, "Alt-z", Action::ZoomPane);
+        bind(Mode::Normal, "Alt-f", Action::ZoomPane);
         bind(Mode::Vim, "Alt-a", Action::EnterLeader);
         bind(Mode::Vim, "Alt-d", Action::JumpCharacter);
         for number in 1..=9 {
@@ -847,7 +847,7 @@ fn parse_action(value: &str) -> Result<Action> {
         "resize-pane-down" => Action::ResizePaneDown,
         "resize-pane-up" => Action::ResizePaneUp,
         "resize-pane-right" => Action::ResizePaneRight,
-        "zoom-pane" => Action::ZoomPane,
+        "focus-mode" => Action::ZoomPane,
         "break-pane" => Action::BreakPane,
         "swap-window-left" => Action::SwapWindowLeft,
         "swap-window-right" => Action::SwapWindowRight,
@@ -1036,6 +1036,10 @@ mod tests {
         assert_eq!(
             bindings.get(Mode::Normal, &parse_key("Alt-a").unwrap()),
             Some(Action::EnterLeader)
+        );
+        assert_eq!(
+            bindings.get(Mode::Normal, &parse_key("Alt-f").unwrap()),
+            Some(Action::ZoomPane)
         );
         fs::remove_file(&path).unwrap();
     }
