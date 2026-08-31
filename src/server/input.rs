@@ -334,7 +334,10 @@ impl Server {
                 if self.clients[&id].terminal_clipboard {
                     self.clients[&id]
                         .writer
-                        .send(ServerMessage::Clipboard(text));
+                        .send(ServerMessage::Clipboard {
+                            selection: b"c".to_vec(),
+                            data: text.into_bytes(),
+                        });
                     self.set_message(id, format!("yanked {bytes} bytes"));
                     self.dirty = true;
                 } else {

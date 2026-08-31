@@ -137,8 +137,8 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
                 output.write_all(&bytes)?;
                 output.flush()?;
             }
-            Ok(ClientEvent::Server(ServerMessage::Clipboard(text))) => {
-                write_terminal_clipboard(&mut output, &text)?;
+            Ok(ClientEvent::Server(ServerMessage::Clipboard { selection, data })) => {
+                write_terminal_clipboard(&mut output, &selection, &data)?;
             }
             Ok(ClientEvent::Server(ServerMessage::Detached)) => return Ok(()),
             // Only a query asks for a listing, and an attached client never does.
@@ -172,8 +172,17 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
     }
 }
 
-fn write_terminal_clipboard(output: &mut impl Write, text: &str) -> std::io::Result<()> {
-    write!(output, "\x1b]52;c;{}\x07", STANDARD.encode(text))?;
+fn write_terminal_clipboard(
+    output: &mut impl Write,
+    selection: &[u8],
+    data: &[u8],
+) -> std::io::Result<()> {
+    write!(
+        output,
+        "\x1b]52;{};{}\x07",
+        String::from_utf8_lossy(selection),
+        STANDARD.encode(data)
+    )?;
     output.flush()
 }
 
@@ -467,7 +476,7 @@ mod tests {
     #[test]
     fn terminal_clipboard_is_an_osc_52_write() {
         let mut output = Vec::new();
-        write_terminal_clipboard(&mut output, "copied text").unwrap();
+        write_terminal_clipboard(&mut output, b"c", b"copied text").unwrap();
         assert_eq!(output, b"\x1b]52;c;Y29waWVkIHRleHQ=\x07");
     }
 }

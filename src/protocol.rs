@@ -156,7 +156,10 @@ pub enum ClientMessage {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ServerMessage {
     Render(Vec<u8>),
-    Clipboard(String),
+    Clipboard {
+        selection: Vec<u8>,
+        data: Vec<u8>,
+    },
     Listing(Vec<String>),
     Detached,
     Done,

@@ -181,6 +181,19 @@ fn a_pane_reports_the_title_its_program_sets() {
 }
 
 #[test]
+fn a_pane_reports_osc_52_clipboard_writes() {
+    let mut parser = new_parser(4, 20);
+    parser.process(b"\x1b]52;c;Y29waWVkIHRleHQ=\x07");
+    assert_eq!(
+        parser.callbacks().clipboard_writes,
+        [ClipboardWrite {
+            selection: b"c".to_vec(),
+            data: b"copied text".to_vec(),
+        }]
+    );
+}
+
+#[test]
 fn a_zoomed_window_shows_only_the_active_pane() {
     let area = Rect {
         row: 0,

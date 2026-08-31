@@ -885,6 +885,7 @@ impl Server {
             Event::PtyOutput(pane_id, bytes) => {
                 let mut cwd_changed = false;
                 let mut bell_events = 0;
+                let mut clipboard_writes = Vec::new();
                 let mut failure = None;
                 let mut sample_process = false;
                 let colors = TerminalColors::from(&self.theme);
@@ -893,6 +894,9 @@ impl Server {
                     let previous_bells = pane.parser.callbacks().bell_count;
                     let had_prompt = pane.parser.callbacks().prompt_ready.is_some();
                     process_terminal_bytes(&mut pane.parser, &mut pane.parser_prefix, &bytes);
+                    clipboard_writes = std::mem::take(
+                        &mut pane.parser.callbacks_mut().clipboard_writes,
+                    );
                     bell_events = pane
                         .parser
                         .callbacks()
@@ -935,6 +939,27 @@ impl Server {
                 }
                 if let Some(error) = failure {
                     self.note_failure(&format!("pane {pane_id} history"), error);
+                }
+                if !clipboard_writes.is_empty() {
+                    let clipboard_clients: Vec<_> = self
+                        .clients
+                        .keys()
+                        .copied()
+                        .filter(|id| {
+                            self.active_pane(*id)
+                                .is_some_and(|pane| pane.id == pane_id)
+                        })
+                        .collect();
+                    for clipboard in clipboard_writes {
+                        for id in &clipboard_clients {
+                            self.clients[id]
+                                .writer
+                                .send(ServerMessage::Clipboard {
+                                    selection: clipboard.selection.clone(),
+                                    data: clipboard.data.clone(),
+                                });
+                        }
+                    }
                 }
                 if bell_events > 0 {
                     self.ring_bell(pane_id, bell_events);
@@ -1258,6 +1283,8 @@ impl Server {
         parser_prefix: Vec<u8>,
         needs_backing: bool,
     ) -> Result<Pane> {
+        // Clipboard writes are live terminal actions, not restorable screen state.
+        parser.callbacks_mut().clipboard_writes.clear();
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: rows.max(1),
