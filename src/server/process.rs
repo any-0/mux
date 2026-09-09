@@ -114,8 +114,10 @@ pub(super) fn processes() -> Vec<Process> {
         .collect()
 }
 
-/// Prefer the foreground job's root to its helpers. PID order breaks ties for
-/// pipelines deterministically, without consulting the icon table.
+/// Prefer the foreground job's root to its helpers. Node launchers are the one
+/// exception: command-line tools installed through npm start as a Node wrapper
+/// whose child is the actual executable. PID order breaks ties for pipelines
+/// deterministically, without consulting the icon table.
 pub(super) fn foreground_program(processes: &[Process], group: i32) -> Option<&str> {
     let candidates: Vec<_> = processes
         .iter()
@@ -125,8 +127,12 @@ pub(super) fn foreground_program(processes: &[Process], group: i32) -> Option<&s
         .iter()
         .copied()
         .min_by_key(|process| {
+            let is_node_launcher = process.program == "node"
+                && candidates
+                    .iter()
+                    .any(|child| child.parent == process.pid);
             let has_parent = candidates.iter().any(|parent| parent.pid == process.parent);
-            (has_parent, process.pid != group, process.pid)
+            (is_node_launcher, has_parent, process.pid != group, process.pid)
         })
         .map(|process| process.program.as_str())
 }
@@ -233,6 +239,16 @@ mod tests {
         jobs.reverse();
         assert_eq!(foreground_program(&jobs, 20), Some("unknown-editor"));
         assert_eq!(foreground_program(&jobs, 99), None);
+    }
+
+    #[test]
+    fn foreground_selection_steps_past_a_node_command_launcher() {
+        let jobs = vec![
+            process(20, 10, 20, "node"),
+            process(21, 20, 20, "codex"),
+        ];
+        assert_eq!(foreground_program(&jobs, 20), Some("codex"));
+        assert_eq!(foreground_program(&jobs[0..1], 20), Some("node"));
     }
 
     #[test]

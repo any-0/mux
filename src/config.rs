@@ -319,12 +319,13 @@ impl Theme {
             bar_inactive: palette.surface_raised,
             bar_active: palette.secondary,
             // Normal sits back into the bar, so the dot only speaks up once a
-            // mode takes the keys: grey once a second leader has handed the
-            // next one over wholesale, and a colour per mode that intercepts.
+            // mode takes the keys: the bell accent once a second leader has
+            // handed the next one over wholesale, and a colour per mode that
+            // intercepts.
             state_normal: palette.surface,
             state_normal_dot: palette.muted,
             state_leader: palette.secondary,
-            state_passthrough: palette.muted,
+            state_passthrough: palette.accent,
             state_vim: palette.accent,
             bar_label_foreground: palette.ink(),
             cursor: palette.accent,
