@@ -7,14 +7,24 @@ configure, or replace tmux.
 
 The interface has a narrow numbered strip on the left. Each window takes two
 rows: its number is on the first row and the centered icon for the active
-pane's foreground process group is on the second, so a window running a script
-shows what the script is doing rather than the shell holding it. Only each
+pane's foreground job is on the second. Only each
 label and its one-cell horizontal padding are colored; the window groups are
 centered vertically, and their width adapts when the window count gains or
 loses digits. A continuous vertical separator divides the strip from the
 terminal or pane layout. The active window keeps its colored tab but leaves
 its number blank and shows a dot. Focus mode and the session tree
 hide the strip and use the full terminal.
+
+Program icons use exact executable names reported by the operating system.
+Filenames, arguments, and terminal titles do not affect detection. The foreground
+job's root process takes precedence over its helpers; pipelines prefer their
+group leader, then the remaining root with the lowest PID. Stopped and exited
+processes are excluded. Scripts identify as their interpreter. Unknown executables
+show `·`. The name-to-icon list lives in `src/server/process.rs`; Nix's
+`.<name>-wrapped` executable names use the same entry as `<name>`.
+Icons refresh every 250 ms even in quiet panes, and unchanged icons cause no
+repaint.
+
 The separator uses the active window color and becomes a left-pointing `┤` on
 the active row without coloring the terminal background. One blank vertical
 column separates that line from the content on its right. A terminal bell sends
@@ -41,8 +51,8 @@ are asked through `COLORTERM`, or a `TERM` that names direct color.
 Every screen is painted into a cell buffer and compared against the frame the
 client is already showing, so only the cells that actually changed are sent and
 a repeated frame costs nothing. Repaints are coalesced into at most one frame
-every 8 ms, and the daemon blocks instead of polling whenever no output, bell
-animation, or expiring message is pending.
+every 8 ms, and the daemon blocks until an event or the next process sample,
+bell animation, or expiring message is due.
 
 ## Build and run
 

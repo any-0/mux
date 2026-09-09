@@ -314,7 +314,7 @@ impl Persistence {
         StateWriter { sender, failures }
     }
 
-    fn pane_history_path(&self, pane_id: usize) -> PathBuf {
+    pub(super) fn pane_history_path(&self, pane_id: usize) -> PathBuf {
         self.directory.join(format!("pane-{pane_id}.ansi"))
     }
 

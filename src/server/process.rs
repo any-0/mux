@@ -1,45 +1,57 @@
-//! What a pane is running, and the icon that says so.
+//! Live foreground processes, independent of the icons used to display them.
 
 use std::path::PathBuf;
 
 #[cfg(not(target_os = "macos"))]
 use std::fs;
 
+#[derive(Debug)]
+pub(super) struct Process {
+    pub pid: i32,
+    pub parent: i32,
+    pub group: i32,
+    pub program: String,
+}
+
 #[cfg(not(target_os = "macos"))]
 pub(super) fn process_cwd(pid: u32) -> Option<PathBuf> {
     fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
+/// Read executable identities, never terminal titles or command arguments.
 #[cfg(not(target_os = "macos"))]
-pub(super) fn process_info(pid: i32) -> Option<String> {
-    fs::read_to_string(format!("/proc/{pid}/cmdline"))
-        .ok()
-        .map(|args| args.replace('\0', " ").trim().to_owned())
-}
-
-/// Every command running in one process group.
-#[cfg(not(target_os = "macos"))]
-pub(super) fn process_group_info(group: i32) -> Vec<String> {
+pub(super) fn processes() -> Vec<Process> {
     let Ok(entries) = fs::read_dir("/proc") else {
         return Vec::new();
     };
     entries
         .flatten()
-        .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
-        .filter(|pid| process_group(*pid) == Some(group))
-        .filter_map(process_info)
-        .filter(|command| !command.is_empty())
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse::<i32>().ok()?;
+            let stat = fs::read_to_string(entry.path().join("stat")).ok()?;
+            let (parent, group) = process_stat(&stat)?;
+            let executable = fs::read_link(entry.path().join("exe")).ok()?;
+            let program = executable.file_name()?.to_str()?.to_owned();
+            Some(Process {
+                pid,
+                parent,
+                group,
+                program,
+            })
+        })
         .collect()
 }
 
-/// The process group a process belongs to, from the fifth field of its stat
-/// line. The name before it can hold spaces and brackets, so the fields are
-/// counted from the closing bracket rather than from the start.
 #[cfg(not(target_os = "macos"))]
-fn process_group(pid: i32) -> Option<i32> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let (_, after_name) = stat.rsplit_once(')')?;
-    after_name.split_whitespace().nth(2)?.parse().ok()
+fn process_stat(stat: &str) -> Option<(i32, i32)> {
+    // comm can itself contain spaces and closing parentheses.
+    let (_, fields) = stat.rsplit_once(')')?;
+    let mut fields = fields.split_whitespace();
+    match fields.next()? {
+        "Z" | "X" | "x" | "T" | "t" => return None,
+        _ => {}
+    }
+    Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
 }
 
 #[cfg(target_os = "macos")]
@@ -68,103 +80,206 @@ pub(super) fn process_cwd(pid: u32) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn process_info(pid: i32) -> Option<String> {
-    let output = std::process::Command::new("ps")
-        .args(["-o", "command=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    (!output.stdout.is_empty()).then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-}
-
-/// Every command running in one process group.
-#[cfg(target_os = "macos")]
-pub(super) fn process_group_info(group: i32) -> Vec<String> {
+pub(super) fn processes() -> Vec<Process> {
     let Ok(output) = std::process::Command::new("ps")
-        .args(["-o", "command=", "-g", &group.to_string()])
+        .args(["-axo", "pid=,ppid=,pgid=,stat=,comm="])
         .output()
     else {
         return Vec::new();
     };
     String::from_utf8_lossy(&output.stdout)
         .lines()
-        .map(str::trim)
-        .filter(|command| !command.is_empty())
-        .map(str::to_owned)
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse().ok()?;
+            let parent = fields.next()?.parse().ok()?;
+            let group = fields.next()?.parse().ok()?;
+            let state = fields.next()?;
+            if state.starts_with(['Z', 'T', 'X']) {
+                return None;
+            }
+            // comm is an executable path; its spaces are part of the name.
+            let path = fields.collect::<Vec<_>>().join(" ");
+            let program = std::path::Path::new(&path)
+                .file_name()?
+                .to_str()?
+                .to_owned();
+            Some(Process {
+                pid,
+                parent,
+                group,
+                program,
+            })
+        })
         .collect()
 }
 
-/// The program a command line runs, without its arguments or its directory.
-///
-/// The Nix icon needs this rather than a substring test: every binary that came
-/// from a store path has "nix" somewhere in its command line.
-fn program_name(command: &str) -> &str {
-    let program = command.split_whitespace().next().unwrap_or(command);
-    program.rsplit('/').next().unwrap_or(program)
+/// Prefer the foreground job's root to its helpers. PID order breaks ties for
+/// pipelines deterministically, without consulting the icon table.
+pub(super) fn foreground_program(processes: &[Process], group: i32) -> Option<&str> {
+    let candidates: Vec<_> = processes
+        .iter()
+        .filter(|process| process.group == group)
+        .collect();
+    candidates
+        .iter()
+        .copied()
+        .min_by_key(|process| {
+            let has_parent = candidates.iter().any(|parent| parent.pid == process.parent);
+            (has_parent, process.pid != group, process.pid)
+        })
+        .map(|process| process.program.as_str())
 }
 
-/// nix, its `nix-*` and `nixos-*` siblings, the nh wrapper, and direnv, which
-/// spends its time loading a flake.
-fn is_nix_command(program: &str) -> bool {
-    matches!(program, "nix" | "nh" | "direnv")
-        || program.starts_with("nix-")
-        || program.starts_with("nixos-")
-}
-
-/// A test for what a pane is running, and the icon that matches it.
-type ProcessIcon = (fn(&str) -> bool, &'static str);
-
-/// What each process a window can be busy with looks like in the strip, most
-/// specific first. A shell only wins when nothing it started matches, so a
-/// window running a script shows what the script is doing.
-const PROCESS_ICONS: &[ProcessIcon] = &[
+/// Adding an icon only requires adding exact executable names here.
+const PROCESS_ICONS: &[(&[&str], &str)] = &[
+    (&["opencode"], "\u{e02b}\u{e02c}\u{e02d}"),
+    (&["codex"], "\u{e015}\u{e016}\u{e017}"),
+    (&["claude"], "\u{e012}\u{e013}\u{e014}"),
     (
-        |command| command.contains("opencode"),
-        "\u{e02b}\u{e02c}\u{e02d}",
-    ),
-    (
-        |command| command.contains("codex"),
-        "\u{e015}\u{e016}\u{e017}",
-    ),
-    (
-        |command| command.contains("claude"),
-        "\u{e012}\u{e013}\u{e014}",
-    ),
-    (
-        |command| is_nix_command(program_name(command)),
+        &[
+            "nix",
+            "nix-build",
+            "nix-shell",
+            "nix-env",
+            "nix-store",
+            "nixos-rebuild",
+            "nixos-install",
+            "nh",
+            "direnv",
+        ],
         "\u{e019}\u{e01a}\u{e01b}",
     ),
+    (&["watch"], "\u{e01c}\u{e01d}\u{e01e}"),
+    (&["nvim", "vim"], "\u{e01f}\u{e020}\u{e021}"),
+    (&["ssh"], "\u{e022}\u{e023}\u{e024}"),
+    (&["cargo", "rustc"], "\u{e025}\u{e026}\u{e027}"),
     (
-        |command| program_name(command) == "watch",
-        "\u{e01c}\u{e01d}\u{e01e}",
-    ),
-    (
-        |command| matches!(program_name(command), "nvim" | "vim"),
-        "\u{e01f}\u{e020}\u{e021}",
-    ),
-    (
-        |command| program_name(command) == "ssh",
-        "\u{e022}\u{e023}\u{e024}",
-    ),
-    (
-        |command| matches!(program_name(command), "cargo" | "rustc"),
-        "\u{e025}\u{e026}\u{e027}",
-    ),
-    (
-        |command| program_name(command).starts_with("python"),
+        &[
+            "python",
+            "python3",
+            "python3.10",
+            "python3.11",
+            "python3.12",
+            "python3.13",
+            "python3.14",
+        ],
         "\u{e028}\u{e029}\u{e02a}",
     ),
-    (|command| command.ends_with("jj"), ""),
-    (|command| program_name(command) == "bash", "$"),
-    (|command| command.ends_with("zsh"), "❯"),
+    (&["jj"], ""),
+    (&["bash"], "$"),
+    (&["zsh"], "❯"),
 ];
 
-/// The window is idle, or mux cannot tell what it is running.
 pub(super) const IDLE_ICON: &str = "·";
 
-/// The icon for everything running in one foreground process group.
-pub(super) fn process_group_icon(commands: &[String]) -> &'static str {
+pub(super) fn program_icon(program: &str) -> &'static str {
+    // Nix wraps executables as .<name>-wrapped. This is packaging syntax,
+    // applied equally to every program rather than an icon-specific match.
+    let program = program
+        .strip_prefix('.')
+        .and_then(|name| name.strip_suffix("-wrapped"))
+        .unwrap_or(program);
     PROCESS_ICONS
         .iter()
-        .find(|(matches, _)| commands.iter().any(|command| matches(command)))
+        .find(|(names, _)| names.contains(&program))
         .map_or(IDLE_ICON, |(_, icon)| *icon)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn process(pid: i32, parent: i32, group: i32, program: &str) -> Process {
+        Process {
+            pid,
+            parent,
+            group,
+            program: program.into(),
+        }
+    }
+
+    #[test]
+    fn icons_match_exact_executable_names() {
+        for name in [
+            "codex.txt",
+            "my-codex",
+            "python-tools",
+            "notjj",
+            "nvim codex",
+            "claude.log",
+        ] {
+            assert_eq!(program_icon(name), IDLE_ICON, "{name}");
+        }
+        assert_eq!(program_icon("nvim"), "\u{e01f}\u{e020}\u{e021}");
+        assert_eq!(program_icon(".nvim-wrapped"), program_icon("nvim"));
+        assert_eq!(program_icon("python3.13"), "\u{e028}\u{e029}\u{e02a}");
+        assert_eq!(program_icon("jj"), "");
+        assert_eq!(program_icon("zsh"), "❯");
+    }
+
+    #[test]
+    fn foreground_selection_ignores_icons_background_jobs_and_helpers() {
+        let mut jobs = vec![
+            process(10, 1, 10, "zsh"),
+            process(20, 10, 20, "nvim"),
+            process(21, 20, 20, "codex"),
+            process(30, 10, 30, "claude"),
+        ];
+        assert_eq!(foreground_program(&jobs, 20), Some("nvim"));
+        assert_eq!(foreground_program(&jobs, 10), Some("zsh"));
+        jobs[1].program = "unknown-editor".into();
+        assert_eq!(foreground_program(&jobs, 20), Some("unknown-editor"));
+        jobs.reverse();
+        assert_eq!(foreground_program(&jobs, 20), Some("unknown-editor"));
+        assert_eq!(foreground_program(&jobs, 99), None);
+    }
+
+    #[test]
+    fn a_pipeline_with_an_exited_leader_still_has_a_program() {
+        let jobs = vec![process(22, 10, 20, "ssh"), process(21, 10, 20, "watch")];
+        assert_eq!(foreground_program(&jobs, 20), Some("watch"));
+        assert_eq!(foreground_program(&jobs[0..1], 20), Some("ssh"));
+        assert_eq!(foreground_program(&[], 20), None);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn stat_parser_handles_parentheses_and_excludes_stopped_and_dead_jobs() {
+        assert_eq!(
+            process_stat("20 (a tricky ) name) S 10 20 10 0"),
+            Some((10, 20))
+        );
+        for state in ["T", "t", "Z", "X", "x"] {
+            assert_eq!(process_stat(&format!("20 (nvim) {state} 10 20 10 0")), None);
+        }
+        assert_eq!(process_stat("not a stat record"), None);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn live_identity_ignores_argv_and_disappears_after_exit() {
+        use std::{os::unix::process::CommandExt, process::Command};
+        // Neither a misleading argv[0] nor icon names in file arguments can
+        // change the executable identity. cat blocks on its open stdin.
+        let mut child = Command::new("cat")
+            .arg0("codex")
+            .args(["/dev/stdin", "claude", "opencode", "jj"])
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        let snapshot = processes();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let program = &snapshot
+            .iter()
+            .find(|process| process.pid == pid)
+            .unwrap()
+            .program;
+        assert_eq!(program, "cat");
+        assert_eq!(program_icon(program), IDLE_ICON);
+        assert!(!processes().iter().any(|process| process.pid == pid));
+    }
 }

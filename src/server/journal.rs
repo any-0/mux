@@ -1,8 +1,10 @@
 //! A pane's append-only record of everything its terminal has shown.
 
 use std::{
-    fs::File,
+    fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, ErrorKind, Read, Write},
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender, SyncSender},
     thread,
     time::Duration,
@@ -10,10 +12,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-
-use super::{
-    terminal::process_terminal_bytes,
-};
+use super::terminal::process_terminal_bytes;
 
 pub(super) const JOURNAL_OUTPUT: u8 = 1;
 
@@ -67,7 +66,7 @@ pub(super) struct PaneJournal {
 enum JournalCommand {
     Write(Vec<u8>),
     Flush(SyncSender<std::io::Result<()>>),
-    Replace(File, Vec<u8>, SyncSender<std::io::Result<()>>),
+    Replace(PathBuf, Vec<u8>, SyncSender<std::io::Result<()>>),
     Truncate(u64, SyncSender<std::io::Result<()>>),
 }
 
@@ -172,10 +171,10 @@ impl PaneJournal {
 
     /// Replaces the journal with `records`, which must replay to the same
     /// screen the pane is showing now.
-    pub(super) fn replace(&mut self, file: File, records: &[u8]) -> Result<()> {
+    pub(super) fn replace(&mut self, path: PathBuf, records: &[u8]) -> Result<()> {
         let (sender, receiver) = mpsc::sync_channel(0);
         self.sender
-            .send(JournalCommand::Replace(file, records.to_vec(), sender))
+            .send(JournalCommand::Replace(path, records.to_vec(), sender))
             .context("pane journal writer stopped")?;
         receiver
             .recv()
@@ -222,11 +221,14 @@ fn journal_writer(file: File, receiver: Receiver<JournalCommand>, failures: Send
                 let result = flush_journal(&mut file, &mut dirty, &mut failure, &failures);
                 let _ = reply.send(result);
             }
-            Ok(JournalCommand::Replace(new_file, records, reply)) => {
-                file = BufWriter::with_capacity(64 * 1024, new_file);
-                failure = None;
-                dirty = false;
-                let result = file.write_all(&records).and_then(|()| file.flush());
+            Ok(JournalCommand::Replace(path, records, reply)) => {
+                // Drain earlier writes before replacing the inode. The old
+                // journal remains intact until the complete new one is synced.
+                let result = flush_journal(&mut file, &mut dirty, &mut failure, &failures)
+                    .and_then(|()| replace_journal_file(&path, &records))
+                    .map(|new_file| {
+                        file = BufWriter::with_capacity(64 * 1024, new_file);
+                    });
                 if let Err(error) = &result {
                     record_failure(
                         &mut failure,
@@ -250,6 +252,21 @@ fn journal_writer(file: File, receiver: Receiver<JournalCommand>, failures: Send
             }
         }
     }
+}
+
+fn replace_journal_file(path: &Path, records: &[u8]) -> std::io::Result<File> {
+    let temporary = path.with_extension("ansi.tmp");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    file.write_all(records)?;
+    file.sync_all()?;
+    fs::rename(&temporary, path)?;
+    File::open(path.parent().unwrap())?.sync_all()?;
+    Ok(file)
 }
 
 fn flush_journal(
