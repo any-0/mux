@@ -518,7 +518,10 @@ fn the_state_dot_colours_the_mode_that_owns_the_keys() {
         (theme.state_normal, theme.state_normal_dot)
     );
     let lit = |state: Rgb| (state, theme.bar_label_foreground);
-    assert_eq!(state_colors(false, false, true, &theme), lit(theme.state_vim));
+    assert_eq!(
+        state_colors(false, false, true, &theme),
+        lit(theme.state_vim)
+    );
     assert_eq!(
         state_colors(false, true, true, &theme),
         lit(theme.state_leader)
@@ -886,58 +889,17 @@ fn bar_width_and_vertical_center_follow_window_count() {
     assert_eq!(centered_bar_layout(1, 0, 9), (0, 3, 1));
     assert_eq!(centered_bar_layout(3, 1, 9), (0, 0, 3));
     assert_eq!(centered_bar_layout(12, 10, 5), (10, 1, 1));
-    let icon = |command: &str| process_group_icon(&[command.to_owned()]);
-    assert_eq!(icon("zsh"), "❯");
-    assert_eq!(icon("nvim"), "\u{e01f}\u{e020}\u{e021}");
-    assert_eq!(icon("nvim README.md"), "\u{e01f}\u{e020}\u{e021}");
-    assert_eq!(icon("ssh server.example"), "\u{e022}\u{e023}\u{e024}");
-    assert_eq!(icon("cargo test"), "\u{e025}\u{e026}\u{e027}");
-    assert_eq!(icon("rustc src/main.rs"), "\u{e025}\u{e026}\u{e027}");
-    assert_eq!(icon("python script.py"), "\u{e028}\u{e029}\u{e02a}");
-    assert_eq!(icon("python3.13 -m pytest"), "\u{e028}\u{e029}\u{e02a}");
-    assert_eq!(icon("jj"), "");
-    assert_eq!(icon("codex"), "\u{e015}\u{e016}\u{e017}");
-    assert_eq!(icon("claude"), "\u{e012}\u{e013}\u{e014}");
-    assert_eq!(icon("opencode"), "\u{e02b}\u{e02c}\u{e02d}");
-    assert_eq!(icon("/bin/bash -l"), "$");
-    assert_eq!(icon("nix build .#mux"), "\u{e019}\u{e01a}\u{e01b}");
-    assert_eq!(icon("nixos-rebuild switch"), "\u{e019}\u{e01a}\u{e01b}");
-    assert_eq!(icon("nh os switch"), "\u{e019}\u{e01a}\u{e01b}");
-    assert_eq!(icon("direnv export zsh"), "\u{e019}\u{e01a}\u{e01b}");
-    assert_eq!(icon("watch -n 1 jj log"), "\u{e01c}\u{e01d}\u{e01e}");
-    // A store path is not a nix invocation, and the shell it runs still wins.
-    assert_eq!(icon("/nix/store/abc-zsh-5.9/bin/zsh"), "❯");
-    assert_eq!(process_group_icon(&[]), "·");
-    // A shell leading a group loses to whatever it started.
-    assert_eq!(
-        process_group_icon(&[
-            "bash /Users/me/nix/scripts/cli/switch".to_owned(),
-            "nix build --no-link".to_owned(),
-        ]),
-        "\u{e019}\u{e01a}\u{e01b}"
-    );
-    assert_eq!(
-        process_group_icon(&["-zsh".to_owned(), "direnv export zsh".to_owned()]),
-        "\u{e019}\u{e01a}\u{e01b}"
-    );
     assert_eq!(tree_panel_width(76), 25);
     assert_eq!(tree_panel_width(30), 15);
 
     let separator = painted(3, 4, |frame| {
-        render_bar_separator(
-            frame,
-            3,
-            bar_width(1),
-            Some(2),
-            Theme::default().bar_active,
-        )
+        render_bar_separator(frame, 3, bar_width(1), Some(2), Theme::default().bar_active)
     });
     assert!(separator.contains("38;2;203;163;210"), "{separator:?}");
     assert!(separator.contains(""), "{separator:?}");
     assert!(separator.contains(""), "{separator:?}");
     assert!(separator.contains(""), "{separator:?}");
     assert!(!separator.contains("48;2"), "{separator:?}");
-
 }
 
 #[test]
@@ -1749,6 +1711,156 @@ fn compacting_a_journal_keeps_the_screen_and_recent_scrollback() {
 }
 
 #[test]
+fn journal_replacement_preserves_the_old_inode_and_appends_to_the_new_one() {
+    let directory = env::temp_dir().join(format!("mux-atomic-journal-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let persistence = Persistence {
+        state_file: directory.join("state.bin"),
+        directory: directory.clone(),
+    };
+    let path = persistence.pane_history_path(0);
+    let mut journal = PaneJournal::new(persistence.new_pane_history(0).unwrap(), 0);
+    let mut old_inode = File::open(&path).unwrap();
+    // Leave this queued: replacement must first drain the old writer.
+    journal.append_output(b"original").unwrap();
+    let replacement = encode_journal_record(JOURNAL_OUTPUT, b"replacement").unwrap();
+    journal.replace(path.clone(), &replacement).unwrap();
+    journal.append_output(b" tail").unwrap();
+    journal.flush().unwrap();
+
+    let mut original = Vec::new();
+    old_inode.read_to_end(&mut original).unwrap();
+    assert_eq!(
+        original,
+        encode_journal_record(JOURNAL_OUTPUT, b"original").unwrap()
+    );
+    let mut expected = replacement;
+    expected.extend(encode_journal_record(JOURNAL_OUTPUT, b" tail").unwrap());
+    assert_eq!(fs::read(&path).unwrap(), expected);
+    assert_eq!(journal.length, expected.len() as u64);
+    assert!(!journal.needs_compaction());
+    drop(journal);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn a_failed_journal_replacement_keeps_saved_history() {
+    let directory = env::temp_dir().join(format!("mux-failed-replacement-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let persistence = Persistence {
+        state_file: directory.join("state.bin"),
+        directory: directory.clone(),
+    };
+    let path = persistence.pane_history_path(0);
+    let mut journal = PaneJournal::new(persistence.new_pane_history(0).unwrap(), 0);
+    journal.append_output(b"saved history").unwrap();
+    journal.flush().unwrap();
+    let original = fs::read(&path).unwrap();
+    // Force temporary-file creation to fail, even when tests run as root.
+    fs::create_dir(path.with_extension("ansi.tmp")).unwrap();
+    assert!(journal.replace(path.clone(), b"replacement").is_err());
+    assert_eq!(fs::read(path).unwrap(), original);
+    assert_eq!(journal.length, original.len() as u64);
+    drop(journal);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+fn server_with_pending_bell(directory: &Path) -> (Server, Receiver<Event>, UnixStream) {
+    fs::create_dir(directory).unwrap();
+    let persistence = Persistence {
+        state_file: directory.join("state.bin"),
+        directory: directory.to_path_buf(),
+    };
+    let (events, receiver) = mpsc::channel();
+    let mut server = Server {
+        socket_path: directory.join("mux.sock"),
+        zsh_startup: ZshStartup::create(directory).unwrap(),
+        state_writer: persistence.state_writer(),
+        persistence,
+        process_sampler: mpsc::channel().0,
+        events,
+        sessions: Vec::new(),
+        clients: HashMap::new(),
+        next_session_id: 0,
+        next_pane_id: 0,
+        last_active_pane: None,
+        theme: Theme::default(),
+        dirty: false,
+        state_dirty: false,
+    };
+    server
+        .create_session("before".into(), directory.to_path_buf(), 80, 24)
+        .unwrap();
+    // These tests isolate bell deadlines from process-icon sampling.
+    server.sessions[0].windows[0].panes[0].process_pending = true;
+    let (writer, reader) = UnixStream::pair().unwrap();
+    server.handle_event(Event::Connected(1, writer)).unwrap();
+    server.ring_bell(0, 1);
+    assert!(server.bells_animating());
+    (server, receiver, reader)
+}
+
+#[test]
+fn a_shimmer_pause_schedules_a_future_wake_without_a_new_render() {
+    let directory = env::temp_dir().join(format!("mux-bell-deadline-{}", std::process::id()));
+    let (mut server, _events, _client) = server_with_pending_bell(&directory);
+    let bell = server.sessions[0].windows[0].bell.as_mut().unwrap();
+    bell.started = Instant::now() - Duration::from_micros(BELL_SHIMMER_MICROS as u64 + 100_000);
+    server.advance_bell_animations();
+    assert!(
+        !server.advance_bell_animations(),
+        "the pause has no new frame"
+    );
+    server.dirty = false;
+    let last_render = Instant::now() - Duration::from_millis(100);
+    for _ in 0..3 {
+        let now = Instant::now();
+        assert!(server.next_wake(last_render).unwrap() >= now + ANIMATION_INTERVAL);
+    }
+    server.sessions[0].windows[0].panes[0].child.kill().unwrap();
+    drop(server);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn pending_bells_do_not_defer_session_saves_until_shutdown() {
+    let directory = env::temp_dir().join(format!("mux-bell-save-{}", std::process::id()));
+    let (mut server, receiver, _client) = server_with_pending_bell(&directory);
+    server.persistence.save(&server.persisted_state()).unwrap();
+    server.sessions[0].name = "after".into();
+    server.save_state_soon();
+    let events = server.events.clone();
+    let worker = thread::spawn(move || {
+        server.event_loop(receiver).unwrap();
+        server
+    });
+    // Observe the save before shutdown, whose forced flush would mask the bug.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let saved = loop {
+        let bytes = fs::read(directory.join("state.bin")).unwrap();
+        if decode_persisted_state(&bytes).unwrap().sessions[0].name == "after" {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    events
+        .send(Event::Client(1, ClientMessage::Shutdown))
+        .unwrap();
+    let mut server = worker.join().unwrap();
+    assert!(server.sessions[0].windows[0].bell.as_ref().unwrap().repeat);
+    server.sessions[0].windows[0].panes[0].child.kill().unwrap();
+    drop(server);
+    fs::remove_dir_all(directory).unwrap();
+    assert!(
+        saved,
+        "session changes must reach disk while the bell is pending"
+    );
+}
+
+#[test]
 fn an_overgrown_journal_asks_to_be_compacted() {
     let path = std::env::temp_dir().join("mux-journal-threshold.ansi");
     let file = OpenOptions::new()
@@ -2178,8 +2290,12 @@ fn bench_snapshot() {
     let mut parser = vt100::Parser::new(24, 140, 20_000);
     for i in 0..20_000 {
         parser.process(
-            format!("\x1b[38;5;{}mline {i} \x1b[1;34m{}\x1b[0m\r\n", i % 200, "x".repeat(100))
-                .as_bytes(),
+            format!(
+                "\x1b[38;5;{}mline {i} \x1b[1;34m{}\x1b[0m\r\n",
+                i % 200,
+                "x".repeat(100)
+            )
+            .as_bytes(),
         );
     }
     for _ in 0..3 {
@@ -2192,4 +2308,64 @@ fn bench_snapshot() {
         let rows: Vec<_> = parser.screen().all_rows().cloned().collect();
         println!("clone {} rows undecoded: {:?}", rows.len(), t.elapsed());
     }
+}
+
+#[test]
+fn quiet_panes_refresh_icons_without_output_and_reject_stale_samples() {
+    let directory = env::temp_dir().join(format!("mux-process-refresh-{}", std::process::id()));
+    let (mut server, events, _client) = server_with_pending_bell(&directory);
+    server.clients.clear();
+    server.sessions[0].windows[0].bell = None;
+    server.process_sampler = process_icon_sampler(server.events.clone());
+    let pane = &mut server.sessions[0].windows[0].panes[0];
+    pane.process_pending = false;
+    pane.process_icon = program_icon("codex");
+    pane.process_sampled = Instant::now() - PROCESS_POLL_INTERVAL;
+    let pane_id = pane.id;
+    server.dirty = false;
+    assert!(server.next_wake(Instant::now()).unwrap() <= Instant::now());
+
+    // Ignore all PTY output, including shell prompts. Only the timer and
+    // process worker participate in correcting the stale icon.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while server.pane_mut(pane_id).unwrap().process_icon == program_icon("codex") {
+        assert!(Instant::now() < deadline, "quiet pane kept its old icon");
+        server.sample_process_icons();
+        if let Ok(event @ Event::ProcessIcon(..)) = events.recv_timeout(Duration::from_millis(10)) {
+            server.handle_event(event).unwrap();
+        }
+    }
+    assert!(server.dirty);
+    let pane = server.pane_mut(pane_id).unwrap();
+    let group = pane.master.process_group_leader();
+    let icon = pane.process_icon;
+    assert!(group.is_some());
+    server.dirty = false;
+    server
+        .handle_event(Event::ProcessIcon(pane_id, group, icon))
+        .unwrap();
+    assert!(!server.dirty, "unchanged samples should not repaint");
+    server
+        .handle_event(Event::ProcessIcon(
+            pane_id,
+            Some(i32::MAX),
+            program_icon("codex"),
+        ))
+        .unwrap();
+    assert_eq!(server.pane_mut(pane_id).unwrap().process_icon, icon);
+    assert!(server.next_wake(Instant::now()).unwrap() <= Instant::now());
+
+    // One outstanding request per pane prevents a slow sampler from queuing
+    // old observations indefinitely.
+    let (samples, requests) = mpsc::channel();
+    server.process_sampler = samples;
+    server.sample_process_icons();
+    assert_eq!(requests.try_recv().unwrap().len(), 1);
+    server.pane_mut(pane_id).unwrap().process_sampled = Instant::now() - PROCESS_POLL_INTERVAL;
+    server.sample_process_icons();
+    assert!(requests.try_recv().is_err());
+    assert_eq!(server.next_wake(Instant::now()), None);
+    server.pane_mut(pane_id).unwrap().child.kill().unwrap();
+    drop(server);
+    fs::remove_dir_all(directory).unwrap();
 }

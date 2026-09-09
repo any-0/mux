@@ -113,7 +113,7 @@ enum Event {
     Disconnected(usize),
     PtyOutput(usize, Vec<u8>),
     PtyClosed(usize),
-    ProcessIcon(usize, &'static str),
+    ProcessIcon(usize, Option<i32>, &'static str),
     ClipboardCopied(usize, usize, Result<(), String>),
     ThemeSwitched(usize, String, Result<(), String>),
 }
@@ -131,13 +131,13 @@ struct Pane {
     cwd_sampled: Instant,
     process_icon: &'static str,
     process_sampled: Instant,
+    process_pending: bool,
     history: PaneJournal,
 }
 
 struct ProcessSample {
     pane_id: usize,
     group: Option<i32>,
-    child_pid: Option<u32>,
 }
 
 struct Window {
@@ -305,7 +305,7 @@ struct Server {
     zsh_startup: ZshStartup,
     persistence: Persistence,
     state_writer: StateWriter,
-    process_sampler: Sender<ProcessSample>,
+    process_sampler: Sender<Vec<ProcessSample>>,
     events: Sender<Event>,
     sessions: Vec<Session>,
     clients: HashMap<usize, Client>,
@@ -425,29 +425,22 @@ fn accept_clients(listener: UnixListener, sender: Sender<Event>) {
     });
 }
 
-fn process_icon_sampler(events: Sender<Event>) -> Sender<ProcessSample> {
-    let (sender, receiver) = mpsc::channel::<ProcessSample>();
+fn process_icon_sampler(events: Sender<Event>) -> Sender<Vec<ProcessSample>> {
+    let (sender, receiver) = mpsc::channel::<Vec<ProcessSample>>();
     thread::spawn(move || {
-        while let Ok(sample) = receiver.recv() {
-            let commands = sample
-                .group
-                .map(process_group_info)
-                .filter(|commands| !commands.is_empty())
-                .or_else(|| {
-                    sample
-                        .child_pid
-                        .and_then(|pid| process_info(pid as i32))
-                        .map(|command| vec![command])
-                })
-                .unwrap_or_default();
-            if events
-                .send(Event::ProcessIcon(
-                    sample.pane_id,
-                    process_group_icon(&commands),
-                ))
-                .is_err()
-            {
-                return;
+        while let Ok(samples) = receiver.recv() {
+            let processes = processes();
+            for sample in samples {
+                let icon = sample
+                    .group
+                    .and_then(|group| foreground_program(&processes, group))
+                    .map_or(IDLE_ICON, program_icon);
+                if events
+                    .send(Event::ProcessIcon(sample.pane_id, sample.group, icon))
+                    .is_err()
+                {
+                    return;
+                }
             }
         }
     });
@@ -627,21 +620,29 @@ impl Server {
     fn event_loop(&mut self, receiver: Receiver<Event>) -> Result<()> {
         let mut last_render = Instant::now() - FRAME_INTERVAL;
         loop {
-            let event = match self.next_wake(last_render) {
-                Some(deadline) => {
-                    let timeout = deadline.saturating_duration_since(Instant::now());
-                    match receiver.recv_timeout(timeout) {
-                        Ok(event) => Some(event),
-                        Err(mpsc::RecvTimeoutError::Timeout) => None,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-                    }
-                }
-                // Nothing is pending: sleep until a client or a pane speaks up.
-                None => {
+            self.sample_process_icons();
+            let event = match receiver.try_recv() {
+                Ok(event) => Some(event),
+                Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
+                Err(mpsc::TryRecvError::Empty) => {
+                    // Storage can settle while a bell or popup still needs
+                    // timed repaints. Recompute the deadline after settling,
+                    // since a storage failure can itself require a repaint.
                     self.settle();
-                    match receiver.recv() {
-                        Ok(event) => Some(event),
-                        Err(_) => return Ok(()),
+                    match self.next_wake(last_render) {
+                        Some(deadline) => {
+                            let timeout = deadline.saturating_duration_since(Instant::now());
+                            match receiver.recv_timeout(timeout) {
+                                Ok(event) => Some(event),
+                                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                            }
+                        }
+                        // Nothing is pending: sleep until a client or pane speaks up.
+                        None => match receiver.recv() {
+                            Ok(event) => Some(event),
+                            Err(_) => return Ok(()),
+                        },
                     }
                 }
             };
@@ -674,16 +675,23 @@ impl Server {
     /// When the next repaint is due, or `None` when the daemon can sleep until
     /// something happens.
     fn next_wake(&self, last_render: Instant) -> Option<Instant> {
-        if self.dirty {
-            return Some(last_render + FRAME_INTERVAL);
-        }
-        if self.bells_animating() {
-            return Some(last_render + ANIMATION_INTERVAL);
-        }
         // A message expiring is a change no further event would announce.
         self.clients
             .values()
             .filter_map(|client| client.message.as_ref().map(|message| message.expires))
+            .chain(self.dirty.then_some(last_render + FRAME_INTERVAL))
+            .chain(
+                self.bells_animating()
+                    .then_some(Instant::now() + ANIMATION_INTERVAL),
+            )
+            .chain(
+                self.sessions
+                    .iter()
+                    .flat_map(|session| &session.windows)
+                    .flat_map(|window| &window.panes)
+                    .filter(|pane| !pane.process_pending)
+                    .map(|pane| pane.process_sampled + PROCESS_POLL_INTERVAL),
+            )
             .min()
     }
 
@@ -761,12 +769,12 @@ impl Server {
     }
 
     fn compact_journal(&mut self, pane_id: usize) -> Result<()> {
-        let file = self.persistence.new_pane_history(pane_id)?;
+        let path = self.persistence.pane_history_path(pane_id);
         let pane = self
             .pane_mut(pane_id)
             .context("pane vanished during compaction")?;
         let records = compacted_journal_records(pane.parser.screen_mut())?;
-        pane.history.replace(file, &records)
+        pane.history.replace(path, &records)
     }
 
     fn expire_messages(&mut self) -> bool {
@@ -872,7 +880,6 @@ impl Server {
                 let mut cwd_changed = false;
                 let mut bell_events = 0;
                 let mut failure = None;
-                let mut sample_process = false;
                 let colors = TerminalColors::from(&self.theme);
                 if let Some(pane) = self.pane_mut(pane_id) {
                     failure = pane.history.append_output(&bytes).err();
@@ -911,12 +918,6 @@ impl Server {
                             cwd_changed = true;
                         }
                     }
-                    // A command can start and finish before the periodic poll
-                    // interval elapses.  The prompt marker is the reliable
-                    // transition back to the shell, so refresh immediately or
-                    // a short-lived command's icon can remain stuck forever.
-                    sample_process =
-                        reached_prompt || pane.process_sampled.elapsed() >= PROCESS_POLL_INTERVAL;
                     self.dirty = true;
                 }
                 if let Some(error) = failure {
@@ -928,18 +929,20 @@ impl Server {
                 if cwd_changed {
                     self.save_state_soon();
                 }
-                if sample_process {
-                    self.sample_process_icon(pane_id);
-                }
             }
             Event::PtyClosed(pane_id) => {
                 self.close_pane(pane_id)?;
                 self.dirty = true;
             }
-            Event::ProcessIcon(pane_id, icon) => {
+            Event::ProcessIcon(pane_id, group, icon) => {
                 if let Some(pane) = self.pane_mut(pane_id) {
-                    pane.process_icon = icon;
-                    self.dirty = true;
+                    pane.process_pending = false;
+                    if pane.master.process_group_leader() != group {
+                        pane.process_sampled = Instant::now() - PROCESS_POLL_INTERVAL;
+                    } else if pane.process_icon != icon {
+                        pane.process_icon = icon;
+                        self.dirty = true;
+                    }
                 }
             }
             Event::ClipboardCopied(id, bytes, result) => {
@@ -1174,31 +1177,40 @@ impl Server {
                         }
                         let mut parser_prefix = Vec::new();
                         let Some((reader, history_length)) = restored else {
-                            return (id, ReplayedPane {
-                                parser,
-                                parser_prefix,
-                                valid_length: 0,
-                                history_length: 0,
-                                replayed: false,
-                            });
+                            return (
+                                id,
+                                ReplayedPane {
+                                    parser,
+                                    parser_prefix,
+                                    valid_length: 0,
+                                    history_length: 0,
+                                    replayed: false,
+                                },
+                            );
                         };
                         match replay_pane_journal(&mut parser, &mut parser_prefix, reader) {
-                            Ok(valid_length) => (id, ReplayedPane {
-                                parser,
-                                parser_prefix,
-                                valid_length,
-                                history_length,
-                                replayed: true,
-                            }),
+                            Ok(valid_length) => (
+                                id,
+                                ReplayedPane {
+                                    parser,
+                                    parser_prefix,
+                                    valid_length,
+                                    history_length,
+                                    replayed: true,
+                                },
+                            ),
                             // A corrupt journal costs this pane its scrollback
                             // rather than the session it belongs to.
-                            Err(_) => (id, ReplayedPane {
-                                parser: new_parser(rows, cols),
-                                parser_prefix: Vec::new(),
-                                valid_length: 0,
-                                history_length,
-                                replayed: true,
-                            }),
+                            Err(_) => (
+                                id,
+                                ReplayedPane {
+                                    parser: new_parser(rows, cols),
+                                    parser_prefix: Vec::new(),
+                                    valid_length: 0,
+                                    history_length,
+                                    replayed: true,
+                                },
+                            ),
                         }
                     })
                 })
@@ -1312,6 +1324,7 @@ impl Server {
             cwd_sampled: Instant::now(),
             process_icon: IDLE_ICON,
             process_sampled: Instant::now() - PROCESS_POLL_INTERVAL,
+            process_pending: false,
             history,
         })
     }
@@ -2404,19 +2417,29 @@ impl Server {
             .find(|pane| pane.id == pane_id)
     }
 
-    fn sample_process_icon(&mut self, pane_id: usize) {
-        let Some(pane) = self.pane_mut(pane_id) else {
-            return;
-        };
-        pane.process_sampled = Instant::now();
-        let sample = ProcessSample {
-            pane_id,
-            group: pane.master.process_group_leader(),
-            child_pid: pane.child_pid,
-        };
-        // The whole foreground group, not just its leader: a shell keeps the
-        // lead while the script or direnv hook it started is busy.
-        let _ = self.process_sampler.send(sample);
+    fn sample_process_icons(&mut self) {
+        let now = Instant::now();
+        let samples: Vec<_> = self
+            .sessions
+            .iter_mut()
+            .flat_map(|session| &mut session.windows)
+            .flat_map(|window| &mut window.panes)
+            .filter(|pane| {
+                !pane.process_pending
+                    && now.duration_since(pane.process_sampled) >= PROCESS_POLL_INTERVAL
+            })
+            .map(|pane| {
+                pane.process_sampled = now;
+                pane.process_pending = true;
+                ProcessSample {
+                    pane_id: pane.id,
+                    group: pane.master.process_group_leader(),
+                }
+            })
+            .collect();
+        if !samples.is_empty() {
+            let _ = self.process_sampler.send(samples);
+        }
     }
 
     fn resize_active(&mut self, id: usize) -> Result<()> {

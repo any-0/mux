@@ -230,7 +230,8 @@ impl Server {
         render_bar_separator(frame, rows, bar_width, current_row, separator_rgb);
         let client = &self.clients[&id];
         let (tile, dot) = state_colors(client.literal, client.leader, vim_active, &theme);
-        frame.set_text(1, 1, " ● ", CellAttributes::colors(dot, tile));
+        let icon = if client.literal { "──▶" } else { " ● " };
+        frame.set_text(1, 1, icon, CellAttributes::colors(dot, tile));
         for offset in 0..visible {
             let window = first_window + offset;
             let row = (first_row + offset * 3) as u16 + 2;
