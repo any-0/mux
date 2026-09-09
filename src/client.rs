@@ -11,6 +11,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use crossterm::{
     cursor::{Hide, SetCursorStyle, Show},
     event::{
@@ -83,6 +84,7 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
             session,
             bindings: settings.bindings,
             clipboard_command: settings.clipboard_command,
+            terminal_clipboard: env::var_os("SSH_TTY").is_some_and(|value| !value.is_empty()),
             theme: settings.theme,
             theme_command: settings.theme_command,
             theme_directory: settings.theme_directory,
@@ -135,6 +137,9 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
                 output.write_all(&bytes)?;
                 output.flush()?;
             }
+            Ok(ClientEvent::Server(ServerMessage::Clipboard { selection, data })) => {
+                write_terminal_clipboard(&mut output, &selection, &data)?;
+            }
             Ok(ClientEvent::Server(ServerMessage::Detached)) => return Ok(()),
             // Only a query asks for a listing, and an attached client never does.
             Ok(ClientEvent::Server(ServerMessage::Done | ServerMessage::Listing(_))) => {}
@@ -167,6 +172,20 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
     }
 }
 
+fn write_terminal_clipboard(
+    output: &mut impl Write,
+    selection: &[u8],
+    data: &[u8],
+) -> std::io::Result<()> {
+    write!(
+        output,
+        "\x1b]52;{};{}\x07",
+        String::from_utf8_lossy(selection),
+        STANDARD.encode(data)
+    )?;
+    output.flush()
+}
+
 fn terminal_size() -> Result<(u16, u16)> {
     let (cols, rows) = size().context("read terminal size")?;
     Ok(usable_terminal_size(cols, rows))
@@ -192,8 +211,9 @@ fn truecolor_from(colorterm: Option<&OsStr>, term: Option<&OsStr>) -> bool {
         return true;
     }
     // Some terminals say so in TERM instead of setting COLORTERM at all.
-    term.and_then(OsStr::to_str)
-        .is_some_and(|term| term.contains("direct") || term.contains("truecolor"))
+    term.and_then(OsStr::to_str).is_some_and(|term| {
+        term == "xterm-kitty" || term.contains("direct") || term.contains("truecolor")
+    })
 }
 
 /// Connects to a daemon that is already running. Unlike attaching, a one-shot
@@ -430,6 +450,7 @@ mod tests {
         assert!(truecolor_from(colorterm("truecolor"), None));
         assert!(truecolor_from(colorterm("24bit"), None));
         assert!(truecolor_from(None, colorterm("xterm-direct")));
+        assert!(truecolor_from(None, colorterm("xterm-kitty")));
         // Anything that has not said so is painted for 256 colours.
         assert!(!truecolor_from(None, None));
         assert!(!truecolor_from(None, colorterm("xterm-256color")));
@@ -450,5 +471,12 @@ mod tests {
     #[test]
     fn zero_sized_pty_reports_a_usable_terminal_size() {
         assert_eq!(usable_terminal_size(0, 0), (2, 2));
+    }
+
+    #[test]
+    fn terminal_clipboard_is_an_osc_52_write() {
+        let mut output = Vec::new();
+        write_terminal_clipboard(&mut output, b"c", b"copied text").unwrap();
+        assert_eq!(output, b"\x1b]52;c;Y29waWVkIHRleHQ=\x07");
     }
 }

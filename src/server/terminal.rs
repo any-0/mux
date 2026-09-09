@@ -1,6 +1,8 @@
 //! The glue between a pane's PTY and the `vt100` parser: what the program
 //! inside is told, and what mux makes of what it says back.
 
+use base64::{Engine, engine::general_purpose::STANDARD};
+
 use crate::{
     config::Theme,
     frame::{CursorShape, Rgb},
@@ -18,6 +20,13 @@ pub(super) struct TerminalCallbacks {
     /// The title the program in this pane last set, which is what a window
     /// with no name of its own is called.
     pub(super) title: Option<String>,
+    pub(super) clipboard_writes: Vec<ClipboardWrite>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct ClipboardWrite {
+    pub(super) selection: Vec<u8>,
+    pub(super) data: Vec<u8>,
 }
 
 pub(super) struct PromptReady {
@@ -32,6 +41,15 @@ impl vt100::Callbacks for TerminalCallbacks {
 
     fn visual_bell(&mut self, _: &mut vt100::Screen) {
         self.bell_count += 1;
+    }
+
+    fn copy_to_clipboard(&mut self, _: &mut vt100::Screen, selection: &[u8], data: &[u8]) {
+        if let Ok(data) = STANDARD.decode(data) {
+            self.clipboard_writes.push(ClipboardWrite {
+                selection: selection.to_vec(),
+                data,
+            });
+        }
     }
 
     /// OSC 0 and OSC 2 both arrive here; a window with no name of its own goes

@@ -91,6 +91,18 @@ const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const RESIZE_STEP: u16 = 2;
 /// Lines one turn of the wheel scrolls.
 const MOUSE_SCROLL_LINES: usize = 3;
+const PANE_TERM: &str = "xterm-256color";
+const PANE_COLORTERM: &str = "truecolor";
+
+fn configure_pane_terminal(command: &mut CommandBuilder) {
+    // A pane talks to mux's terminal emulator, not directly to the physical
+    // terminal that launched the client. Advertising the physical terminal
+    // makes remote panes depend on terminal-specific terminfo (for example,
+    // xterm-kitty) and can even make zsh emit malformed colour sequences when
+    // that entry is absent.
+    command.env("TERM", PANE_TERM);
+    command.env("COLORTERM", PANE_COLORTERM);
+}
 
 impl Event {
     /// Whether this came from a client rather than from a pane.
@@ -260,6 +272,7 @@ struct Client {
     previous_session_id: Option<usize>,
     bindings: Bindings,
     clipboard_command: Vec<String>,
+    terminal_clipboard: bool,
     theme: Theme,
     /// What the theme picker runs to switch theme, and where it finds the
     /// themes to offer.
@@ -849,6 +862,7 @@ impl Server {
                         previous_session_id: None,
                         bindings: Bindings::defaults(),
                         clipboard_command: vec!["yank".into()],
+                        terminal_clipboard: false,
                         theme_command: vec!["theme".into()],
                         theme_directory: None,
                         theme: Theme::default(),
@@ -879,6 +893,7 @@ impl Server {
             Event::PtyOutput(pane_id, bytes) => {
                 let mut cwd_changed = false;
                 let mut bell_events = 0;
+                let mut clipboard_writes = Vec::new();
                 let mut failure = None;
                 let colors = TerminalColors::from(&self.theme);
                 if let Some(pane) = self.pane_mut(pane_id) {
@@ -886,6 +901,9 @@ impl Server {
                     let previous_bells = pane.parser.callbacks().bell_count;
                     let had_prompt = pane.parser.callbacks().prompt_ready.is_some();
                     process_terminal_bytes(&mut pane.parser, &mut pane.parser_prefix, &bytes);
+                    clipboard_writes = std::mem::take(
+                        &mut pane.parser.callbacks_mut().clipboard_writes,
+                    );
                     bell_events = pane
                         .parser
                         .callbacks()
@@ -922,6 +940,32 @@ impl Server {
                 }
                 if let Some(error) = failure {
                     self.note_failure(&format!("pane {pane_id} history"), error);
+                }
+                if !clipboard_writes.is_empty() {
+                    let clipboard_session = self.sessions.iter().find_map(|session| {
+                        session
+                            .windows
+                            .iter()
+                            .any(|window| window.panes.iter().any(|pane| pane.id == pane_id))
+                            .then_some(session.id)
+                    });
+                    let clipboard_clients: Vec<_> = self
+                        .clients
+                        .iter()
+                        .filter_map(|(id, client)| {
+                            (client.session_id == clipboard_session).then_some(*id)
+                        })
+                        .collect();
+                    for clipboard in clipboard_writes {
+                        for id in &clipboard_clients {
+                            self.clients[id]
+                                .writer
+                                .send(ServerMessage::Clipboard {
+                                    selection: clipboard.selection.clone(),
+                                    data: clipboard.data.clone(),
+                                });
+                        }
+                    }
                 }
                 if bell_events > 0 {
                     self.ring_bell(pane_id, bell_events);
@@ -1044,6 +1088,7 @@ impl Server {
             session,
             bindings,
             clipboard_command,
+            terminal_clipboard,
             theme,
             theme_command,
             theme_directory,
@@ -1073,6 +1118,7 @@ impl Server {
             client.cwd = cwd;
             client.bindings = bindings;
             client.clipboard_command = clipboard_command;
+            client.terminal_clipboard = terminal_clipboard;
             client.theme = theme;
             client.theme_command = theme_command;
             client.theme_directory = theme_directory;
@@ -1254,6 +1300,8 @@ impl Server {
         parser_prefix: Vec<u8>,
         needs_backing: bool,
     ) -> Result<Pane> {
+        // Clipboard writes are live terminal actions, not restorable screen state.
+        parser.callbacks_mut().clipboard_writes.clear();
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: rows.max(1),
@@ -1265,6 +1313,7 @@ impl Server {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         let mut command = CommandBuilder::new(shell);
         command.cwd(cwd);
+        configure_pane_terminal(&mut command);
         command.env("MUX", self.socket_path.as_os_str());
         command.env("MUX_PANE", id.to_string());
         // Started from inside tmux, the inherited variables would point programs

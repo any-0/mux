@@ -181,6 +181,24 @@ fn a_pane_reports_the_title_its_program_sets() {
 }
 
 #[test]
+fn a_pane_reports_osc_52_clipboard_writes() {
+    let mut parser = new_parser(4, 20);
+    let mut prefix = Vec::new();
+    process_terminal_bytes(
+        &mut parser,
+        &mut prefix,
+        b"\x1b]52;c;Y29waWVkIHRleHQ=\x07",
+    );
+    assert_eq!(
+        parser.callbacks().clipboard_writes,
+        [ClipboardWrite {
+            selection: b"c".to_vec(),
+            data: b"copied text".to_vec(),
+        }]
+    );
+}
+
+#[test]
 fn a_zoomed_window_shows_only_the_active_pane() {
     let area = Rect {
         row: 0,
@@ -380,6 +398,25 @@ fn terminal_keys_preserve_alt_and_modified_arrows() {
     assert_eq!(
         terminal_key_bytes(&crate::config::parse_key("Alt-Shift-a").unwrap(), false),
         b"\x1bA"
+    );
+}
+
+#[test]
+fn pane_terminal_matches_the_emulator_and_backspace_matches_its_terminfo() {
+    let mut command = CommandBuilder::new("zsh");
+    configure_pane_terminal(&mut command);
+
+    assert_eq!(
+        command.get_env("TERM"),
+        Some(std::ffi::OsStr::new("xterm-256color"))
+    );
+    assert_eq!(
+        command.get_env("COLORTERM"),
+        Some(std::ffi::OsStr::new("truecolor"))
+    );
+    assert_eq!(
+        terminal_key_bytes(&crate::config::parse_key("Backspace").unwrap(), false),
+        b"\x7f"
     );
 }
 
