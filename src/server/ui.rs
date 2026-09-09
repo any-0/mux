@@ -606,8 +606,9 @@ pub(super) fn bar_window_label(
 /// The colour of the tile behind the state dot at the top of the bar.
 ///
 /// One tile carries the whole mode: the bar's own colour while mux is watching
-/// for its bindings, grey once a second leader has handed the next key over
-/// wholesale, and a colour of its own for each mode that intercepts keys.
+/// for its bindings, the bell accent once a second leader has handed the next
+/// key over wholesale, and a colour of its own for each mode that intercepts
+/// keys.
 pub(super) fn state_colors(
     passthrough: bool,
     leader: bool,

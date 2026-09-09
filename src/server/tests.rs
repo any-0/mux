@@ -568,6 +568,7 @@ fn the_state_dot_colours_the_mode_that_owns_the_keys() {
         state_colors(true, true, true, &theme),
         lit(theme.state_passthrough)
     );
+    assert_eq!(theme.state_passthrough, theme.bell_base);
 }
 
 #[test]
