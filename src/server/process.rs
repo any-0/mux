@@ -258,14 +258,35 @@ mod tests {
 
     #[cfg(not(target_os = "macos"))]
     #[test]
+    #[ignore = "subprocess fixture that waits for stdin to close"]
+    fn identity_child() {
+        use std::io::Read;
+        std::io::stdin().read_to_end(&mut Vec::new()).unwrap();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
     fn live_identity_ignores_argv_and_disappears_after_exit() {
         use std::{os::unix::process::CommandExt, process::Command};
-        // Neither a misleading argv[0] nor icon names in file arguments can
-        // change the executable identity. cat blocks on its open stdin.
-        let mut child = Command::new("cat")
+        let executable = std::env::current_exe().unwrap();
+        let expected_program = executable.file_name().unwrap().to_str().unwrap();
+        // Use our own executable: multicall utilities can exit when argv[0]
+        // is changed. The fixture blocks on stdin while we inspect its identity.
+        let mut child = Command::new(&executable)
             .arg0("codex")
-            .args(["/dev/stdin", "claude", "opencode", "jj"])
+            .args([
+                "--ignored",
+                "--exact",
+                "server::process::tests::identity_child",
+                "--skip",
+                "claude",
+                "--skip",
+                "opencode",
+                "--skip",
+                "jj",
+            ])
             .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap();
@@ -278,7 +299,7 @@ mod tests {
             .find(|process| process.pid == pid)
             .unwrap()
             .program;
-        assert_eq!(program, "cat");
+        assert_eq!(program, expected_program);
         assert_eq!(program_icon(program), IDLE_ICON);
         assert!(!processes().iter().any(|process| process.pid == pid));
     }
