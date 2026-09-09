@@ -5,7 +5,12 @@ mod protocol;
 mod server;
 mod vim;
 
-use std::{env, ffi::OsString, path::PathBuf};
+use std::{
+    env,
+    ffi::{OsStr, OsString},
+    io::{self, BufRead, Write},
+    path::PathBuf,
+};
 
 use anyhow::{Context, Result, bail};
 
@@ -21,13 +26,21 @@ fn main() {
 
 fn run() -> Result<()> {
     let arguments: Vec<_> = env::args_os().skip(1).collect();
-    if let Some(query) = parse_query(&arguments)? {
-        return client::query(query);
+    let automatic = arguments.first().is_some_and(|argument| argument == "auto");
+    let arguments = if automatic {
+        &arguments[1..]
+    } else {
+        &arguments[..]
+    };
+    if !automatic {
+        if let Some(query) = parse_query(arguments)? {
+            return client::query(query);
+        }
+        if let Some(command) = parse_command(arguments)? {
+            return client::command(command);
+        }
     }
-    if let Some(command) = parse_command(&arguments)? {
-        return client::command(command);
-    }
-    let mut arguments = arguments.into_iter();
+    let mut arguments = arguments.iter();
     let mut config = None;
     let mut session = None;
     while let Some(argument) = arguments.next() {
@@ -71,7 +84,36 @@ fn run() -> Result<()> {
             unknown => bail!("unknown argument {unknown:?}; run mux --help"),
         }
     }
+    if automatic && should_confirm_auto_attach(env::var_os("SSH_TTY").as_deref()) {
+        let stdin = io::stdin();
+        let stdout = io::stdout();
+        if !confirm_auto_attach(&mut stdin.lock(), &mut stdout.lock())? {
+            return Ok(());
+        }
+    }
     client::attach(config.as_deref(), session)
+}
+
+fn should_confirm_auto_attach(ssh_tty: Option<&OsStr>) -> bool {
+    ssh_tty.is_some_and(|value| !value.is_empty())
+}
+
+fn confirm_auto_attach(reader: &mut impl BufRead, writer: &mut impl Write) -> Result<bool> {
+    loop {
+        write!(writer, "Attach to mux? [Y/n] ")?;
+        writer.flush()?;
+
+        let mut answer = String::new();
+        if reader.read_line(&mut answer)? == 0 {
+            writeln!(writer)?;
+            return Ok(false);
+        }
+        match answer.trim().to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => writeln!(writer, "Please answer y or n.")?,
+        }
+    }
 }
 
 /// Windows are addressed by their position in the bar, counting from one.
@@ -257,7 +299,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Option<MuxCommand>> {
 
 fn print_help() {
     println!(
-        "mux - a small personal terminal multiplexer\n\nUSAGE:\n    mux [--config PATH] [--session NAME]\n    mux COMMAND [ARGUMENTS]\n\nCOMMANDS:\n    kill-server                 Stop the daemon and its panes\n    list-sessions, ls           Print one line per session\n    list-windows                Print one line per window of the current session\n    list-panes                  Print one line per pane of the current window\n    choose-tree                 Open the session tree\n    detach                      Detach the active client\n    new-window                  Create a window\n    new-session [-s NAME]       Create and select a session\n    rename-session NAME         Rename the current session\n    rename-window [NAME]        Name the current window, or clear its name\n    split-window [-h|-v]        Split the active pane\n    select-pane -L|-D|-U|-R     Focus an adjacent pane\n    resize-pane -L|-D|-U|-R [N] Move the nearest divider by N cells\n    focus-mode                  Toggle focus mode for the active pane\n    break-pane                  Move the active pane into a window of its own\n    join-pane [-h|-v] -t N      Move the active pane into window N\n    swap-window -t N            Exchange the current window with window N\n    select-window -t NUMBER     Select window 1 through 9\n    vim-mode                    Enter Vim mode\n    set-theme PATH              Apply colors to attached clients\n    kill-pane                   Kill the active pane\n    kill-session                Kill the current session\n    set-session-root            Use the active shell directory as session root\n    jump-to-bell                Jump to the first pending bell\n\nOPTIONS:\n    --config PATH    Apply user bindings after built-in defaults\n                     (default: $XDG_CONFIG_HOME/mux/config.toml)\n    --session NAME   Attach to or create a named session\n    -h, --help       Show this help"
+        "mux - a small personal terminal multiplexer\n\nUSAGE:\n    mux [--config PATH] [--session NAME]\n    mux auto [--config PATH] [--session NAME]\n    mux COMMAND [ARGUMENTS]\n\nCOMMANDS:\n    auto                        Ask before attaching from an SSH login\n    kill-server                 Stop the daemon and its panes\n    list-sessions, ls           Print one line per session\n    list-windows                Print one line per window of the current session\n    list-panes                  Print one line per pane of the current window\n    choose-tree                 Open the session tree\n    detach                      Detach the active client\n    new-window                  Create a window\n    new-session [-s NAME]       Create and select a session\n    rename-session NAME         Rename the current session\n    rename-window [NAME]        Name the current window, or clear its name\n    split-window [-h|-v]        Split the active pane\n    select-pane -L|-D|-U|-R     Focus an adjacent pane\n    resize-pane -L|-D|-U|-R [N] Move the nearest divider by N cells\n    focus-mode                  Toggle focus mode for the active pane\n    break-pane                  Move the active pane into a window of its own\n    join-pane [-h|-v] -t N      Move the active pane into window N\n    swap-window -t N            Exchange the current window with window N\n    select-window -t NUMBER     Select window 1 through 9\n    vim-mode                    Enter Vim mode\n    set-theme PATH              Apply colors to attached clients\n    kill-pane                   Kill the active pane\n    kill-session                Kill the current session\n    set-session-root            Use the active shell directory as session root\n    jump-to-bell                Jump to the first pending bell\n\nOPTIONS:\n    --config PATH    Apply user bindings after built-in defaults\n                     (default: $XDG_CONFIG_HOME/mux/config.toml)\n    --session NAME   Attach to or create a named session\n    -h, --help       Show this help"
     );
 }
 
@@ -297,6 +339,38 @@ mod tests {
     #[test]
     fn attach_options_are_not_parsed_as_commands() {
         assert_eq!(parse_command(&args(&["--session", "work"])).unwrap(), None);
+    }
+
+    #[test]
+    fn auto_attach_only_confirms_for_an_ssh_tty() {
+        assert!(!should_confirm_auto_attach(None));
+        assert!(!should_confirm_auto_attach(Some(OsStr::new(""))));
+        assert!(should_confirm_auto_attach(Some(OsStr::new("/dev/pts/4"))));
+    }
+
+    #[test]
+    fn auto_attach_defaults_to_yes_and_accepts_no() {
+        let mut output = Vec::new();
+        assert!(confirm_auto_attach(&mut "\n".as_bytes(), &mut output).unwrap());
+        assert_eq!(output, b"Attach to mux? [Y/n] ");
+
+        output.clear();
+        assert!(!confirm_auto_attach(&mut "no\n".as_bytes(), &mut output).unwrap());
+        assert_eq!(output, b"Attach to mux? [Y/n] ");
+    }
+
+    #[test]
+    fn auto_attach_reprompts_after_an_unknown_answer_and_declines_eof() {
+        let mut output = Vec::new();
+        assert!(confirm_auto_attach(&mut "maybe\ny\n".as_bytes(), &mut output).unwrap());
+        assert_eq!(
+            output,
+            b"Attach to mux? [Y/n] Please answer y or n.\nAttach to mux? [Y/n] "
+        );
+
+        output.clear();
+        assert!(!confirm_auto_attach(&mut "".as_bytes(), &mut output).unwrap());
+        assert_eq!(output, b"Attach to mux? [Y/n] \n");
     }
 
     #[test]
