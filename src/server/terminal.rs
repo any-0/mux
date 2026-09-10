@@ -1,6 +1,8 @@
 //! The glue between a pane's PTY and the `vt100` parser: what the program
 //! inside is told, and what mux makes of what it says back.
 
+use std::time::{Duration, Instant};
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 
 use crate::{
@@ -10,6 +12,7 @@ use crate::{
 };
 
 pub(super) const SCROLLBACK_LINES: usize = 20_000;
+const SYNCHRONIZED_OUTPUT_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
 pub(super) struct TerminalCallbacks {
@@ -17,6 +20,8 @@ pub(super) struct TerminalCallbacks {
     pub(super) prompt_checkpoint: Option<vt100::Screen>,
     pub(super) prompt_ready: Option<PromptReady>,
     pub(super) cursor_shape: CursorShape,
+    pub(super) synchronized_output: Option<SynchronizedOutput>,
+    pub(super) responses: Vec<u8>,
     /// The title the program in this pane last set, which is what a window
     /// with no name of its own is called.
     pub(super) title: Option<String>,
@@ -27,6 +32,38 @@ pub(super) struct TerminalCallbacks {
 pub(super) struct ClipboardWrite {
     pub(super) selection: Vec<u8>,
     pub(super) data: Vec<u8>,
+}
+
+pub(super) struct SynchronizedOutput {
+    screen: vt100::Screen,
+    cursor_shape: CursorShape,
+    pub(super) expires: Instant,
+}
+
+impl TerminalCallbacks {
+    pub(super) fn expire_synchronized_output(&mut self, now: Instant) -> bool {
+        if self
+            .synchronized_output
+            .as_ref()
+            .is_some_and(|update| now >= update.expires)
+        {
+            self.synchronized_output = None;
+            return true;
+        }
+        false
+    }
+}
+
+/// Applications may move a visible cursor while painting a synchronized
+/// update. Keep both the cells and cursor at the completed screen until it ends.
+pub(super) fn rendered_terminal(
+    parser: &vt100::Parser<TerminalCallbacks>,
+) -> (&vt100::Screen, CursorShape) {
+    let callbacks = parser.callbacks();
+    match &callbacks.synchronized_output {
+        Some(update) => (&update.screen, update.cursor_shape),
+        None => (parser.screen(), callbacks.cursor_shape),
+    }
 }
 
 pub(super) struct PromptReady {
@@ -61,12 +98,44 @@ impl vt100::Callbacks for TerminalCallbacks {
 
     fn unhandled_csi(
         &mut self,
-        _: &mut vt100::Screen,
+        screen: &mut vt100::Screen,
         first_intermediate: Option<u8>,
         second_intermediate: Option<u8>,
         params: &[&[u16]],
         final_character: char,
     ) {
+        if first_intermediate == Some(b'?') {
+            if second_intermediate.is_none()
+                && params.contains(&&[2026][..])
+                && matches!(final_character, 'h' | 'l')
+            {
+                if final_character == 'h' {
+                    let expires = Instant::now() + SYNCHRONIZED_OUTPUT_TIMEOUT;
+                    if let Some(update) = &mut self.synchronized_output {
+                        update.expires = expires;
+                    } else {
+                        self.synchronized_output = Some(SynchronizedOutput {
+                            screen: screen.clone(),
+                            cursor_shape: self.cursor_shape,
+                            expires,
+                        });
+                    }
+                } else {
+                    self.synchronized_output = None;
+                }
+            } else if second_intermediate == Some(b'$')
+                && params == [&[2026][..]]
+                && final_character == 'p'
+            {
+                self.responses
+                    .extend_from_slice(if self.synchronized_output.is_some() {
+                        b"\x1b[?2026;1$y"
+                    } else {
+                        b"\x1b[?2026;2$y"
+                    });
+            }
+            return;
+        }
         if first_intermediate != Some(b' ')
             || second_intermediate.is_some()
             || final_character != 'q'

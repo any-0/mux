@@ -677,6 +677,15 @@ impl Server {
             }
             self.dirty |= self.expire_messages();
             self.dirty |= self.advance_bell_animations();
+            let now = Instant::now();
+            for pane in self
+                .sessions
+                .iter_mut()
+                .flat_map(|session| &mut session.windows)
+                .flat_map(|window| &mut window.panes)
+            {
+                self.dirty |= pane.parser.callbacks_mut().expire_synchronized_output(now);
+            }
             if self.dirty && last_render.elapsed() >= FRAME_INTERVAL {
                 self.render_all();
                 self.dirty = false;
@@ -704,6 +713,19 @@ impl Server {
                     .flat_map(|window| &window.panes)
                     .filter(|pane| !pane.process_pending)
                     .map(|pane| pane.process_sampled + PROCESS_POLL_INTERVAL),
+            )
+            .chain(
+                self.sessions
+                    .iter()
+                    .flat_map(|session| &session.windows)
+                    .flat_map(|window| &window.panes)
+                    .filter_map(|pane| {
+                        pane.parser
+                            .callbacks()
+                            .synchronized_output
+                            .as_ref()
+                            .map(|update| update.expires)
+                    }),
             )
             .min()
     }
@@ -909,12 +931,13 @@ impl Server {
                         .callbacks()
                         .bell_count
                         .saturating_sub(previous_bells) as usize;
-                    let responses = terminal_query_responses(
+                    let mut responses = terminal_query_responses(
                         &mut pane.query_prefix,
                         &bytes,
                         pane.parser.screen().cursor_position(),
                         colors,
                     );
+                    responses.append(&mut pane.parser.callbacks_mut().responses);
                     if !responses.is_empty() {
                         // A pane whose shell has just died cannot take a reply.
                         let _ = pane
@@ -1302,6 +1325,10 @@ impl Server {
     ) -> Result<Pane> {
         // Clipboard writes are live terminal actions, not restorable screen state.
         parser.callbacks_mut().clipboard_writes.clear();
+        // A restored journal belongs to the old process, including any pending
+        // redraw and terminal queries. The new shell starts with the live screen.
+        parser.callbacks_mut().synchronized_output = None;
+        parser.callbacks_mut().responses.clear();
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: rows.max(1),
