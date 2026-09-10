@@ -456,6 +456,80 @@ fn terminal_queries_receive_chunk_safe_color_and_cursor_responses() {
 }
 
 #[test]
+fn synchronized_redraw_never_renders_an_intermediate_cursor() {
+    let mut parser = new_parser(4, 40);
+    let mut prefix = Vec::new();
+    process_terminal_bytes(&mut parser, &mut prefix, b"\x1b[3;5Hprompt\x1b[6 q");
+    let before = parser.screen().contents();
+    let cursor = parser.screen().cursor_position();
+
+    // Simulate a PTY read ending at every byte, including inside the markers.
+    // The application keeps its cursor visible while painting a status line.
+    for byte in b"\x1b[?2026h\x1b[1;1Hstatus\x1b[2 q\x1b[3;11H\x1b[6 q\x1b[?2026" {
+        process_terminal_bytes(&mut parser, &mut prefix, &[*byte]);
+        let (screen, shape) = rendered_terminal(&parser);
+        assert_eq!(screen.contents(), before);
+        assert_eq!(screen.cursor_position(), cursor);
+        assert!(!screen.hide_cursor());
+        assert_eq!(shape, CursorShape::Bar);
+    }
+    process_terminal_bytes(&mut parser, &mut prefix, b"l");
+    let (screen, shape) = rendered_terminal(&parser);
+    assert!(screen.contents().contains("status"));
+    assert_eq!(screen.cursor_position(), cursor);
+    assert_eq!(shape, CursorShape::Bar);
+    assert!(parser.callbacks().synchronized_output.is_none());
+}
+
+#[test]
+fn synchronized_output_queries_report_the_mode_at_the_query() {
+    let mut parser = new_parser(2, 20);
+    let mut prefix = Vec::new();
+    for byte in b"\x1b[?2026$p\x1b[?2026h\x1b[?2026$p\x1b[?2026l\x1b[?2026$p" {
+        process_terminal_bytes(&mut parser, &mut prefix, &[*byte]);
+    }
+    assert_eq!(
+        parser.callbacks().responses,
+        b"\x1b[?2026;2$y\x1b[?2026;1$y\x1b[?2026;2$y"
+    );
+}
+
+#[test]
+fn repeated_synchronized_begin_keeps_the_original_screen_and_hidden_cursor() {
+    let mut parser = new_parser(2, 20);
+    parser.process(b"ready\x1b[?25l\x1b[?2026h");
+    parser.process(b"\x1b[1;1Hpartial\x1b[?25h\x1b[?2026h");
+    let (screen, _) = rendered_terminal(&parser);
+    assert_eq!(screen.contents(), "ready");
+    assert!(screen.hide_cursor());
+    parser.process(b"\x1b[?2026l");
+    let (screen, _) = rendered_terminal(&parser);
+    assert_eq!(screen.contents(), "partial");
+    assert!(!screen.hide_cursor());
+}
+
+#[test]
+fn an_unfinished_synchronized_redraw_expires() {
+    let mut parser = new_parser(2, 20);
+    parser.process(b"ready\x1b[?2026h\x1b[1;1Hupdated");
+    let expires = parser
+        .callbacks()
+        .synchronized_output
+        .as_ref()
+        .unwrap()
+        .expires;
+    assert!(
+        !parser
+            .callbacks_mut()
+            .expire_synchronized_output(expires - Duration::from_millis(1))
+    );
+    assert_eq!(rendered_terminal(&parser).0.contents(), "ready");
+    assert!(parser.callbacks_mut().expire_synchronized_output(expires));
+    assert_eq!(rendered_terminal(&parser).0.contents(), "updated");
+    assert!(!parser.callbacks_mut().expire_synchronized_output(expires));
+}
+
+#[test]
 fn color_queries_follow_the_theme() {
     let theme = Theme {
         bar_label_foreground: (0x01, 0x02, 0x03),

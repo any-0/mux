@@ -137,7 +137,7 @@ impl Server {
         let active_vim_pane = self.active_vim_pane_id(id);
         let cursor_shape = self
             .active_pane(id)
-            .map(|pane| pane.parser.callbacks().cursor_shape)
+            .map(|pane| rendered_terminal(&pane.parser).1)
             .unwrap_or_default();
         let client = &self.clients[&id];
         let theme = client.rendered_theme();
@@ -337,7 +337,7 @@ impl Server {
             }
             render_screen_region(
                 frame,
-                pane.parser.screen(),
+                rendered_terminal(&pane.parser).0,
                 0,
                 Rect {
                     row: rect.row + 1,
@@ -375,7 +375,7 @@ impl Server {
             .find_map(|(pane_id, rect)| (*pane_id == active_pane.id).then_some(*rect))
             .context("active pane missing from layout")?;
         if rect.rows > 0 && rect.cols > 0 {
-            let screen = active_pane.parser.screen();
+            let (screen, cursor_shape) = rendered_terminal(&active_pane.parser);
             let (row, col) = screen.cursor_position();
             // A pane that hides its cursor still says where it is. The position
             // is kept so the terminal's cursor rests in the pane rather than on
@@ -383,7 +383,7 @@ impl Server {
             frame.set_cursor(FrameCursor {
                 row: rect.row + row.min(rect.rows - 1) + 1,
                 col: bar_width + rect.col + col.min(rect.cols - 1) + 1,
-                shape: active_pane.parser.callbacks().cursor_shape,
+                shape: cursor_shape,
                 visible: !screen.hide_cursor(),
             });
         }
@@ -731,7 +731,7 @@ impl Server {
                 .unwrap()
         });
         let pane = &window.panes[pane_index];
-        let screen = pane.parser.screen();
+        let (screen, cursor_shape) = rendered_terminal(&pane.parser);
         let (source_top, source_height) = preview_source_region(screen, preview_height);
         let destination = Rect {
             row: 4,
@@ -740,12 +740,7 @@ impl Server {
             cols: preview_width,
         };
         render_screen_region(frame, screen, source_top, destination);
-        if let Some(cursor) = preview_cursor(
-            screen,
-            pane.parser.callbacks().cursor_shape,
-            source_top,
-            destination,
-        ) {
+        if let Some(cursor) = preview_cursor(screen, cursor_shape, source_top, destination) {
             frame.set_cursor(cursor);
         }
     }
@@ -781,7 +776,7 @@ fn render_session_overview(
             .iter()
             .find(|pane| pane.id == window.active_pane)
             .unwrap();
-        let screen = pane.parser.screen();
+        let (screen, cursor_shape) = rendered_terminal(&pane.parser);
         let (source_top, source_height) = preview_source_region(screen, rect.rows - 1);
         let destination = Rect {
             row: rect.row + 1,
@@ -793,12 +788,7 @@ fn render_session_overview(
         // The grid shows every window at once, so the cursor goes to the one
         // the session would open on.
         if window_index == session.current_window
-            && let Some(cursor) = preview_cursor(
-                screen,
-                pane.parser.callbacks().cursor_shape,
-                source_top,
-                destination,
-            )
+            && let Some(cursor) = preview_cursor(screen, cursor_shape, source_top, destination)
         {
             frame.set_cursor(cursor);
         }
