@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::config::{BellStyle, Bindings, Theme};
+use crate::frame::CursorShape;
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum MuxCommand {
@@ -127,6 +128,7 @@ pub struct Hello {
     pub bell_style: BellStyle,
     /// Whether this client's terminal renders 24-bit colour.
     pub truecolor: bool,
+    pub default_cursor_shape: CursorShape,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

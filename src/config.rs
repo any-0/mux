@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::frame::Rgb;
+use crate::frame::{CursorShape, Rgb};
 use crate::protocol::{ALT, CTRL, Key, KeyCode, SHIFT};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -147,6 +147,7 @@ pub struct Settings {
     pub theme_directory: Option<PathBuf>,
     pub mouse: bool,
     pub bell_style: BellStyle,
+    pub default_cursor_shape: CursorShape,
 }
 
 impl Default for Settings {
@@ -159,6 +160,7 @@ impl Default for Settings {
             theme_directory: default_theme_directory(),
             mouse: false,
             bell_style: BellStyle::default(),
+            default_cursor_shape: CursorShape::default(),
         }
     }
 }
@@ -213,6 +215,7 @@ impl Settings {
                 .or_else(default_theme_directory),
             mouse: config.mouse,
             bell_style: config.bell_style,
+            default_cursor_shape: config.default_cursor_shape,
         })
     }
 }
@@ -405,6 +408,8 @@ struct FileConfig {
     mouse: bool,
     #[serde(default)]
     bell_style: BellStyle,
+    #[serde(default)]
+    default_cursor_shape: CursorShape,
     variant: Option<Variant>,
     #[serde(default)]
     palette: FilePalette,
@@ -1235,6 +1240,29 @@ mod tests {
             Palette::default().background
         );
         fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn default_cursor_shape_loads_and_rejects_unknown_shapes() {
+        let path = std::env::temp_dir().join("mux-cursor-config.toml");
+        for (source, expected) in [
+            ("", CursorShape::Bar),
+            ("default_cursor_shape = \"bar\"", CursorShape::Bar),
+            ("default_cursor_shape = \"block\"", CursorShape::Block),
+            (
+                "default_cursor_shape = \"underline\"",
+                CursorShape::Underline,
+            ),
+        ] {
+            fs::write(&path, source).unwrap();
+            assert_eq!(
+                Settings::load(Some(&path)).unwrap().default_cursor_shape,
+                expected
+            );
+        }
+        fs::write(&path, "default_cursor_shape = \"triangle\"").unwrap();
+        assert!(Settings::load(Some(&path)).is_err());
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

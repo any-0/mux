@@ -19,7 +19,7 @@ pub(super) struct TerminalCallbacks {
     pub(super) bell_count: u64,
     pub(super) prompt_checkpoint: Option<vt100::Screen>,
     pub(super) prompt_ready: Option<PromptReady>,
-    pub(super) cursor_shape: CursorShape,
+    pub(super) cursor_shape: Option<CursorShape>,
     pub(super) synchronized_output: Option<SynchronizedOutput>,
     pub(super) responses: Vec<u8>,
     /// The title the program in this pane last set, which is what a window
@@ -36,7 +36,7 @@ pub(super) struct ClipboardWrite {
 
 pub(super) struct SynchronizedOutput {
     screen: vt100::Screen,
-    cursor_shape: CursorShape,
+    cursor_shape: Option<CursorShape>,
     pub(super) expires: Instant,
 }
 
@@ -58,11 +58,18 @@ impl TerminalCallbacks {
 /// update. Keep both the cells and cursor at the completed screen until it ends.
 pub(super) fn rendered_terminal(
     parser: &vt100::Parser<TerminalCallbacks>,
+    default_cursor_shape: CursorShape,
 ) -> (&vt100::Screen, CursorShape) {
     let callbacks = parser.callbacks();
     match &callbacks.synchronized_output {
-        Some(update) => (&update.screen, update.cursor_shape),
-        None => (parser.screen(), callbacks.cursor_shape),
+        Some(update) => (
+            &update.screen,
+            update.cursor_shape.unwrap_or(default_cursor_shape),
+        ),
+        None => (
+            parser.screen(),
+            callbacks.cursor_shape.unwrap_or(default_cursor_shape),
+        ),
     }
 }
 
@@ -148,9 +155,10 @@ impl vt100::Callbacks for TerminalCallbacks {
             .copied()
             .unwrap_or(0);
         self.cursor_shape = match style {
-            0..=2 => CursorShape::Block,
-            3 | 4 => CursorShape::Underline,
-            5 | 6 => CursorShape::Bar,
+            0 => None,
+            1 | 2 => Some(CursorShape::Block),
+            3 | 4 => Some(CursorShape::Underline),
+            5 | 6 => Some(CursorShape::Bar),
             _ => return,
         };
     }
@@ -169,9 +177,9 @@ impl vt100::Callbacks for TerminalCallbacks {
             }
             [b"50", value] if value.starts_with(b"CursorShape=") => {
                 self.cursor_shape = match value.get(12) {
-                    Some(b'0') => CursorShape::Block,
-                    Some(b'1') => CursorShape::Bar,
-                    Some(b'2') => CursorShape::Underline,
+                    Some(b'0') => Some(CursorShape::Block),
+                    Some(b'1') => Some(CursorShape::Bar),
+                    Some(b'2') => Some(CursorShape::Underline),
                     _ => return,
                 };
             }

@@ -309,6 +309,7 @@ theme_command = ["theme"]
 theme_directory = "/home/j/.config/theme/themes"
 mouse = false
 bell_style = "shimmer"
+default_cursor_shape = "bar"
 
 [normal]
 "Alt-s" = "unbind"
@@ -425,6 +426,13 @@ which is worth having over a slow connection or while recording. `"none"` drops
 the visual entirely; the bell is still recorded, so `jump-to-bell` still finds
 the pane that rang it. The setting is per client, so two terminals attached to
 the same session can differ.
+
+`default_cursor_shape` is `"bar"` by default; `"block"` and `"underline"` are
+also supported. This per-client setting controls the cursor until an application
+requests its own shape. A cursor reset restores the configured default, including
+when Neovim exits. Shapes are steady, without blinking. Mux's Vim mode uses a
+block. Change the setting and reattach to apply it; shell cursor overrides are
+unnecessary.
 
 Unknown tables, keys, actions, invalid mode/action combinations, an unknown
 `bell_style`, and empty clipboard or theme commands stop startup with a

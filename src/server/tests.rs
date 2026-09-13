@@ -184,11 +184,7 @@ fn a_pane_reports_the_title_its_program_sets() {
 fn a_pane_reports_osc_52_clipboard_writes() {
     let mut parser = new_parser(4, 20);
     let mut prefix = Vec::new();
-    process_terminal_bytes(
-        &mut parser,
-        &mut prefix,
-        b"\x1b]52;c;Y29waWVkIHRleHQ=\x07",
-    );
+    process_terminal_bytes(&mut parser, &mut prefix, b"\x1b]52;c;Y29waWVkIHRleHQ=\x07");
     assert_eq!(
         parser.callbacks().clipboard_writes,
         [ClipboardWrite {
@@ -467,14 +463,14 @@ fn synchronized_redraw_never_renders_an_intermediate_cursor() {
     // The application keeps its cursor visible while painting a status line.
     for byte in b"\x1b[?2026h\x1b[1;1Hstatus\x1b[2 q\x1b[3;11H\x1b[6 q\x1b[?2026" {
         process_terminal_bytes(&mut parser, &mut prefix, &[*byte]);
-        let (screen, shape) = rendered_terminal(&parser);
+        let (screen, shape) = rendered_terminal(&parser, CursorShape::Bar);
         assert_eq!(screen.contents(), before);
         assert_eq!(screen.cursor_position(), cursor);
         assert!(!screen.hide_cursor());
         assert_eq!(shape, CursorShape::Bar);
     }
     process_terminal_bytes(&mut parser, &mut prefix, b"l");
-    let (screen, shape) = rendered_terminal(&parser);
+    let (screen, shape) = rendered_terminal(&parser, CursorShape::Bar);
     assert!(screen.contents().contains("status"));
     assert_eq!(screen.cursor_position(), cursor);
     assert_eq!(shape, CursorShape::Bar);
@@ -499,11 +495,11 @@ fn repeated_synchronized_begin_keeps_the_original_screen_and_hidden_cursor() {
     let mut parser = new_parser(2, 20);
     parser.process(b"ready\x1b[?25l\x1b[?2026h");
     parser.process(b"\x1b[1;1Hpartial\x1b[?25h\x1b[?2026h");
-    let (screen, _) = rendered_terminal(&parser);
+    let (screen, _) = rendered_terminal(&parser, CursorShape::Bar);
     assert_eq!(screen.contents(), "ready");
     assert!(screen.hide_cursor());
     parser.process(b"\x1b[?2026l");
-    let (screen, _) = rendered_terminal(&parser);
+    let (screen, _) = rendered_terminal(&parser, CursorShape::Bar);
     assert_eq!(screen.contents(), "partial");
     assert!(!screen.hide_cursor());
 }
@@ -523,9 +519,15 @@ fn an_unfinished_synchronized_redraw_expires() {
             .callbacks_mut()
             .expire_synchronized_output(expires - Duration::from_millis(1))
     );
-    assert_eq!(rendered_terminal(&parser).0.contents(), "ready");
+    assert_eq!(
+        rendered_terminal(&parser, CursorShape::Bar).0.contents(),
+        "ready"
+    );
     assert!(parser.callbacks_mut().expire_synchronized_output(expires));
-    assert_eq!(rendered_terminal(&parser).0.contents(), "updated");
+    assert_eq!(
+        rendered_terminal(&parser, CursorShape::Bar).0.contents(),
+        "updated"
+    );
     assert!(!parser.callbacks_mut().expire_synchronized_output(expires));
 }
 
@@ -1244,17 +1246,49 @@ fn terminal_bells_ignore_osc_terminators_and_render_truecolor_shimmer() {
 }
 
 #[test]
+fn cursor_reset_restores_each_clients_default_after_application_overrides() {
+    let mut parser = new_parser(2, 8);
+    for default in [CursorShape::Bar, CursorShape::Block, CursorShape::Underline] {
+        assert_eq!(rendered_terminal(&parser, default).1, default);
+    }
+    for reset in [b"\x1b[0 q".as_slice(), b"\x1b[ q"] {
+        parser.process(b"\x1b[2 q");
+        assert_eq!(
+            rendered_terminal(&parser, CursorShape::Bar).1,
+            CursorShape::Block
+        );
+        parser.process(reset);
+        for default in [CursorShape::Bar, CursorShape::Block, CursorShape::Underline] {
+            assert_eq!(rendered_terminal(&parser, default).1, default);
+        }
+    }
+    parser.process(b"\x1b[2 q\x1b[?2026h\x1b[0 q");
+    assert_eq!(
+        rendered_terminal(&parser, CursorShape::Bar).1,
+        CursorShape::Block
+    );
+    parser.process(b"\x1b[?2026l");
+    assert_eq!(
+        rendered_terminal(&parser, CursorShape::Bar).1,
+        CursorShape::Bar
+    );
+}
+
+#[test]
 fn application_cursor_shapes_are_preserved_without_blinking() {
     let mut parser = vt100::Parser::new_with_callbacks(2, 8, 0, TerminalCallbacks::default());
 
     parser.process(b"\x1b[5 q");
-    assert_eq!(parser.callbacks().cursor_shape, CursorShape::Bar);
+    assert_eq!(parser.callbacks().cursor_shape, Some(CursorShape::Bar));
     parser.process(b"\x1b[3 q");
-    assert_eq!(parser.callbacks().cursor_shape, CursorShape::Underline);
+    assert_eq!(
+        parser.callbacks().cursor_shape,
+        Some(CursorShape::Underline)
+    );
     parser.process(b"\x1b[1 q");
-    assert_eq!(parser.callbacks().cursor_shape, CursorShape::Block);
+    assert_eq!(parser.callbacks().cursor_shape, Some(CursorShape::Block));
     parser.process(b"\x1b]50;CursorShape=1\x07");
-    assert_eq!(parser.callbacks().cursor_shape, CursorShape::Bar);
+    assert_eq!(parser.callbacks().cursor_shape, Some(CursorShape::Bar));
 
     for (shape, sequence) in [
         (CursorShape::Block, "\x1b[?12l\x1b[2 q"),

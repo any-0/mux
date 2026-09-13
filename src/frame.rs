@@ -149,11 +149,12 @@ impl ColorDepth {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CursorShape {
-    #[default]
     Block,
     Underline,
+    #[default]
     Bar,
 }
 
