@@ -128,11 +128,14 @@ pub(super) fn foreground_program(processes: &[Process], group: i32) -> Option<&s
         .copied()
         .min_by_key(|process| {
             let is_node_launcher = process.program == "node"
-                && candidates
-                    .iter()
-                    .any(|child| child.parent == process.pid);
+                && candidates.iter().any(|child| child.parent == process.pid);
             let has_parent = candidates.iter().any(|parent| parent.pid == process.parent);
-            (is_node_launcher, has_parent, process.pid != group, process.pid)
+            (
+                is_node_launcher,
+                has_parent,
+                process.pid != group,
+                process.pid,
+            )
         })
         .map(|process| process.program.as_str())
 }
@@ -243,10 +246,7 @@ mod tests {
 
     #[test]
     fn foreground_selection_steps_past_a_node_command_launcher() {
-        let jobs = vec![
-            process(20, 10, 20, "node"),
-            process(21, 20, 20, "codex"),
-        ];
+        let jobs = vec![process(20, 10, 20, "node"), process(21, 20, 20, "codex")];
         assert_eq!(foreground_program(&jobs, 20), Some("codex"));
         assert_eq!(foreground_program(&jobs[0..1], 20), Some("node"));
     }

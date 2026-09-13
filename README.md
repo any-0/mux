@@ -54,6 +54,13 @@ a repeated frame costs nothing. Repaints are coalesced into at most one frame
 every 8 ms, and the daemon blocks until an event or the next process sample,
 bell animation, or expiring message is due.
 
+## Documentation
+
+- [`docs/cli.md`](docs/cli.md) — every command, argument, and alias
+- [`docs/scripting.md`](docs/scripting.md) — the `MUX` and `MUX_PANE` variables, queries, and the clipboard command
+- [`docs/ssh.md`](docs/ssh.md) — lost connections, `mux auto`, and the clipboard through SSH
+- [`docs/architecture.md`](docs/architecture.md) — the daemon, the socket, the state, and the source files
+
 ## Build and run
 
 Build without installing anything:
@@ -133,6 +140,19 @@ installed; only the durable runtime state described below is written.
 
 ## Persistence and recovery
 
+### Testing and upgrades
+
+Run `./scripts/test-container` to build an isolated test image and run formatting,
+unit tests, vendored terminal-parser tests, and strict Clippy checks. CI runs this
+against a Docker-in-Docker service; no Rust packages are installed on the host.
+
+The client/daemon protocol has an explicit version. A mismatched running daemon
+must be stopped with its matching binary before attaching with the new version.
+Stopping the daemon ends running pane programs; saved layout and history are
+restored into fresh shells. Installing a binary does not restart a daemon.
+
+### Saved state
+
 Mux keeps durable state in `$XDG_STATE_HOME/mux`, or `$HOME/.local/state/mux`
 when `XDG_STATE_HOME` is unset. This is event-driven rather than timer-based:
 
@@ -141,23 +161,29 @@ when `XDG_STATE_HOME` is unset. This is event-driven rather than timer-based:
   last observed working directories are committed atomically whenever they
   change.
 - Every PTY output chunk and resize is appended to a framed pane journal.
-  Records are buffered while a pane is busy and flushed as soon as the daemon
-  goes idle, so at most a few kilobytes of the newest output is at risk if the
-  machine dies mid-burst. A partially written final record is discarded safely
-  after a crash.
-- A journal that grows past 32 MiB is rewritten while the daemon is idle,
-  keeping the newest 5,000 terminal rows with their formatting. Restoring stays
-  fast no matter how long a pane has been running.
+  The writer flushes buffered records after at most 8 ms of activity and requests
+  a disk sync every second while dirty, and on clean shutdown. Output still in
+  transit or awaiting a completed sync can be lost on machine failure; there is
+  no fixed byte bound. A partially written final record is discarded on recovery.
+- Journals initially become eligible for compaction at 4 MiB, retaining up to
+  20,000 terminal rows with their formatting. The threshold grows when the
+  compacted content itself is large. Replacement and disk syncing run on the
+  journal worker, in order with subsequent output.
 - Starting the daemon rebuilds every session, window, and pane, replays the
   journals to restore scrollback and terminal formatting, then starts a fresh
   shell in each pane's last observed directory. A default attach returns to the
   last selected pane. If the journal ended at an untouched prompt, the new
   prompt replaces it instead of adding a duplicate below it.
 
-State is written once the daemon goes idle rather than on every keystroke, so a
-burst of activity costs no disk writes until it settles. A journal or state
-write that fails takes that pane's history with it, not the daemon: the shells
-keep running and the failure is reported on screen.
+Layout saves are coalesced while idle and submitted at least every 250 ms during
+continuous activity. The state writer keeps only the latest pending layout,
+with a 50 ms debounce and a one-second maximum debounce period. Storage delays
+can extend completion times. Write failures are reported without ending shells.
+
+PTY input runs on a separate bounded writer. PTY output keeps a per-pane 2 MiB
+reservation through its journal write, so slow storage applies backpressure to
+the producing pane. Scrollback backing space is reused once expired rows and
+their snapshots release it.
 
 State remains after `mux stop`, an unexpected daemon exit, logout, or reboot.
 Process memory cannot be reconstructed: commands that were running when the
@@ -332,8 +358,8 @@ default_cursor_shape = "bar"
 ```
 
 Key names use character keys or `Enter`, `Escape`, `Backspace`, `Tab`, `Up`,
-`Down`, `Left`, `Right`, `Home`, `End`, `Delete`, `Insert`, `PageUp`, and
-`PageDown`. Prefix modifiers with `Ctrl-`, `Alt-`, or `Shift-`. Character case
+`Down`, `Left`, `Right`, `Home`, `End`, `Delete`, `Insert`, `PageUp`,
+`PageDown`, or `F1` through `F12`. Prefix modifiers with `Ctrl-`, `Alt-`, or `Shift-`. Character case
 is meaningful: `w` and `W` are distinct.
 
 Available normal actions are `session-tree`, `new-window`, `new-session`,

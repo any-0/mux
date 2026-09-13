@@ -1,0 +1,6 @@
+.git
+.jj
+.direnv
+.nix
+target
+vendor/vt100/target

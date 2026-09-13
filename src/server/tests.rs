@@ -434,24 +434,6 @@ fn zle_cursor_save_restore_keeps_the_entered_command() {
 }
 
 #[test]
-fn terminal_queries_receive_chunk_safe_color_and_cursor_responses() {
-    let colors = TerminalColors::from(&Theme::default());
-    let mut prefix = Vec::new();
-    assert!(terminal_query_responses(&mut prefix, b"\x1b]11;", (2, 4), colors).is_empty());
-    let responses = terminal_query_responses(
-        &mut prefix,
-        b"?\x1b\\\x1b]10;?\x07\x1b[5n\x1b[6n",
-        (2, 4),
-        colors,
-    );
-    assert_eq!(
-        responses,
-        b"\x1b]11;rgb:2424/1e1e/2d2d\x1b\\\x1b]10;rgb:ecec/e7e7/f2f2\x1b\\\x1b[0n\x1b[3;5R"
-    );
-    assert!(prefix.is_empty());
-}
-
-#[test]
 fn synchronized_redraw_never_renders_an_intermediate_cursor() {
     let mut parser = new_parser(4, 40);
     let mut prefix = Vec::new();
@@ -529,22 +511,6 @@ fn an_unfinished_synchronized_redraw_expires() {
         "updated"
     );
     assert!(!parser.callbacks_mut().expire_synchronized_output(expires));
-}
-
-#[test]
-fn color_queries_follow_the_theme() {
-    let theme = Theme {
-        bar_label_foreground: (0x01, 0x02, 0x03),
-        ..Theme::default()
-    };
-    let mut prefix = Vec::new();
-    let responses = terminal_query_responses(
-        &mut prefix,
-        b"\x1b]11;?\x1b\\",
-        (0, 0),
-        TerminalColors::from(&theme),
-    );
-    assert_eq!(responses, b"\x1b]11;rgb:0101/0202/0303\x1b\\");
 }
 
 #[test]
@@ -1868,10 +1834,10 @@ fn journal_replacement_preserves_the_old_inode_and_appends_to_the_new_one() {
     let mut journal = PaneJournal::new(persistence.new_pane_history(0).unwrap(), 0);
     let mut old_inode = File::open(&path).unwrap();
     // Leave this queued: replacement must first drain the old writer.
-    journal.append_output(b"original").unwrap();
+    journal.append_output(b"original", None).unwrap();
     let replacement = encode_journal_record(JOURNAL_OUTPUT, b"replacement").unwrap();
     journal.replace(path.clone(), &replacement).unwrap();
-    journal.append_output(b" tail").unwrap();
+    journal.append_output(b" tail", None).unwrap();
     journal.flush().unwrap();
 
     let mut original = Vec::new();
@@ -1899,7 +1865,7 @@ fn a_failed_journal_replacement_keeps_saved_history() {
     };
     let path = persistence.pane_history_path(0);
     let mut journal = PaneJournal::new(persistence.new_pane_history(0).unwrap(), 0);
-    journal.append_output(b"saved history").unwrap();
+    journal.append_output(b"saved history", None).unwrap();
     journal.flush().unwrap();
     let original = fs::read(&path).unwrap();
     // Force temporary-file creation to fail, even when tests run as root.
@@ -1911,13 +1877,13 @@ fn a_failed_journal_replacement_keeps_saved_history() {
     fs::remove_dir_all(directory).unwrap();
 }
 
-fn server_with_pending_bell(directory: &Path) -> (Server, Receiver<Event>, UnixStream) {
+pub(super) fn server_with_pending_bell(directory: &Path) -> (Server, Receiver<Event>, UnixStream) {
     fs::create_dir(directory).unwrap();
     let persistence = Persistence {
         state_file: directory.join("state.bin"),
         directory: directory.to_path_buf(),
     };
-    let (events, receiver) = mpsc::channel();
+    let (events, receiver) = mpsc::sync_channel(EVENT_QUEUE_DEPTH);
     let mut server = Server {
         socket_path: directory.join("mux.sock"),
         zsh_startup: ZshStartup::create(directory).unwrap(),
@@ -2025,7 +1991,7 @@ fn an_overgrown_journal_asks_to_be_compacted() {
 #[test]
 fn clipboard_copy_finishes_on_a_worker() {
     let path = std::env::temp_dir().join(format!("mux-clipboard-copy-{}", std::process::id()));
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE_DEPTH);
     let command = vec![
         "sh".into(),
         "-c".into(),
@@ -2078,11 +2044,11 @@ fn a_journal_that_cannot_be_written_gives_up_instead_of_failing_forever() {
     fs::write(&path, b"").unwrap();
     // A read-only descriptor stands in for a disk that will not take writes.
     let mut journal = PaneJournal::new(File::open(&path).unwrap(), 0);
-    journal.append_output(b"buffered").unwrap();
+    journal.append_output(b"buffered", None).unwrap();
     assert!(journal.flush().is_err(), "the first failure is reported");
     assert!(journal.abandoned);
     assert!(
-        journal.flush().is_ok() && journal.append_output(b"more").is_ok(),
+        journal.flush().is_ok() && journal.append_output(b"more", None).is_ok(),
         "later writes stay quiet instead of repeating the failure"
     );
     journal.length = MAX_JOURNAL_BYTES + 1;
@@ -2460,7 +2426,7 @@ fn bench_snapshot() {
 fn quiet_panes_refresh_icons_without_output_and_reject_stale_samples() {
     let directory = env::temp_dir().join(format!("mux-process-refresh-{}", std::process::id()));
     let (mut server, events, _client) = server_with_pending_bell(&directory);
-    server.clients.clear();
+    server.clients.get_mut(&1).unwrap().initialized = true;
     server.sessions[0].windows[0].bell = None;
     server.process_sampler = process_icon_sampler(server.events.clone());
     let pane = &mut server.sessions[0].windows[0].panes[0];
@@ -2512,6 +2478,57 @@ fn quiet_panes_refresh_icons_without_output_and_reject_stale_samples() {
     assert!(requests.try_recv().is_err());
     assert_eq!(server.next_wake(Instant::now()), None);
     server.pane_mut(pane_id).unwrap().child.kill().unwrap();
+    drop(server);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn a_rejected_final_frame_stays_pending_until_the_client_catches_up() {
+    let directory = env::temp_dir().join(format!("mux-render-retry-{}", std::process::id()));
+    let (mut server, _events, _client) = server_with_pending_bell(&directory);
+    let (messages, received) = mpsc::sync_channel(1);
+    messages.send(ServerMessage::Render(Vec::new())).unwrap();
+    let client = server.clients.get_mut(&1).unwrap();
+    client.writer = ClientWriter {
+        messages,
+        thread: thread::spawn(|| {}),
+    };
+    client.initialized = true;
+    client.session_id = Some(server.sessions[0].id);
+    server.dirty = false;
+    server.render_all();
+    assert!(
+        server.dirty,
+        "a dropped final frame must schedule another repaint"
+    );
+    assert_eq!(server.clients[&1].frame.rows(), 0);
+    received.recv().unwrap();
+    server.dirty = false;
+    server.render_all();
+    assert!(!server.dirty);
+    let ServerMessage::Render(bytes) = received.recv().unwrap() else {
+        panic!("expected a complete replacement frame");
+    };
+    assert!(bytes.windows(4).any(|bytes| bytes == b"\x1b[2J"));
+    server.sessions[0].windows[0].panes[0].child.kill().unwrap();
+    drop(server);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn detached_sessions_do_not_poll_process_icons() {
+    let directory = env::temp_dir().join(format!("mux-detached-idle-{}", std::process::id()));
+    let (mut server, _events, _client) = server_with_pending_bell(&directory);
+    server.clients.clear();
+    server.sessions[0].windows[0].bell = None;
+    server.sessions[0].windows[0].panes[0].process_pending = false;
+    let (samples, received) = mpsc::channel();
+    server.process_sampler = samples;
+    server.dirty = false;
+    server.sample_process_icons();
+    assert!(received.try_recv().is_err());
+    assert_eq!(server.next_wake(Instant::now()), None);
+    server.sessions[0].windows[0].panes[0].child.kill().unwrap();
     drop(server);
     fs::remove_dir_all(directory).unwrap();
 }

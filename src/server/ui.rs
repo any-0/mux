@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
     config::{BellStyle, Theme},
@@ -361,10 +362,7 @@ pub(super) fn render_preview_window_title(
         ),
     };
     let title = truncate(&title, rect.cols as usize);
-    let line = format!(
-        "{title}{}",
-        " ".repeat(rect.cols as usize - title.chars().count())
-    );
+    let line = format!("{title}{}", " ".repeat(rect.cols as usize - title.width()));
     let background = if window_index == session.current_window {
         theme.bar_active
     } else {
@@ -415,8 +413,8 @@ pub(super) fn compact_path(path: &Path) -> String {
 }
 
 pub(super) fn two_sided_line(left: &str, right: &str, width: usize) -> String {
-    let left_width = left.chars().count();
-    let right_width = right.chars().count();
+    let left_width = left.width();
+    let right_width = right.width();
     if left_width + right_width >= width {
         return truncate(left, width);
     }
@@ -472,13 +470,11 @@ pub(super) fn render_popup_box(
     }
 
     let cursor_cell = usize::from(cursor.is_some());
-    let width = (text.chars().count() + 4 + cursor_cell)
-        .max(10)
-        .min(cols as usize);
+    let width = (text.width() + 4 + cursor_cell).max(10).min(cols as usize);
     let inner_width = width - 2;
     let text_width = inner_width - 2;
     let (visible, cursor) = popup_text_window(text, cursor, text_width);
-    let padding = text_width.saturating_sub(visible.chars().count());
+    let padding = text_width.saturating_sub(visible.width());
     let left = ((cols as usize - width) / 2 + 1) as u16;
     let top = match anchor {
         PopupAnchor::Center => ((rows as usize - 3) / 2 + 1) as u16,
@@ -525,20 +521,49 @@ pub(super) fn popup_text_window(
 ) -> (String, Option<usize>) {
     let characters: Vec<_> = text.chars().collect();
     let Some(cursor) = cursor else {
-        return (characters.into_iter().take(width).collect(), None);
+        return (truncate(text, width), None);
     };
     let cursor = cursor.min(characters.len());
-    let start = if cursor < width {
-        0
-    } else {
-        cursor + 1 - width
-    };
-    let visible = characters.into_iter().skip(start).take(width).collect();
-    (visible, Some(cursor - start))
+    let mut start = cursor;
+    let mut before_cursor = 0;
+    while start > 0 {
+        let character_width = characters[start - 1].width().unwrap_or(0);
+        if before_cursor + character_width >= width {
+            break;
+        }
+        before_cursor += character_width;
+        start -= 1;
+    }
+    while start < cursor && characters[start].width().unwrap_or(0) == 0 {
+        start += 1;
+    }
+    let visible = characters[start..]
+        .iter()
+        .copied()
+        .scan(0, |used, character| {
+            let character_width = character.width().unwrap_or(0);
+            if *used + character_width > width {
+                return None;
+            }
+            *used += character_width;
+            Some(character)
+        })
+        .collect();
+    (visible, Some(before_cursor))
 }
 
 pub(super) fn truncate(value: &str, width: usize) -> String {
-    value.chars().take(width).collect()
+    value
+        .chars()
+        .scan(0, |used, character| {
+            let character_width = character.width().unwrap_or(0);
+            if *used + character_width > width {
+                return None;
+            }
+            *used += character_width;
+            Some(character)
+        })
+        .collect()
 }
 
 pub(super) fn bar_width(window_count: usize) -> u16 {
@@ -640,5 +665,29 @@ pub(super) fn tree_panel_width(available_width: u16) -> u16 {
         (available_width / 2).max(1)
     } else {
         (available_width / 3).clamp(24, 38)
+    }
+}
+
+#[cfg(test)]
+mod unicode_tests {
+    use super::{popup_text_window, truncate, two_sided_line};
+
+    #[test]
+    fn clipping_counts_display_cells_and_keeps_combining_marks_with_their_base() {
+        assert_eq!(truncate("a界b", 3), "a界");
+        assert_eq!(truncate("e\u{301}x", 1), "e\u{301}");
+        assert_eq!(two_sided_line("界", "x", 4), "界 x");
+    }
+
+    #[test]
+    fn rename_cursor_is_positioned_in_display_cells() {
+        assert_eq!(
+            popup_text_window("a界bc", Some(3), 4),
+            ("界bc".into(), Some(3))
+        );
+        assert_eq!(
+            popup_text_window("e\u{301}x", Some(2), 3),
+            ("e\u{301}x".into(), Some(1))
+        );
     }
 }

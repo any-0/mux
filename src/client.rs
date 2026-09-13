@@ -1,7 +1,7 @@
 use std::{
     env,
     ffi::OsStr,
-    io::{Write, stdout},
+    io::{Read, Write, stdout},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -38,6 +38,7 @@ enum ClientEvent {
     ServerDisconnected,
     Terminal(Event),
     TerminalError(String),
+    ServerError(String),
 }
 
 /// Where the daemon listens.
@@ -106,8 +107,12 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
                         return;
                     }
                 }
-                _ => {
+                Ok(None) => {
                     let _ = server_sender.send(ClientEvent::ServerDisconnected);
+                    return;
+                }
+                Err(error) => {
+                    let _ = server_sender.send(ClientEvent::ServerError(error.to_string()));
                     return;
                 }
             }
@@ -146,8 +151,11 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
             Ok(ClientEvent::Server(ServerMessage::Done | ServerMessage::Listing(_))) => {}
             Ok(ClientEvent::Server(ServerMessage::Error(error))) => bail!("server: {error}"),
             Ok(ClientEvent::ServerDisconnected) | Err(_) => {
-                bail!("multiplexer server disconnected")
+                bail!(
+                    "multiplexer server disconnected; if mux was just updated, restart the daemon so client and daemon use the same version"
+                )
             }
+            Ok(ClientEvent::ServerError(error)) => bail!("multiplexer server protocol: {error}"),
             Ok(ClientEvent::Terminal(Event::Key(key)))
                 if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
             {
@@ -229,7 +237,9 @@ fn connect() -> Result<UnixStream> {
 fn request(message: ClientMessage) -> Result<Option<ServerMessage>> {
     let mut stream = connect()?;
     write_message(&mut stream, &message)?;
-    read_message(&mut stream)
+    read_message(&mut stream).context(
+        "read daemon response; if mux was just updated, restart the daemon so client and daemon use the same version",
+    )
 }
 
 /// The pane a script is running in, which tells the daemon which session it
@@ -246,9 +256,9 @@ pub fn stop() -> Result<()> {
     }
 }
 
-pub fn command(command: MuxCommand) -> Result<()> {
+pub fn command(command: MuxCommand, pane: Option<usize>) -> Result<()> {
     let message = ClientMessage::Command {
-        pane_id: origin_pane(),
+        pane_id: pane.or_else(origin_pane),
         command,
     };
     match request(message)? {
@@ -259,10 +269,11 @@ pub fn command(command: MuxCommand) -> Result<()> {
 }
 
 /// Asks the daemon a question and prints the answer, one item per line.
-pub fn query(query: MuxQuery) -> Result<()> {
+pub fn query(query: MuxQuery, pane: Option<usize>, json: bool) -> Result<()> {
     let message = ClientMessage::Query {
-        pane_id: origin_pane(),
+        pane_id: pane.or_else(origin_pane),
         query,
+        json,
     };
     match request(message)? {
         Some(ServerMessage::Listing(lines)) => {
@@ -282,25 +293,75 @@ fn connect_or_start(path: &Path) -> Result<UnixStream> {
         return Ok(stream);
     }
     let executable = env::current_exe().context("locate mux executable")?;
-    Command::new(executable)
+    let mut child = Command::new(executable)
         .arg("__server")
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .context("start multiplexer daemon")?;
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let stderr = child
+        .stderr
+        .take()
+        .context("capture daemon startup errors")?;
+    let stderr = thread::spawn(move || capture_stderr(stderr));
+    wait_for_daemon(path, child, stderr, Instant::now() + Duration::from_secs(2))
+}
+
+fn wait_for_daemon(
+    path: &Path,
+    mut child: std::process::Child,
+    stderr: thread::JoinHandle<String>,
+    deadline: Instant,
+) -> Result<UnixStream> {
     loop {
         match UnixStream::connect(path) {
             Ok(stream) => return Ok(stream),
-            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
+            Err(_) if Instant::now() < deadline => {
+                // A concurrently started daemon may win the state lock and
+                // open the socket after this child exits, so keep waiting.
+                let _ = child.try_wait()?;
+                thread::sleep(Duration::from_millis(20));
+            }
             Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("daemon did not open {}", path.display()));
+                let _ = child.kill();
+                let _ = child.wait();
+                let stderr = stderr.join().unwrap_or_default();
+                return daemon_start_error(path, error, &stderr);
             }
         }
     }
+}
+
+fn daemon_start_error(
+    path: &Path,
+    connect_error: std::io::Error,
+    stderr: &str,
+) -> Result<UnixStream> {
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        Err(connect_error).with_context(|| format!("daemon did not open {}", path.display()))
+    } else {
+        Err(connect_error)
+            .with_context(|| format!("daemon did not open {}: {stderr}", path.display()))
+    }
+}
+
+fn capture_stderr(mut stderr: impl Read) -> String {
+    const LIMIT: usize = 64 * 1024;
+    let mut captured = Vec::new();
+    let mut chunk = [0; 4096];
+    while let Ok(length) = stderr.read(&mut chunk) {
+        if length == 0 {
+            break;
+        }
+        captured.extend_from_slice(&chunk[..length]);
+        if captured.len() > LIMIT {
+            captured.drain(..captured.len() - LIMIT);
+        }
+    }
+    String::from_utf8_lossy(&captured).into_owned()
 }
 
 fn convert_key(code: CrosstermKeyCode, modifiers: KeyModifiers) -> Option<Key> {
@@ -347,6 +408,7 @@ fn convert_key(code: CrosstermKeyCode, modifiers: KeyModifiers) -> Option<Key> {
         CrosstermKeyCode::Insert => KeyCode::Insert,
         CrosstermKeyCode::PageUp => KeyCode::PageUp,
         CrosstermKeyCode::PageDown => KeyCode::PageDown,
+        CrosstermKeyCode::F(number @ 1..=12) => KeyCode::F(number),
         _ => return None,
     };
     Some(Key {
@@ -396,11 +458,12 @@ struct TerminalGuard {
 impl TerminalGuard {
     fn enter(mouse: bool) -> Result<Self> {
         enable_raw_mode()?;
+        let guard = Self { mouse };
         execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste, Hide)?;
         if mouse {
             execute!(stdout(), EnableMouseCapture)?;
         }
-        Ok(Self { mouse })
+        Ok(guard)
     }
 }
 
@@ -440,6 +503,21 @@ mod tests {
     }
 
     #[test]
+    fn function_keys_are_forwarded_through_the_protocol() {
+        assert_eq!(
+            convert_key(CrosstermKeyCode::F(12), KeyModifiers::CONTROL),
+            Some(Key {
+                code: KeyCode::F(12),
+                modifiers: CTRL,
+            })
+        );
+        assert_eq!(
+            convert_key(CrosstermKeyCode::F(13), KeyModifiers::NONE),
+            None
+        );
+    }
+
+    #[test]
     fn truecolor_is_taken_from_colorterm_or_a_direct_term() {
         let colorterm = |value| Some(OsStr::new(value));
         assert!(truecolor_from(colorterm("truecolor"), None));
@@ -473,5 +551,26 @@ mod tests {
         let mut output = Vec::new();
         write_terminal_clipboard(&mut output, b"c", b"copied text").unwrap();
         assert_eq!(output, b"\x1b]52;c;Y29waWVkIHRleHQ=\x07");
+    }
+
+    #[test]
+    fn daemon_start_error_includes_captured_stderr() {
+        let socket = env::temp_dir().join(format!("mux-test-{}.sock", std::process::id()));
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "echo daemon setup failed >&2; exit 1"])
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let stderr = thread::spawn(move || capture_stderr(stderr));
+        let error = wait_for_daemon(
+            &socket,
+            child,
+            stderr,
+            Instant::now() + Duration::from_millis(100),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("daemon setup failed"));
+        assert!(error.to_string().contains(socket.to_str().unwrap()));
     }
 }

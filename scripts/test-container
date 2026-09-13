@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+repository=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+suffix="$$"
+image="mux-test:$suffix"
+target_volume="mux-test-target-$suffix"
+registry_volume="mux-test-registry-$suffix"
+
+cleanup() {
+    docker image rm --force "$image" >/dev/null 2>&1 || true
+    docker volume rm --force "$target_volume" "$registry_volume" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT HUP INT TERM
+
+docker build --file "$repository/Dockerfile.test" --tag "$image" "$repository"
+docker volume create "$target_volume" >/dev/null
+docker volume create "$registry_volume" >/dev/null
+docker run --rm --init \
+    --volume "$target_volume:/target" \
+    --volume "$registry_volume:/usr/local/cargo/registry" \
+    --workdir /workspace \
+    --env CARGO_TARGET_DIR=/target \
+    "$image" \
+    sh -c '
+        set -eu
+        cargo fmt --all -- --check
+        cargo test --locked
+        cargo test --manifest-path vendor/vt100/Cargo.toml --locked --lib
+        cargo clippy --locked --all-targets -- -D warnings
+    '

@@ -994,6 +994,15 @@ pub fn parse_key(value: &str) -> Result<Key> {
         "insert" => KeyCode::Insert,
         "pageup" => KeyCode::PageUp,
         "pagedown" => KeyCode::PageDown,
+        function if function.starts_with('f') && function.len() > 1 => {
+            let number: u8 = function[1..]
+                .parse()
+                .context("function keys are F1 through F12")?;
+            if !(1..=12).contains(&number) {
+                bail!("function keys are F1 through F12");
+            }
+            KeyCode::F(number)
+        }
         _ => {
             let mut chars = name.chars();
             let character = chars.next().context("missing key name")?;
@@ -1009,6 +1018,21 @@ pub fn parse_key(value: &str) -> Result<Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn function_keys_can_be_bound_with_modifiers() {
+        assert_eq!(
+            parse_key("Ctrl-F12").unwrap(),
+            Key {
+                code: KeyCode::F(12),
+                modifiers: CTRL
+            }
+        );
+        assert_eq!(parse_key("F1").unwrap().code, KeyCode::F(1));
+        assert_eq!(parse_key("f").unwrap().code, KeyCode::Char('f'));
+        assert!(parse_key("F0").is_err());
+        assert!(parse_key("F13").is_err());
+    }
 
     #[test]
     fn the_default_config_lives_under_the_config_home() {

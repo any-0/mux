@@ -61,6 +61,6 @@ mod term;
 pub use attrs::{Color, UnderlineStyle};
 pub use callbacks::Callbacks;
 pub use cell::Cell;
-pub use parser::Parser;
+pub use parser::{MAX_OSC_BYTES, Parser};
 pub use row::{Cells, Row};
 pub use screen::{MouseProtocolEncoding, MouseProtocolMode, Screen};

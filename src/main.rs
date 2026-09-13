@@ -17,6 +17,19 @@ use anyhow::{Context, Result, bail};
 use crate::config::Theme;
 use crate::protocol::{MuxCommand, MuxQuery};
 
+#[derive(Debug, Eq, PartialEq)]
+struct QueryInvocation {
+    query: MuxQuery,
+    pane_id: Option<usize>,
+    json: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct CommandInvocation {
+    command: MuxCommand,
+    pane_id: Option<usize>,
+}
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("mux: {error:#}");
@@ -33,11 +46,11 @@ fn run() -> Result<()> {
         &arguments[..]
     };
     if !automatic {
-        if let Some(query) = parse_query(arguments)? {
-            return client::query(query);
+        if let Some(invocation) = parse_query_invocation(arguments)? {
+            return client::query(invocation.query, invocation.pane_id, invocation.json);
         }
-        if let Some(command) = parse_command(arguments)? {
-            return client::command(command);
+        if let Some(invocation) = parse_command_invocation(arguments)? {
+            return client::command(invocation.command, invocation.pane_id);
         }
     }
     let mut arguments = arguments.iter();
@@ -143,6 +156,69 @@ fn parse_query(arguments: &[OsString]) -> Result<Option<MuxQuery>> {
         bail!("{name} takes no arguments")
     }
     Ok(Some(query))
+}
+
+fn parse_query_invocation(arguments: &[OsString]) -> Result<Option<QueryInvocation>> {
+    let Some(name) = arguments.first() else {
+        return Ok(None);
+    };
+    let Some(query) = parse_query(std::slice::from_ref(name))? else {
+        return Ok(None);
+    };
+    let mut pane_id = None;
+    let mut json = false;
+    let mut rest = arguments[1..].iter();
+    while let Some(argument) = rest.next() {
+        match argument.to_string_lossy().as_ref() {
+            "--pane" => {
+                if pane_id.is_some() {
+                    bail!("--pane may be given only once")
+                }
+                pane_id = Some(pane_id_argument(
+                    rest.next()
+                        .ok_or_else(|| anyhow::anyhow!("--pane needs an ID"))?,
+                )?);
+            }
+            "--json" if !json => json = true,
+            "--json" => bail!("--json may be given only once"),
+            unknown => bail!("{} does not accept {unknown:?}", name.to_string_lossy()),
+        }
+    }
+    Ok(Some(QueryInvocation {
+        query,
+        pane_id,
+        json,
+    }))
+}
+
+fn parse_command_invocation(arguments: &[OsString]) -> Result<Option<CommandInvocation>> {
+    let Some(name) = arguments.first() else {
+        return Ok(None);
+    };
+    let mut pane_id = None;
+    let mut command_arguments = vec![name.clone()];
+    let mut rest = arguments[1..].iter();
+    while let Some(argument) = rest.next() {
+        if argument == "--pane" {
+            if pane_id.is_some() {
+                bail!("--pane may be given only once")
+            }
+            pane_id = Some(pane_id_argument(
+                rest.next()
+                    .ok_or_else(|| anyhow::anyhow!("--pane needs an ID"))?,
+            )?);
+        } else {
+            command_arguments.push(argument.clone());
+        }
+    }
+    Ok(parse_command(&command_arguments)?.map(|command| CommandInvocation { command, pane_id }))
+}
+
+fn pane_id_argument(value: &OsString) -> Result<usize> {
+    value
+        .to_string_lossy()
+        .parse()
+        .context("--pane ID must be a number")
 }
 
 fn parse_command(arguments: &[OsString]) -> Result<Option<MuxCommand>> {
@@ -299,7 +375,47 @@ fn parse_command(arguments: &[OsString]) -> Result<Option<MuxCommand>> {
 
 fn print_help() {
     println!(
-        "mux - a small personal terminal multiplexer\n\nUSAGE:\n    mux [--config PATH] [--session NAME]\n    mux auto [--config PATH] [--session NAME]\n    mux COMMAND [ARGUMENTS]\n\nCOMMANDS:\n    auto                        Ask before attaching from an SSH login\n    kill-server                 Stop the daemon and its panes\n    list-sessions, ls           Print one line per session\n    list-windows                Print one line per window of the current session\n    list-panes                  Print one line per pane of the current window\n    choose-tree                 Open the session tree\n    detach                      Detach the active client\n    new-window                  Create a window\n    new-session [-s NAME]       Create and select a session\n    rename-session NAME         Rename the current session\n    rename-window [NAME]        Name the current window, or clear its name\n    split-window [-h|-v]        Split the active pane\n    select-pane -L|-D|-U|-R     Focus an adjacent pane\n    resize-pane -L|-D|-U|-R [N] Move the nearest divider by N cells\n    focus-mode                  Toggle focus mode for the active pane\n    break-pane                  Move the active pane into a window of its own\n    join-pane [-h|-v] -t N      Move the active pane into window N\n    swap-window -t N            Exchange the current window with window N\n    select-window -t NUMBER     Select window 1 through 9\n    vim-mode                    Enter Vim mode\n    set-theme PATH              Apply colors to attached clients\n    kill-pane                   Kill the active pane\n    kill-session                Kill the current session\n    set-session-root            Use the active shell directory as session root\n    jump-to-bell                Jump to the first pending bell\n\nOPTIONS:\n    --config PATH    Apply user bindings after built-in defaults\n                     (default: $XDG_CONFIG_HOME/mux/config.toml)\n    --session NAME   Attach to or create a named session\n    -h, --help       Show this help"
+        "mux - a small personal terminal multiplexer
+
+USAGE:
+    mux [--config PATH] [--session NAME]
+    mux auto [--config PATH] [--session NAME]
+    mux COMMAND [ARGUMENTS] [--pane ID]
+
+COMMANDS:
+    auto                        Ask before attaching from an SSH login
+    kill-server                 Stop the daemon and its panes
+    list-sessions, ls [--json]  Print one line per session
+    list-windows [--json]       Print one line per window of the current session
+    list-panes [--json]         Print one line per pane of the current window
+    choose-tree                 Open the session tree
+    detach                      Detach the active client
+    new-window                  Create a window
+    new-session [-s NAME]       Create and select a session
+    rename-session NAME         Rename the current session
+    rename-window [NAME]        Name the current window, or clear its name
+    split-window [-h|-v]        Split the active pane
+    select-pane -L|-D|-U|-R     Focus an adjacent pane
+    resize-pane -L|-D|-U|-R [N] Move the nearest divider by N cells
+    focus-mode                  Toggle focus mode for the active pane
+    break-pane                  Move the active pane into a window of its own
+    join-pane [-h|-v] -t N      Move the active pane into window N
+    swap-window -t N            Exchange the current window with window N
+    select-window -t NUMBER     Select window 1 through 9
+    vim-mode                    Enter Vim mode
+    set-theme PATH              Apply colors to attached clients
+    kill-pane                   Kill the active pane
+    kill-session                Kill the current session
+    set-session-root            Use the active shell directory as session root
+    jump-to-bell                Jump to the first pending bell
+
+OPTIONS:
+    --config PATH    Apply user bindings after built-in defaults
+                     (default: $XDG_CONFIG_HOME/mux/config.toml)
+    --session NAME   Attach to or create a named session
+    --pane ID        Target a command or query at a stable pane ID
+    --json           Print a list query as structured JSON
+    -h, --help       Show this help"
     );
 }
 
@@ -389,6 +505,32 @@ mod tests {
         );
         assert!(parse_query(&args(&["list-windows", "extra"])).is_err());
         assert_eq!(parse_query(&args(&["kill-pane"])).unwrap(), None);
+    }
+
+    #[test]
+    fn parses_query_output_and_pane_options() {
+        assert_eq!(
+            parse_query_invocation(&args(&["list-panes", "--pane", "42", "--json"])).unwrap(),
+            Some(QueryInvocation {
+                query: MuxQuery::Panes,
+                pane_id: Some(42),
+                json: true,
+            })
+        );
+        assert!(parse_query_invocation(&args(&["ls", "--pane"])).is_err());
+        assert!(parse_query_invocation(&args(&["ls", "--json", "--json"])).is_err());
+    }
+
+    #[test]
+    fn parses_command_pane_option_without_changing_command_aliases() {
+        assert_eq!(
+            parse_command_invocation(&args(&["resize-pane", "-D", "5", "--pane", "17"])).unwrap(),
+            Some(CommandInvocation {
+                command: MuxCommand::ResizeDown(5),
+                pane_id: Some(17),
+            })
+        );
+        assert!(parse_command_invocation(&args(&["kill-pane", "--pane", "gone"])).is_err());
     }
 
     #[test]

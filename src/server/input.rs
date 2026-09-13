@@ -332,12 +332,10 @@ impl Server {
             VimOutcome::Yank(text) => {
                 let bytes = text.len();
                 if self.clients[&id].terminal_clipboard {
-                    self.clients[&id]
-                        .writer
-                        .send(ServerMessage::Clipboard {
-                            selection: b"c".to_vec(),
-                            data: text.into_bytes(),
-                        });
+                    self.clients[&id].writer.send(ServerMessage::Clipboard {
+                        selection: b"c".to_vec(),
+                        data: text.into_bytes(),
+                    });
                     self.set_message(id, format!("yanked {bytes} bytes"));
                     self.dirty = true;
                 } else {
@@ -402,10 +400,7 @@ impl Server {
             .and_then(|pane| mouse_report(pane.parser.screen(), inside));
         if let Some(bytes) = forwarded {
             if let Some(pane) = self.pane_mut(pane_id) {
-                let _ = pane
-                    .writer
-                    .write_all(&bytes)
-                    .and_then(|()| pane.writer.flush());
+                pane.writer.send(&bytes)?;
             }
             return Ok(());
         }
@@ -513,14 +508,12 @@ impl Server {
 
     /// Sends `bytes` to the active pane's shell.
     ///
-    /// A write that fails means that shell is on its way out; the `PtyClosed`
-    /// event that follows tidies the pane up, so the keystroke is simply lost.
+    /// The pane's writer handles blocked applications without blocking mux.
     fn write_active(&mut self, id: usize, bytes: &[u8]) -> Result<()> {
         let (session_index, window_index, pane_index) =
             self.active_pane_indices(id).context("no active pane")?;
         let writer =
             &mut self.sessions[session_index].windows[window_index].panes[pane_index].writer;
-        let _ = writer.write_all(bytes).and_then(|()| writer.flush());
-        Ok(())
+        writer.send(bytes)
     }
 }
