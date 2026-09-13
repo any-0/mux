@@ -1,5 +1,6 @@
 # Preset derived from the motion mappings in ~/nix/dotfiles/nvim/init.lua.
 clipboard_command = ["yank"]
+default_cursor_shape = "bar"
 
 [vim]
 "§" = "first-nonblank"

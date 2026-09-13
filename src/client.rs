@@ -91,6 +91,7 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
             mouse: settings.mouse,
             bell_style: settings.bell_style,
             truecolor: terminal_has_truecolor(),
+            default_cursor_shape: settings.default_cursor_shape,
         })),
     )?;
 
@@ -395,13 +396,7 @@ struct TerminalGuard {
 impl TerminalGuard {
     fn enter(mouse: bool) -> Result<Self> {
         enable_raw_mode()?;
-        execute!(
-            stdout(),
-            EnterAlternateScreen,
-            EnableBracketedPaste,
-            SetCursorStyle::SteadyBlock,
-            Hide
-        )?;
+        execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste, Hide)?;
         if mouse {
             execute!(stdout(), EnableMouseCapture)?;
         }

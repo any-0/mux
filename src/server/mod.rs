@@ -282,6 +282,7 @@ struct Client {
     mouse: bool,
     /// How this client shows a pending bell.
     bell_style: BellStyle,
+    default_cursor_shape: crate::frame::CursorShape,
     /// The colour depth this client's terminal is painted for.
     colors: ColorDepth,
     vim: HashMap<usize, VimState>,
@@ -890,6 +891,7 @@ impl Server {
                         theme: Theme::default(),
                         mouse: false,
                         bell_style: BellStyle::default(),
+                        default_cursor_shape: crate::frame::CursorShape::default(),
                         colors: ColorDepth::TrueColor,
                         vim: HashMap::new(),
                         tree: None,
@@ -1118,6 +1120,7 @@ impl Server {
             mouse,
             bell_style,
             truecolor,
+            default_cursor_shape,
         } = hello;
         let session_id = if let Some(name) = session {
             match self.sessions.iter().find(|session| session.name == name) {
@@ -1147,6 +1150,7 @@ impl Server {
             client.theme_directory = theme_directory;
             client.mouse = mouse;
             client.bell_style = bell_style;
+            client.default_cursor_shape = default_cursor_shape;
             client.colors = ColorDepth::of(truecolor);
             client.initialized = true;
         }

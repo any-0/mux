@@ -137,7 +137,7 @@ impl Server {
         let active_vim_pane = self.active_vim_pane_id(id);
         let cursor_shape = self
             .active_pane(id)
-            .map(|pane| rendered_terminal(&pane.parser).1)
+            .map(|pane| rendered_terminal(&pane.parser, self.clients[&id].default_cursor_shape).1)
             .unwrap_or_default();
         let client = &self.clients[&id];
         let theme = client.rendered_theme();
@@ -337,7 +337,7 @@ impl Server {
             }
             render_screen_region(
                 frame,
-                rendered_terminal(&pane.parser).0,
+                rendered_terminal(&pane.parser, self.clients[&id].default_cursor_shape).0,
                 0,
                 Rect {
                     row: rect.row + 1,
@@ -375,7 +375,8 @@ impl Server {
             .find_map(|(pane_id, rect)| (*pane_id == active_pane.id).then_some(*rect))
             .context("active pane missing from layout")?;
         if rect.rows > 0 && rect.cols > 0 {
-            let (screen, cursor_shape) = rendered_terminal(&active_pane.parser);
+            let (screen, cursor_shape) =
+                rendered_terminal(&active_pane.parser, self.clients[&id].default_cursor_shape);
             let (row, col) = screen.cursor_position();
             // A pane that hides its cursor still says where it is. The position
             // is kept so the terminal's cursor rests in the pane rather than on
@@ -718,6 +719,7 @@ impl Server {
                 },
                 &theme,
                 bell_style,
+                client.default_cursor_shape,
             );
             return;
         };
@@ -731,7 +733,8 @@ impl Server {
                 .unwrap()
         });
         let pane = &window.panes[pane_index];
-        let (screen, cursor_shape) = rendered_terminal(&pane.parser);
+        let (screen, cursor_shape) =
+            rendered_terminal(&pane.parser, self.clients[&id].default_cursor_shape);
         let (source_top, source_height) = preview_source_region(screen, preview_height);
         let destination = Rect {
             row: 4,
@@ -753,6 +756,7 @@ fn render_session_overview(
     area: Rect,
     theme: &Theme,
     bell_style: BellStyle,
+    default_cursor_shape: CursorShape,
 ) {
     let rects = preview_grid_rects(session.windows.len(), area);
     for (window_index, (window, rect)) in session.windows.iter().zip(&rects).enumerate() {
@@ -776,7 +780,7 @@ fn render_session_overview(
             .iter()
             .find(|pane| pane.id == window.active_pane)
             .unwrap();
-        let (screen, cursor_shape) = rendered_terminal(&pane.parser);
+        let (screen, cursor_shape) = rendered_terminal(&pane.parser, default_cursor_shape);
         let (source_top, source_height) = preview_source_region(screen, rect.rows - 1);
         let destination = Rect {
             row: rect.row + 1,
