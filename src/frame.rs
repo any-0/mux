@@ -5,6 +5,8 @@
 //! already showing. Only the cells that actually changed are sent, so a frame
 //! that repeats its predecessor costs no bytes at all.
 
+use unicode_width::UnicodeWidthChar;
+
 /// Inline capacity for one cell's text. A `vt100` cell holds at most 22 bytes,
 /// so this never truncates terminal content.
 const CELL_TEXT_BYTES: usize = 24;
@@ -45,6 +47,15 @@ impl CellText {
 
     fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.length as usize]
+    }
+
+    fn push(&mut self, character: char) {
+        let start = self.length as usize;
+        let end = start + character.len_utf8();
+        if end <= CELL_TEXT_BYTES {
+            character.encode_utf8(&mut self.bytes[start..end]);
+            self.length = end as u8;
+        }
     }
 }
 
@@ -233,6 +244,16 @@ impl Frame {
         let Some(index) = self.index(row, col) else {
             return;
         };
+        if self.cells[index].continuation && index > 0 {
+            self.cells[index - 1] = FrameCell::default();
+        }
+        if let Some(next) = col
+            .checked_add(1)
+            .and_then(|next_col| self.index(row, next_col))
+            .filter(|next| self.cells[*next].continuation)
+        {
+            self.cells[next] = FrameCell::default();
+        }
         self.cells[index] = FrameCell {
             text: CellText::new(text),
             attributes,
@@ -242,8 +263,17 @@ impl Frame {
 
     /// Paints a double-width character, reserving the cell to its right.
     pub fn set_wide_cell(&mut self, row: u16, col: u16, text: &str, attributes: CellAttributes) {
+        let Some(next_col) = col.checked_add(1) else {
+            return;
+        };
+        if self.index(row, next_col).is_none() {
+            return;
+        }
+        // The new continuation may overwrite the base of another wide glyph.
+        // Clear its old continuation before installing this pair.
+        self.set_cell(row, next_col, "", attributes);
         self.set_cell(row, col, text, attributes);
-        if let Some(index) = self.index(row, col + 1) {
+        if let Some(index) = self.index(row, next_col) {
             self.cells[index] = FrameCell {
                 text: CellText::empty(),
                 attributes,
@@ -252,13 +282,40 @@ impl Frame {
         }
     }
 
-    /// Paints `text` one character per cell and returns the column after it.
+    /// Paints `text` by terminal cell width and returns the column after it.
     pub fn set_text(&mut self, row: u16, col: u16, text: &str, attributes: CellAttributes) -> u16 {
         let mut col = col;
         let mut encoded = [0; 4];
         for character in text.chars() {
-            self.set_cell(row, col, character.encode_utf8(&mut encoded), attributes);
-            col = col.saturating_add(1);
+            let text = character.encode_utf8(&mut encoded);
+            match character.width() {
+                None => {}
+                Some(0) => {
+                    let previous = col.saturating_sub(1);
+                    if let Some(index) = self.index(row, previous) {
+                        let base = if self.cells[index].continuation {
+                            index.saturating_sub(1)
+                        } else {
+                            index
+                        };
+                        self.cells[base].text.push(character);
+                    }
+                }
+                Some(1) => {
+                    self.set_cell(row, col, text, attributes);
+                    col = col.saturating_add(1);
+                }
+                Some(_) => {
+                    if col
+                        .checked_add(1)
+                        .and_then(|next_col| self.index(row, next_col))
+                        .is_some()
+                    {
+                        self.set_wide_cell(row, col, text, attributes);
+                        col = col.saturating_add(2);
+                    }
+                }
+            }
         }
         col
     }
@@ -883,5 +940,70 @@ mod tests {
         let output = String::from_utf8(diff(&mut current, &Frame::default())).unwrap();
         assert!(output.contains("4:3"), "{output:?}");
         assert!(output.contains("58;2;255;0;0"), "{output:?}");
+    }
+
+    #[test]
+    fn interface_text_uses_terminal_cell_widths() {
+        let mut current = frame(1, 6);
+        assert_eq!(
+            current.set_text(1, 1, "A界e\u{301}", CellAttributes::default()),
+            5
+        );
+
+        let mut parser = vt100::Parser::new(1, 6, 0);
+        parser.process(&diff(&mut current, &Frame::default()));
+        assert_eq!(parser.screen().contents().trim_end(), "A界e\u{301}");
+        assert!(parser.screen().cell(0, 1).unwrap().is_wide());
+        assert!(parser.screen().cell(0, 2).unwrap().is_wide_continuation());
+    }
+
+    #[test]
+    fn interface_text_does_not_emit_control_characters() {
+        let mut current = frame(1, 4);
+        current.set_text(1, 1, "a\x1b\nb", CellAttributes::default());
+
+        let mut parser = vt100::Parser::new(1, 4, 0);
+        parser.process(&diff(&mut current, &Frame::default()));
+        assert_eq!(parser.screen().contents().trim_end(), "ab");
+    }
+
+    #[test]
+    fn overwriting_either_half_clears_the_old_wide_character() {
+        let attributes = CellAttributes::default();
+        let mut current = frame(1, 4);
+        current.set_wide_cell(1, 2, "界", attributes);
+        current.set_cell(1, 2, "a", attributes);
+        assert!(!current.cells[current.index(1, 3).unwrap()].continuation);
+
+        current.set_wide_cell(1, 2, "界", attributes);
+        current.set_cell(1, 3, "b", attributes);
+        assert_eq!(
+            current.cells[current.index(1, 2).unwrap()],
+            FrameCell::default()
+        );
+    }
+
+    #[test]
+    fn a_wide_character_is_not_painted_without_two_cells() {
+        let mut current = frame(1, 2);
+        assert_eq!(current.set_text(1, 2, "界", CellAttributes::default()), 2);
+        assert_eq!(
+            current.cells[current.index(1, 2).unwrap()],
+            FrameCell::default()
+        );
+    }
+
+    #[test]
+    fn an_overlapping_wide_glyph_clears_the_previous_trailing_half() {
+        let mut current = frame(1, 4);
+        current.set_wide_cell(1, 2, "界", CellAttributes::default());
+        current.set_wide_cell(1, 1, "語", CellAttributes::default());
+        assert_eq!(
+            current.cells[current.index(1, 3).unwrap()],
+            FrameCell::default()
+        );
+        let mut parser = vt100::Parser::new(1, 4, 0);
+        parser.process(&diff(&mut current, &Frame::default()));
+        assert_eq!(parser.screen().contents().trim_end(), "語");
     }
 }

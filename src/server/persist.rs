@@ -8,8 +8,9 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
-        mpsc::{self, Receiver, Sender, SyncSender},
+        mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread,
     time::Duration,
@@ -228,14 +229,18 @@ pub(super) struct Persistence {
 }
 
 pub(super) struct StateWriter {
-    sender: Sender<StateCommand>,
+    sender: SyncSender<StateCommand>,
+    pending: Arc<Mutex<Option<PersistedState>>>,
     failures: Receiver<String>,
 }
 
 enum StateCommand {
-    Save(PersistedState),
+    Save,
     Flush(PersistedState, SyncSender<Result<()>>),
 }
+
+const STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(50);
+const STATE_SAVE_MAX_DELAY: Duration = Duration::from_secs(1);
 
 impl Persistence {
     pub(super) fn open() -> Result<Self> {
@@ -244,9 +249,7 @@ impl Persistence {
             .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
             .context("neither XDG_STATE_HOME nor HOME is set")?;
         let directory = state_home.join("mux");
-        fs::create_dir_all(&directory)
-            .with_context(|| format!("create mux state directory {}", directory.display()))?;
-        set_directory_permissions(&directory)?;
+        private_directory(&directory)?;
         Ok(Self {
             state_file: directory.join("state.bin"),
             directory,
@@ -308,10 +311,16 @@ impl Persistence {
             directory: self.directory.clone(),
             state_file: self.state_file.clone(),
         };
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let pending = Arc::new(Mutex::new(None));
         let (failure_sender, failures) = mpsc::channel();
-        thread::spawn(move || state_writer(persistence, receiver, failure_sender));
-        StateWriter { sender, failures }
+        let worker_pending = Arc::clone(&pending);
+        thread::spawn(move || state_writer(persistence, receiver, worker_pending, failure_sender));
+        StateWriter {
+            sender,
+            pending,
+            failures,
+        }
     }
 
     pub(super) fn pane_history_path(&self, pane_id: usize) -> PathBuf {
@@ -397,29 +406,50 @@ impl Persistence {
 fn state_writer(
     persistence: Persistence,
     receiver: Receiver<StateCommand>,
-    failures: Sender<String>,
+    pending: Arc<Mutex<Option<PersistedState>>>,
+    failures: mpsc::Sender<String>,
 ) {
     while let Ok(command) = receiver.recv() {
         match command {
-            StateCommand::Save(mut state) => loop {
-                match receiver.recv_timeout(Duration::from_millis(50)) {
-                    Ok(StateCommand::Save(newer)) => state = newer,
-                    Ok(StateCommand::Flush(final_state, reply)) => {
-                        let _ = reply.send(persistence.save(&final_state));
-                        break;
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if let Err(error) = persistence.save(&state) {
+            StateCommand::Save => {
+                let deadline = std::time::Instant::now() + STATE_SAVE_MAX_DELAY;
+                loop {
+                    if std::time::Instant::now() >= deadline {
+                        let state = pending.lock().unwrap().take();
+                        if let Some(state) = state
+                            && let Err(error) = persistence.save(&state)
+                        {
                             let _ = failures.send(format!("{error:#}"));
                         }
                         break;
                     }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        let _ = persistence.save(&state);
-                        return;
+                    let timeout = STATE_SAVE_DEBOUNCE
+                        .min(deadline.saturating_duration_since(std::time::Instant::now()));
+                    match receiver.recv_timeout(timeout) {
+                        Ok(StateCommand::Save) => {}
+                        Ok(StateCommand::Flush(final_state, reply)) => {
+                            pending.lock().unwrap().take();
+                            let _ = reply.send(persistence.save(&final_state));
+                            break;
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            let state = pending.lock().unwrap().take();
+                            if let Some(state) = state
+                                && let Err(error) = persistence.save(&state)
+                            {
+                                let _ = failures.send(format!("{error:#}"));
+                            }
+                            break;
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            if let Some(state) = pending.lock().unwrap().take() {
+                                let _ = persistence.save(&state);
+                            }
+                            return;
+                        }
                     }
                 }
-            },
+            }
             StateCommand::Flush(state, reply) => {
                 let _ = reply.send(persistence.save(&state));
             }
@@ -429,9 +459,12 @@ fn state_writer(
 
 impl StateWriter {
     pub(super) fn save(&self, state: PersistedState) -> Result<()> {
-        self.sender
-            .send(StateCommand::Save(state))
-            .context("mux state writer stopped")
+        *self.pending.lock().unwrap() = Some(state);
+        match self.sender.try_send(StateCommand::Save) {
+            Ok(()) | Err(TrySendError::Full(StateCommand::Save)) => Ok(()),
+            Err(TrySendError::Disconnected(_)) => bail!("mux state writer stopped"),
+            Err(TrySendError::Full(StateCommand::Flush(..))) => unreachable!(),
+        }
     }
 
     pub(super) fn flush(&self, state: PersistedState) -> Result<()> {
@@ -496,13 +529,6 @@ pub(super) fn set_private_permissions(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-fn set_directory_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    Ok(())
-}
-
 /// Makes sure the socket lands in a directory only this user can reach.
 ///
 /// A path set through `MUX` is the caller's own choice and is left alone; the
@@ -551,4 +577,50 @@ pub(super) fn private_directory(path: &Path) -> Result<()> {
         bail!("{} is reachable by other users", path.display());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn empty_state(sequence: usize) -> PersistedState {
+        PersistedState {
+            version: STATE_VERSION,
+            next_session_id: sequence,
+            next_pane_id: 0,
+            sessions: Vec::new(),
+            last_active_pane: None,
+        }
+    }
+
+    #[test]
+    fn continuous_state_changes_are_saved_before_the_producer_stops() {
+        let directory = env::temp_dir().join(format!(
+            "mux-state-deadline-{}-{:?}",
+            std::process::id(),
+            thread::current().id()
+        ));
+        private_directory(&directory).unwrap();
+        let persistence = Persistence {
+            state_file: directory.join("state.bin"),
+            directory: directory.clone(),
+        };
+        let state_file = persistence.state_file.clone();
+        let writer = persistence.state_writer();
+        let producer = thread::spawn(move || {
+            let started = Instant::now();
+            let mut sequence = 0;
+            while started.elapsed() < Duration::from_millis(1_250) {
+                writer.save(empty_state(sequence)).unwrap();
+                sequence += 1;
+                thread::sleep(Duration::from_millis(5));
+            }
+            let saved_during_updates = state_file.exists();
+            writer.flush(empty_state(sequence)).unwrap();
+            saved_during_updates
+        });
+        assert!(producer.join().unwrap());
+        let _ = fs::remove_dir_all(directory);
+    }
 }

@@ -14,7 +14,6 @@ use crate::{
 pub(super) const SCROLLBACK_LINES: usize = 20_000;
 const SYNCHRONIZED_OUTPUT_TIMEOUT: Duration = Duration::from_secs(1);
 
-#[derive(Default)]
 pub(super) struct TerminalCallbacks {
     pub(super) bell_count: u64,
     pub(super) prompt_checkpoint: Option<vt100::Screen>,
@@ -22,10 +21,27 @@ pub(super) struct TerminalCallbacks {
     pub(super) cursor_shape: Option<CursorShape>,
     pub(super) synchronized_output: Option<SynchronizedOutput>,
     pub(super) responses: Vec<u8>,
+    colors: TerminalColors,
     /// The title the program in this pane last set, which is what a window
     /// with no name of its own is called.
     pub(super) title: Option<String>,
     pub(super) clipboard_writes: Vec<ClipboardWrite>,
+}
+
+impl Default for TerminalCallbacks {
+    fn default() -> Self {
+        Self {
+            bell_count: 0,
+            prompt_checkpoint: None,
+            prompt_ready: None,
+            cursor_shape: None,
+            synchronized_output: None,
+            responses: Vec::new(),
+            colors: TerminalColors::from(&Theme::default()),
+            title: None,
+            clipboard_writes: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -41,6 +57,10 @@ pub(super) struct SynchronizedOutput {
 }
 
 impl TerminalCallbacks {
+    pub(super) fn set_colors(&mut self, colors: TerminalColors) {
+        self.colors = colors;
+    }
+
     pub(super) fn expire_synchronized_output(&mut self, now: Instant) -> bool {
         if self
             .synchronized_output
@@ -88,6 +108,9 @@ impl vt100::Callbacks for TerminalCallbacks {
     }
 
     fn copy_to_clipboard(&mut self, _: &mut vt100::Screen, selection: &[u8], data: &[u8]) {
+        if 2 + selection.len() + data.len() >= vt100::MAX_OSC_BYTES {
+            return;
+        }
         if let Ok(data) = STANDARD.decode(data) {
             self.clipboard_writes.push(ClipboardWrite {
                 selection: selection.to_vec(),
@@ -111,6 +134,30 @@ impl vt100::Callbacks for TerminalCallbacks {
         params: &[&[u16]],
         final_character: char,
     ) {
+        if second_intermediate.is_none() {
+            if first_intermediate.is_none() && params == [&[5][..]] && final_character == 'n' {
+                self.responses.extend_from_slice(b"\x1b[0n");
+            } else if matches!(first_intermediate, None | Some(b'?'))
+                && params == [&[6][..]]
+                && final_character == 'n'
+            {
+                let (row, col) = screen.cursor_position();
+                let private = if first_intermediate == Some(b'?') {
+                    "?"
+                } else {
+                    ""
+                };
+                self.responses.extend_from_slice(
+                    format!("\x1b[{private}{};{}R", row + 1, col + 1).as_bytes(),
+                );
+            } else if params == [&[0][..]] && final_character == 'c' {
+                match first_intermediate {
+                    None => self.responses.extend_from_slice(b"\x1b[?1;2c"),
+                    Some(b'>') => self.responses.extend_from_slice(b"\x1b[>0;100;0c"),
+                    _ => {}
+                }
+            }
+        }
         if first_intermediate == Some(b'?') {
             if second_intermediate.is_none()
                 && params.contains(&&[2026][..])
@@ -165,6 +212,15 @@ impl vt100::Callbacks for TerminalCallbacks {
 
     fn unhandled_osc(&mut self, screen: &mut vt100::Screen, params: &[&[u8]]) {
         match params {
+            [b"10", b"?"] => self
+                .responses
+                .extend(color_response(b"10", self.colors.foreground)),
+            [b"11", b"?"] => self
+                .responses
+                .extend(color_response(b"11", self.colors.background)),
+            [b"12", b"?"] => self
+                .responses
+                .extend(color_response(b"12", self.colors.cursor)),
             [b"777", b"mux-prompt-start"] => {
                 self.prompt_checkpoint = Some(screen.clone());
                 self.prompt_ready = None;
@@ -386,83 +442,19 @@ fn color_response(kind: &[u8], (red, green, blue): Rgb) -> Vec<u8> {
         .into_bytes()
 }
 
-pub(super) fn terminal_query_responses(
-    prefix: &mut Vec<u8>,
-    bytes: &[u8],
-    cursor: (u16, u16),
-    colors: TerminalColors,
-) -> Vec<u8> {
-    prefix.extend_from_slice(bytes);
-    let mut responses = Vec::new();
-    let mut consumed = 0;
-    while consumed < prefix.len() {
-        let Some(escape) = prefix[consumed..].iter().position(|byte| *byte == 0x1b) else {
-            consumed = prefix.len();
-            break;
-        };
-        consumed += escape;
-        if prefix.len() - consumed == 1 {
-            break;
-        }
-        match prefix[consumed + 1] {
-            b']' => {
-                let mut end = consumed + 2;
-                let mut terminator_length = 0;
-                while end < prefix.len() {
-                    if prefix[end] == 0x07 {
-                        terminator_length = 1;
-                        break;
-                    }
-                    if prefix[end] == 0x1b && prefix.get(end + 1).is_some_and(|byte| *byte == b'\\')
-                    {
-                        terminator_length = 2;
-                        break;
-                    }
-                    end += 1;
-                }
-                if terminator_length == 0 {
-                    break;
-                }
-                match &prefix[consumed + 2..end] {
-                    b"10;?" => responses.extend(color_response(b"10", colors.foreground)),
-                    b"11;?" => responses.extend(color_response(b"11", colors.background)),
-                    b"12;?" => responses.extend(color_response(b"12", colors.cursor)),
-                    _ => {}
-                }
-                consumed = end + terminator_length;
-            }
-            b'[' => {
-                let Some(final_offset) = prefix[consumed + 2..]
-                    .iter()
-                    .position(|byte| (0x40..=0x7e).contains(byte))
-                else {
-                    break;
-                };
-                let end = consumed + 2 + final_offset;
-                match &prefix[consumed + 2..=end] {
-                    b"5n" => responses.extend_from_slice(b"\x1b[0n"),
-                    b"6n" => responses.extend_from_slice(
-                        format!("\x1b[{};{}R", cursor.0 + 1, cursor.1 + 1).as_bytes(),
-                    ),
-                    b"?6n" => responses.extend_from_slice(
-                        format!("\x1b[?{};{}R", cursor.0 + 1, cursor.1 + 1).as_bytes(),
-                    ),
-                    b"c" => responses.extend_from_slice(b"\x1b[?1;2c"),
-                    b">c" => responses.extend_from_slice(b"\x1b[>0;100;0c"),
-                    _ => {}
-                }
-                consumed = end + 1;
-            }
-            _ => consumed += 2,
-        }
-    }
-    prefix.drain(..consumed);
-    responses
-}
-
 pub(super) fn terminal_key_bytes(key: &Key, application_cursor: bool) -> Vec<u8> {
     let mut bytes = Vec::new();
-    if key.modifiers & ALT != 0 {
+    if key.modifiers & ALT != 0
+        && matches!(
+            key.code,
+            KeyCode::Char(_)
+                | KeyCode::Enter
+                | KeyCode::Escape
+                | KeyCode::Backspace
+                | KeyCode::Tab
+                | KeyCode::BackTab
+        )
+    {
         bytes.push(0x1b);
     }
     match key.code {
@@ -493,12 +485,22 @@ pub(super) fn terminal_key_bytes(key: &Key, application_cursor: bool) -> Vec<u8>
             .extend_from_slice(cursor_sequence(b'C', key.modifiers, application_cursor).as_bytes()),
         KeyCode::Left => bytes
             .extend_from_slice(cursor_sequence(b'D', key.modifiers, application_cursor).as_bytes()),
-        KeyCode::Home => bytes.extend_from_slice(b"\x1b[H"),
-        KeyCode::End => bytes.extend_from_slice(b"\x1b[F"),
-        KeyCode::Delete => bytes.extend_from_slice(b"\x1b[3~"),
-        KeyCode::Insert => bytes.extend_from_slice(b"\x1b[2~"),
-        KeyCode::PageUp => bytes.extend_from_slice(b"\x1b[5~"),
-        KeyCode::PageDown => bytes.extend_from_slice(b"\x1b[6~"),
+        KeyCode::Home => bytes.extend_from_slice(modified_csi(b'H', key.modifiers).as_bytes()),
+        KeyCode::End => bytes.extend_from_slice(modified_csi(b'F', key.modifiers).as_bytes()),
+        KeyCode::Delete => bytes.extend_from_slice(tilde_sequence(3, key.modifiers).as_bytes()),
+        KeyCode::Insert => bytes.extend_from_slice(tilde_sequence(2, key.modifiers).as_bytes()),
+        KeyCode::PageUp => bytes.extend_from_slice(tilde_sequence(5, key.modifiers).as_bytes()),
+        KeyCode::PageDown => bytes.extend_from_slice(tilde_sequence(6, key.modifiers).as_bytes()),
+        KeyCode::F(number) => {
+            let sequence = match number {
+                1..=4 => modified_csi(b'P' + number - 1, key.modifiers),
+                5 => tilde_sequence(15, key.modifiers),
+                6..=10 => tilde_sequence(11 + u16::from(number), key.modifiers),
+                11..=12 => tilde_sequence(12 + u16::from(number), key.modifiers),
+                _ => String::new(),
+            };
+            bytes.extend_from_slice(sequence.as_bytes());
+        }
     }
     bytes
 }
@@ -517,5 +519,77 @@ fn cursor_sequence(final_byte: u8, modifiers: u8, application_cursor: bool) -> S
             + 2 * usize::from(modifiers & ALT != 0)
             + 4 * usize::from(modifiers & CTRL != 0);
         format!("\x1b[1;{parameter}{}", final_byte as char)
+    }
+}
+
+fn modified_csi(final_byte: u8, modifiers: u8) -> String {
+    match modifier_parameter(modifiers) {
+        None => {
+            if matches!(final_byte, b'P'..=b'S') {
+                format!("\x1bO{}", final_byte as char)
+            } else {
+                format!("\x1b[{}", final_byte as char)
+            }
+        }
+        Some(parameter) => format!("\x1b[1;{parameter}{}", final_byte as char),
+    }
+}
+
+fn tilde_sequence(code: u16, modifiers: u8) -> String {
+    match modifier_parameter(modifiers) {
+        None => format!("\x1b[{code}~"),
+        Some(parameter) => format!("\x1b[{code};{parameter}~"),
+    }
+}
+
+fn modifier_parameter(modifiers: u8) -> Option<usize> {
+    let modifiers = modifiers & (SHIFT | ALT | CTRL);
+    (modifiers != 0).then(|| {
+        1 + usize::from(modifiers & SHIFT != 0)
+            + 2 * usize::from(modifiers & ALT != 0)
+            + 4 * usize::from(modifiers & CTRL != 0)
+    })
+}
+
+#[cfg(test)]
+mod key_sequence_tests {
+    use super::terminal_key_bytes;
+    use crate::protocol::{ALT, CTRL, Key, KeyCode, SHIFT};
+
+    fn key(code: KeyCode, modifiers: u8) -> Key {
+        Key { code, modifiers }
+    }
+
+    #[test]
+    fn xterm_function_keys_include_modifiers() {
+        assert_eq!(terminal_key_bytes(&key(KeyCode::F(1), 0), false), b"\x1bOP");
+        assert_eq!(
+            terminal_key_bytes(&key(KeyCode::F(4), SHIFT | ALT), false),
+            b"\x1b[1;4S"
+        );
+        assert_eq!(
+            terminal_key_bytes(&key(KeyCode::F(5), 0), false),
+            b"\x1b[15~"
+        );
+        assert_eq!(
+            terminal_key_bytes(&key(KeyCode::F(12), CTRL), false),
+            b"\x1b[24;5~"
+        );
+    }
+
+    #[test]
+    fn navigation_keys_include_modifiers() {
+        assert_eq!(
+            terminal_key_bytes(&key(KeyCode::Home, CTRL), false),
+            b"\x1b[1;5H"
+        );
+        assert_eq!(
+            terminal_key_bytes(&key(KeyCode::Delete, SHIFT | ALT), false),
+            b"\x1b[3;4~"
+        );
+        assert_eq!(
+            terminal_key_bytes(&key(KeyCode::PageDown, ALT), false),
+            b"\x1b[6;3~"
+        );
     }
 }

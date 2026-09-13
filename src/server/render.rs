@@ -54,6 +54,9 @@ impl Server {
                 // so the next frame repaints in full rather than patching a
                 // screen that never received the frames in between.
                 client.frame = Frame::default();
+                // The last output burst may already be over. Keep a repaint
+                // pending until this client accepts a complete frame.
+                self.dirty = true;
             }
         }
     }

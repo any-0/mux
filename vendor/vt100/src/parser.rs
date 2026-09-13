@@ -1,7 +1,10 @@
+/// Maximum bytes retained while an OSC sequence is unfinished.
+pub const MAX_OSC_BYTES: usize = 64 * 1024;
+
 /// A parser for terminal output which produces an in-memory representation of
 /// the terminal contents.
 pub struct Parser<CB: crate::callbacks::Callbacks = ()> {
-    parser: vte::Parser,
+    parser: vte::Parser<MAX_OSC_BYTES>,
     screen: crate::perform::WrappedScreen<CB>,
 }
 
@@ -11,7 +14,7 @@ impl Parser {
     #[must_use]
     pub fn new(rows: u16, cols: u16, scrollback_len: usize) -> Self {
         Self {
-            parser: vte::Parser::new(),
+            parser: vte::Parser::new_with_size(),
             screen: crate::perform::WrappedScreen::new(
                 rows,
                 cols,
@@ -33,7 +36,7 @@ impl<CB: crate::callbacks::Callbacks> Parser<CB> {
         callbacks: CB,
     ) -> Self {
         Self {
-            parser: vte::Parser::new(),
+            parser: vte::Parser::new_with_size(),
             screen: crate::perform::WrappedScreen::new_with_callbacks(
                 rows,
                 cols,

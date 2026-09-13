@@ -30,8 +30,10 @@ mod command;
 mod input;
 mod journal;
 mod layout;
+mod output_budget;
 mod persist;
 mod process;
+mod pty_input;
 mod render;
 pub(crate) mod snapshot;
 mod terminal;
@@ -41,8 +43,10 @@ mod ui;
 use bell::*;
 use journal::*;
 use layout::*;
+use output_budget::{OutputBudget, OutputPermit};
 use persist::*;
 use process::*;
+use pty_input::PtyInput;
 use snapshot::*;
 use terminal::*;
 use themes::*;
@@ -85,6 +89,10 @@ const CWD_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// Frames a client may fall behind before the daemon stops waiting for it.
 const CLIENT_QUEUE_DEPTH: usize = 8;
+/// Bound queued PTY chunks while readers apply backpressure to busy panes.
+const EVENT_QUEUE_DEPTH: usize = 64;
+const STORAGE_INTERVAL: Duration = Duration::from_millis(250);
+const MAX_TERMINAL_CELLS: usize = 1_000_000;
 /// How long one write to a client may take before it is considered gone.
 const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Cells one resize keystroke moves a divider.
@@ -111,7 +119,7 @@ impl Event {
     /// is spawned, and two dozen shells can put thousands of output events in
     /// front of the attach that is waiting to draw the screen. Client events go
     /// first within a batch so the daemon answers the person before the panes.
-    fn from_client(&self) -> bool {
+    fn is_client_event(&self) -> bool {
         matches!(
             self,
             Self::Connected(..) | Self::Client(..) | Self::Disconnected(..)
@@ -123,7 +131,7 @@ enum Event {
     Connected(usize, UnixStream),
     Client(usize, ClientMessage),
     Disconnected(usize),
-    PtyOutput(usize, Vec<u8>),
+    PtyOutput(usize, Vec<u8>, OutputPermit),
     PtyClosed(usize),
     ProcessIcon(usize, Option<i32>, &'static str),
     ClipboardCopied(usize, usize, Result<(), String>),
@@ -133,12 +141,11 @@ enum Event {
 struct Pane {
     id: usize,
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: PtyInput,
     child: Box<dyn Child + Send + Sync>,
     child_pid: Option<u32>,
     parser: vt100::Parser<TerminalCallbacks>,
     parser_prefix: Vec<u8>,
-    query_prefix: Vec<u8>,
     cwd: PathBuf,
     cwd_sampled: Instant,
     process_icon: &'static str,
@@ -320,7 +327,7 @@ struct Server {
     persistence: Persistence,
     state_writer: StateWriter,
     process_sampler: Sender<Vec<ProcessSample>>,
-    events: Sender<Event>,
+    events: mpsc::SyncSender<Event>,
     sessions: Vec<Session>,
     clients: HashMap<usize, Client>,
     next_session_id: usize,
@@ -335,6 +342,13 @@ struct Server {
     /// Writing it costs two fsyncs, so it is deferred until the daemon settles
     /// instead of running on every keystroke that moves the active pane.
     state_dirty: bool,
+}
+
+fn validate_terminal_size(cols: u16, rows: u16) -> Result<()> {
+    if cols == 0 || rows == 0 || usize::from(cols) * usize::from(rows) > MAX_TERMINAL_CELLS {
+        bail!("terminal dimensions must be nonzero and contain at most {MAX_TERMINAL_CELLS} cells");
+    }
+    Ok(())
 }
 
 pub fn run(socket_path: &Path) -> Result<()> {
@@ -366,7 +380,7 @@ pub fn run(socket_path: &Path) -> Result<()> {
     let persisted_state = persistence.load()?;
     let state_writer = persistence.state_writer();
 
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE_DEPTH);
     accept_clients(listener, sender.clone());
     let process_sampler = process_icon_sampler(sender.clone());
     let mut server = Server {
@@ -403,7 +417,7 @@ pub fn run(socket_path: &Path) -> Result<()> {
     result
 }
 
-fn accept_clients(listener: UnixListener, sender: Sender<Event>) {
+fn accept_clients(listener: UnixListener, sender: mpsc::SyncSender<Event>) {
     thread::spawn(move || {
         let next_id = Arc::new(AtomicUsize::new(1));
         for connection in listener.incoming() {
@@ -439,7 +453,7 @@ fn accept_clients(listener: UnixListener, sender: Sender<Event>) {
     });
 }
 
-fn process_icon_sampler(events: Sender<Event>) -> Sender<Vec<ProcessSample>> {
+fn process_icon_sampler(events: mpsc::SyncSender<Event>) -> Sender<Vec<ProcessSample>> {
     let (sender, receiver) = mpsc::channel::<Vec<ProcessSample>>();
     thread::spawn(move || {
         while let Ok(samples) = receiver.recv() {
@@ -543,7 +557,7 @@ impl Server {
                         let _ = pane.history.truncate(valid_length);
                     }
                     if let Some(correction) = restored_prompt_correction(&pane.parser) {
-                        let _ = pane.history.append_output(&correction);
+                        let _ = pane.history.append_output(&correction, None);
                         process_terminal_bytes(
                             &mut pane.parser,
                             &mut pane.parser_prefix,
@@ -633,7 +647,12 @@ impl Server {
 
     fn event_loop(&mut self, receiver: Receiver<Event>) -> Result<()> {
         let mut last_render = Instant::now() - FRAME_INTERVAL;
+        let mut last_settle = Instant::now();
         loop {
+            if last_settle.elapsed() >= STORAGE_INTERVAL {
+                self.settle();
+                last_settle = Instant::now();
+            }
             self.sample_process_icons();
             let event = match receiver.try_recv() {
                 Ok(event) => Some(event),
@@ -643,6 +662,7 @@ impl Server {
                     // timed repaints. Recompute the deadline after settling,
                     // since a storage failure can itself require a repaint.
                     self.settle();
+                    last_settle = Instant::now();
                     match self.next_wake(last_render) {
                         Some(deadline) => {
                             let timeout = deadline.saturating_duration_since(Instant::now());
@@ -669,7 +689,7 @@ impl Server {
                     }
                 }
                 // Stable, so panes still see their own output in order.
-                batch.sort_by_key(|event| !event.from_client());
+                batch.sort_by_key(|event| !event.is_client_event());
                 for event in batch {
                     if self.dispatch(event) {
                         return Ok(());
@@ -688,8 +708,8 @@ impl Server {
                 self.dirty |= pane.parser.callbacks_mut().expire_synchronized_output(now);
             }
             if self.dirty && last_render.elapsed() >= FRAME_INTERVAL {
-                self.render_all();
                 self.dirty = false;
+                self.render_all();
                 last_render = Instant::now();
             }
         }
@@ -712,6 +732,7 @@ impl Server {
                     .iter()
                     .flat_map(|session| &session.windows)
                     .flat_map(|window| &window.panes)
+                    .filter(|_| self.clients.values().any(|client| client.initialized))
                     .filter(|pane| !pane.process_pending)
                     .map(|pane| pane.process_sampled + PROCESS_POLL_INTERVAL),
             )
@@ -810,7 +831,7 @@ impl Server {
             .pane_mut(pane_id)
             .context("pane vanished during compaction")?;
         let records = compacted_journal_records(pane.parser.screen_mut())?;
-        pane.history.replace(path, &records)
+        pane.history.replace_async(path, records)
     }
 
     fn expire_messages(&mut self) -> bool {
@@ -914,38 +935,32 @@ impl Server {
                 }
                 self.clients.remove(&id);
             }
-            Event::PtyOutput(pane_id, bytes) => {
+            Event::PtyOutput(pane_id, bytes, permit) => {
                 let mut cwd_changed = false;
                 let mut bell_events = 0;
                 let mut clipboard_writes = Vec::new();
                 let mut failure = None;
+                let mut input_failure = None;
                 let colors = TerminalColors::from(&self.theme);
                 if let Some(pane) = self.pane_mut(pane_id) {
-                    failure = pane.history.append_output(&bytes).err();
+                    failure = pane.history.append_output(&bytes, Some(permit)).err();
                     let previous_bells = pane.parser.callbacks().bell_count;
                     let had_prompt = pane.parser.callbacks().prompt_ready.is_some();
+                    pane.parser.callbacks_mut().set_colors(colors);
                     process_terminal_bytes(&mut pane.parser, &mut pane.parser_prefix, &bytes);
-                    clipboard_writes = std::mem::take(
-                        &mut pane.parser.callbacks_mut().clipboard_writes,
-                    );
+                    clipboard_writes =
+                        std::mem::take(&mut pane.parser.callbacks_mut().clipboard_writes);
                     bell_events = pane
                         .parser
                         .callbacks()
                         .bell_count
                         .saturating_sub(previous_bells) as usize;
-                    let mut responses = terminal_query_responses(
-                        &mut pane.query_prefix,
-                        &bytes,
-                        pane.parser.screen().cursor_position(),
-                        colors,
-                    );
-                    responses.append(&mut pane.parser.callbacks_mut().responses);
+                    let responses = std::mem::take(&mut pane.parser.callbacks_mut().responses);
                     if !responses.is_empty() {
                         // A pane whose shell has just died cannot take a reply.
-                        let _ = pane
-                            .writer
-                            .write_all(&responses)
-                            .and_then(|()| pane.writer.flush());
+                        if let Err(error) = pane.writer.send(&responses) {
+                            input_failure = Some(error);
+                        }
                     }
                     // Sampling the shell's directory costs a system call, so do
                     // it when a prompt appears and otherwise only occasionally.
@@ -966,6 +981,9 @@ impl Server {
                 if let Some(error) = failure {
                     self.note_failure(&format!("pane {pane_id} history"), error);
                 }
+                if let Some(error) = input_failure {
+                    self.note_failure(&format!("pane {pane_id} input"), error);
+                }
                 if !clipboard_writes.is_empty() {
                     let clipboard_session = self.sessions.iter().find_map(|session| {
                         session
@@ -983,12 +1001,10 @@ impl Server {
                         .collect();
                     for clipboard in clipboard_writes {
                         for id in &clipboard_clients {
-                            self.clients[id]
-                                .writer
-                                .send(ServerMessage::Clipboard {
-                                    selection: clipboard.selection.clone(),
-                                    data: clipboard.data.clone(),
-                                });
+                            self.clients[id].writer.send(ServerMessage::Clipboard {
+                                selection: clipboard.selection.clone(),
+                                data: clipboard.data.clone(),
+                            });
                         }
                     }
                 }
@@ -1054,10 +1070,20 @@ impl Server {
                 }
                 return Ok(true);
             }
-            Event::Client(id, ClientMessage::Query { pane_id, query }) => {
-                let lines = self.listing(pane_id, query);
+            Event::Client(
+                id,
+                ClientMessage::Query {
+                    pane_id,
+                    query,
+                    json,
+                },
+            ) => {
+                let response = match self.listing(pane_id, query, json) {
+                    Ok(lines) => ServerMessage::Listing(lines),
+                    Err(error) => ServerMessage::Error(format!("{error:#}")),
+                };
                 if let Some(client) = self.clients.get(&id) {
-                    client.writer.send(ServerMessage::Listing(lines));
+                    client.writer.send(response);
                 }
             }
             Event::Client(id, ClientMessage::Command { pane_id, command }) => {
@@ -1072,9 +1098,17 @@ impl Server {
                 self.dirty = true;
             }
             Event::Client(id, ClientMessage::Hello(hello)) => {
-                self.initialize_client(id, *hello)?;
+                if let Err(error) = self.initialize_client(id, *hello) {
+                    if let Some(client) = self.clients.remove(&id) {
+                        client
+                            .writer
+                            .send(ServerMessage::Error(format!("{error:#}")));
+                    }
+                    return Err(error);
+                }
             }
             Event::Client(id, ClientMessage::Resize { cols, rows }) => {
+                validate_terminal_size(cols, rows)?;
                 if let Some(client) = self.clients.get_mut(&id) {
                     client.cols = cols;
                     client.rows = rows;
@@ -1106,6 +1140,7 @@ impl Server {
     }
 
     fn initialize_client(&mut self, id: usize, hello: Hello) -> Result<()> {
+        validate_terminal_size(hello.cols, hello.rows)?;
         let Hello {
             cols,
             rows,
@@ -1365,8 +1400,9 @@ impl Server {
             .with_context(|| format!("start shell in {}", cwd.display()))?;
         let child_pid = child.process_id();
         let mut reader = pair.master.try_clone_reader().context("clone PTY reader")?;
-        let writer = pair.master.take_writer().context("take PTY writer")?;
+        let writer = PtyInput::spawn(pair.master.take_writer().context("take PTY writer")?);
         let sender = self.events.clone();
+        let output_budget = OutputBudget::default();
         thread::spawn(move || {
             let mut buffer = vec![0; 32 * 1024];
             loop {
@@ -1376,8 +1412,9 @@ impl Server {
                         return;
                     }
                     Ok(length) => {
+                        let permit = output_budget.acquire(length);
                         if sender
-                            .send(Event::PtyOutput(id, buffer[..length].to_vec()))
+                            .send(Event::PtyOutput(id, buffer[..length].to_vec(), permit))
                             .is_err()
                         {
                             return;
@@ -1399,7 +1436,6 @@ impl Server {
             child_pid,
             parser,
             parser_prefix,
-            query_prefix: Vec::new(),
             cwd: cwd.to_path_buf(),
             cwd_sampled: Instant::now(),
             process_icon: IDLE_ICON,
@@ -2288,7 +2324,7 @@ struct ReplayedPane {
 /// The command asks the daemon to recolour itself as part of its work, and that
 /// request travels back over the socket the daemon is serving, so it must not be
 /// waited for from inside the loop that would answer it.
-fn switch_theme(sender: Sender<Event>, id: usize, command: Vec<String>, name: String) {
+fn switch_theme(sender: mpsc::SyncSender<Event>, id: usize, command: Vec<String>, name: String) {
     thread::spawn(move || {
         let result = run_theme_command(&command, &name).map_err(|error| format!("{error:#}"));
         let _ = sender.send(Event::ThemeSwitched(id, name, result));
@@ -2309,7 +2345,12 @@ fn run_theme_command(command: &[String], name: &str) -> Result<()> {
     Ok(())
 }
 
-fn copy_to_clipboard(sender: Sender<Event>, id: usize, command: Vec<String>, text: String) {
+fn copy_to_clipboard(
+    sender: mpsc::SyncSender<Event>,
+    id: usize,
+    command: Vec<String>,
+    text: String,
+) {
     thread::spawn(move || {
         let bytes = text.len();
         let result = run_clipboard_command(&command, &text).map_err(|error| format!("{error:#}"));
@@ -2498,6 +2539,9 @@ impl Server {
     }
 
     fn sample_process_icons(&mut self) {
+        if !self.clients.values().any(|client| client.initialized) {
+            return;
+        }
         let now = Instant::now();
         let samples: Vec<_> = self
             .sessions
@@ -2634,5 +2678,11 @@ fn automatic_session_name(number: usize) -> String {
     format!("Session {number}")
 }
 
+#[cfg(test)]
+mod lifecycle_tests;
+#[cfg(test)]
+mod responsiveness_tests;
+#[cfg(test)]
+mod terminal_query_tests;
 #[cfg(test)]
 mod tests;

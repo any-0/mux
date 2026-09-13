@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    services:
+      docker:
+        image: docker:28-dind
+        env:
+          DOCKER_TLS_CERTDIR: ""
+        ports:
+          - 2375:2375
+        options: --privileged
+    env:
+      DOCKER_HOST: tcp://127.0.0.1:2375
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for Docker
+        run: |
+          for attempt in $(seq 1 30); do
+            docker info && exit 0
+            sleep 1
+          done
+          exit 1
+      - name: Test in Docker
+        run: ./scripts/test-container

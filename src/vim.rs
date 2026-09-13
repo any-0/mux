@@ -898,7 +898,8 @@ impl VimMode {
     }
 
     fn first_nonblank(&self, row: usize) -> usize {
-        self.buffer.text(row)
+        self.buffer
+            .text(row)
             .chars()
             .position(|character| !character.is_whitespace())
             .unwrap_or(0)
@@ -1247,7 +1248,8 @@ impl VimMode {
                 let end_col = max(selection.anchor.col, self.cursor.col);
                 (start_row..=end_row)
                     .map(|row| {
-                        self.buffer.text(row)
+                        self.buffer
+                            .text(row)
                             .chars()
                             .skip(start_col)
                             .take(end_col - start_col + 1)

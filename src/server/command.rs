@@ -131,23 +131,39 @@ impl Server {
         Ok(())
     }
 
-    /// Answers a query, one line per session, window or pane.
+    /// Answers a query as display lines or one JSON array.
     ///
     /// Unlike a command this needs no attached client: the pane a script is
     /// running in tells the daemon which session it means, and without even
-    /// that it falls back to the session that was last active.
-    pub(super) fn listing(&self, pane_id: Option<usize>, query: MuxQuery) -> Vec<String> {
+    /// that it falls back to the session that was last active. A pane supplied
+    /// by the caller must still exist.
+    pub(super) fn listing(
+        &self,
+        pane_id: Option<usize>,
+        query: MuxQuery,
+        json: bool,
+    ) -> Result<Vec<String>> {
         let attached: HashSet<usize> = self
             .clients
             .values()
             .filter(|client| client.initialized)
             .filter_map(|client| client.session_id)
             .collect();
-        let current = pane_id
-            .and_then(|pane_id| self.session_of_pane(pane_id))
-            .or_else(|| self.last_active_session_id());
+        let target = match pane_id {
+            Some(pane_id) => Some(
+                self.pane_location(pane_id)
+                    .with_context(|| format!("pane {pane_id} does not exist"))?,
+            ),
+            None => self
+                .last_active_pane
+                .and_then(|pane_id| self.pane_location(pane_id)),
+        };
+        let current = target.map(|(session_index, _)| self.sessions[session_index].id);
+        if json {
+            return self.json_listing(current, target, query, &attached);
+        }
         match query {
-            MuxQuery::Sessions => self
+            MuxQuery::Sessions => Ok(self
                 .sessions
                 .iter()
                 .map(|session| {
@@ -175,12 +191,12 @@ impl Server {
                         },
                     )
                 })
-                .collect(),
+                .collect()),
             MuxQuery::Windows => {
                 let Some(session) = self.session_or_current(current) else {
-                    return Vec::new();
+                    return Ok(Vec::new());
                 };
-                session
+                Ok(session
                     .windows
                     .iter()
                     .enumerate()
@@ -200,15 +216,17 @@ impl Server {
                             if window.zoomed { " (focus mode)" } else { "" },
                         )
                     })
-                    .collect()
+                    .collect())
             }
             MuxQuery::Panes => {
                 let Some(session) = self.session_or_current(current) else {
-                    return Vec::new();
+                    return Ok(Vec::new());
                 };
-                let window_index = session.current_window;
+                let window_index = target
+                    .filter(|(session_index, _)| self.sessions[*session_index].id == session.id)
+                    .map_or(session.current_window, |(_, window_index)| window_index);
                 let window = &session.windows[window_index];
-                window
+                Ok(window
                     .panes
                     .iter()
                     .enumerate()
@@ -228,9 +246,91 @@ impl Server {
                             },
                         )
                     })
-                    .collect()
+                    .collect())
             }
         }
+    }
+
+    fn json_listing(
+        &self,
+        current: Option<usize>,
+        target: Option<(usize, usize)>,
+        query: MuxQuery,
+        attached: &HashSet<usize>,
+    ) -> Result<Vec<String>> {
+        let values: Vec<serde_json::Value> = match query {
+            MuxQuery::Sessions => self
+                .sessions
+                .iter()
+                .map(|session| {
+                    let panes: usize = session
+                        .windows
+                        .iter()
+                        .map(|window| window.panes.len())
+                        .sum();
+                    serde_json::json!({
+                        "id": session.id,
+                        "name": session.name,
+                        "root": session.root,
+                        "windows": session.windows.len(),
+                        "panes": panes,
+                        "attached": attached.contains(&session.id),
+                        "current": current == Some(session.id),
+                    })
+                })
+                .collect(),
+            MuxQuery::Windows => {
+                let Some(session) = self.session_or_current(current) else {
+                    return Ok(vec!["[]".into()]);
+                };
+                session
+                    .windows
+                    .iter()
+                    .enumerate()
+                    .map(|(index, window)| {
+                        serde_json::json!({
+                            "session_id": session.id,
+                            "session": session.name,
+                            "id": index + 1,
+                            "name": window.label(),
+                            "panes": window.panes.len(),
+                            "active": index == session.current_window,
+                            "focus_mode": window.zoomed,
+                        })
+                    })
+                    .collect()
+            }
+            MuxQuery::Panes => {
+                let Some(session) = self.session_or_current(current) else {
+                    return Ok(vec!["[]".into()]);
+                };
+                let window_index = target
+                    .filter(|(session_index, _)| self.sessions[*session_index].id == session.id)
+                    .map_or(session.current_window, |(_, window_index)| window_index);
+                let window = &session.windows[window_index];
+                window
+                    .panes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, pane)| {
+                        serde_json::json!({
+                            "session_id": session.id,
+                            "session": session.name,
+                            "window_id": window_index + 1,
+                            "id": pane.id,
+                            "index": index + 1,
+                            "cwd": pane.cwd,
+                            "cols": pane.parser.screen().size().1,
+                            "rows": pane.parser.screen().size().0,
+                            "active": pane.id == window.active_pane,
+                        })
+                    })
+                    .collect()
+            }
+        };
+        Ok(vec![
+            serde_json::to_string(&values).context("encode query result")?,
+        ])
     }
 
     fn session_or_current(&self, current: Option<usize>) -> Option<&Session> {
@@ -243,14 +343,17 @@ impl Server {
             .or_else(|| self.sessions.first())
     }
 
-    fn session_of_pane(&self, pane_id: usize) -> Option<usize> {
-        self.sessions.iter().find_map(|session| {
-            session
-                .windows
-                .iter()
-                .any(|window| window.panes.iter().any(|pane| pane.id == pane_id))
-                .then_some(session.id)
-        })
+    fn pane_location(&self, pane_id: usize) -> Option<(usize, usize)> {
+        self.sessions
+            .iter()
+            .enumerate()
+            .find_map(|(session_index, session)| {
+                session
+                    .windows
+                    .iter()
+                    .position(|window| window.panes.iter().any(|pane| pane.id == pane_id))
+                    .map(|window_index| (session_index, window_index))
+            })
     }
 
     fn command_target_client(&mut self, pane_id: Option<usize>) -> Result<usize> {
@@ -290,25 +393,107 @@ impl Server {
                             .then_some((session_index, window_index))
                     })
             });
-        // `MUX_PANE` outlives its pane in a shell that was started inside one
-        // and kept running — after a daemon restart, say. That is no reason to
-        // refuse the command, so it goes to whoever is attached.
-        let Some((session_index, window_index)) = origin else {
-            return attached.pop().context("no attached mux client");
-        };
+        let (session_index, window_index) =
+            origin.with_context(|| format!("pane {pane_id} does not exist"))?;
         let session_id = self.sessions[session_index].id;
         let id = attached
             .iter()
             .rev()
             .copied()
             .find(|id| self.clients[id].session_id == Some(session_id))
-            .or_else(|| attached.last().copied())
-            .context("no attached mux client")?;
+            .context("no attached mux client for target session")?;
         visit_window(&mut self.sessions[session_index], window_index);
         self.sessions[session_index].windows[window_index].select_pane(pane_id);
         self.set_client_session(id, session_id);
         self.last_active_pane = Some(pane_id);
         self.save_state_soon();
         Ok(id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn json_queries_use_ids_and_explicit_panes_are_never_redirected() {
+        let directory =
+            std::env::temp_dir().join(format!("mux-command-query-{}", std::process::id()));
+        let (mut server, _events, _client) =
+            crate::server::tests::server_with_pending_bell(&directory);
+        let first_pane = server.sessions[0].windows[0].panes[0].id;
+        let first_session = server.sessions[0].id;
+        server.last_active_pane = Some(first_pane);
+        server.clients.get_mut(&1).unwrap().initialized = true;
+        server.clients.get_mut(&1).unwrap().session_id = Some(first_session);
+        let background_session = server
+            .create_session("background".into(), directory.clone(), 90, 30)
+            .unwrap();
+        let background_pane = server.sessions[1].windows[0].panes[0].id;
+
+        let sessions = server
+            .listing(Some(first_pane), MuxQuery::Sessions, true)
+            .unwrap();
+        let sessions: serde_json::Value = serde_json::from_str(&sessions[0]).unwrap();
+        assert_eq!(sessions[0]["id"], server.sessions[0].id);
+        assert_eq!(sessions[1]["id"], background_session);
+
+        let panes = server
+            .listing(Some(background_pane), MuxQuery::Panes, true)
+            .unwrap();
+        let panes: serde_json::Value = serde_json::from_str(&panes[0]).unwrap();
+        assert_eq!(panes[0]["session_id"], background_session);
+        assert_eq!(panes[0]["window_id"], 1);
+        assert_eq!(panes[0]["id"], background_pane);
+
+        let error = server
+            .run_command(Some(background_pane), MuxCommand::KillPane)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no attached mux client for target session")
+        );
+        assert_eq!(server.clients[&1].session_id, Some(first_session));
+        assert!(
+            server.sessions[1].windows[0]
+                .panes
+                .iter()
+                .any(|pane| pane.id == background_pane)
+        );
+
+        let session_count = server.sessions.len();
+        let pane_count: usize = server
+            .sessions
+            .iter()
+            .flat_map(|session| &session.windows)
+            .map(|window| window.panes.len())
+            .sum();
+        let error = server
+            .run_command(Some(usize::MAX), MuxCommand::KillPane)
+            .unwrap_err();
+        assert!(error.to_string().contains("does not exist"));
+        assert_eq!(server.sessions.len(), session_count);
+        assert_eq!(
+            server
+                .sessions
+                .iter()
+                .flat_map(|session| &session.windows)
+                .map(|window| window.panes.len())
+                .sum::<usize>(),
+            pane_count
+        );
+
+        for pane in server
+            .sessions
+            .iter_mut()
+            .flat_map(|session| &mut session.windows)
+            .flat_map(|window| &mut window.panes)
+        {
+            pane.child.kill().unwrap();
+        }
+        drop(server);
+        fs::remove_dir_all(directory).unwrap();
     }
 }
