@@ -1,0 +1,1024 @@
+﻿2026-09-30T22:05:16.9884670Z Current runner version: '2.337.0'
+2026-09-30T22:05:16.9908896Z ##[group]Runner Image Provisioner
+2026-09-30T22:05:16.9909750Z Hosted Compute Agent
+2026-09-30T22:05:16.9910473Z Version: 20260828.587
+2026-09-30T22:05:16.9911126Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-30T22:05:16.9911855Z Build Date: 2026-08-28T16:44:25Z
+2026-09-30T22:05:16.9912632Z Worker ID: {63ddacf3-f4f2-4fc1-8989-b54fbfae7c7d}
+2026-09-30T22:05:16.9913373Z Azure Region: mexicocentral
+2026-09-30T22:05:16.9914046Z ##[endgroup]
+2026-09-30T22:05:16.9915731Z ##[group]Operating System
+2026-09-30T22:05:16.9916400Z Ubuntu
+2026-09-30T22:05:16.9917026Z 24.04.5
+2026-09-30T22:05:16.9917541Z LTS
+2026-09-30T22:05:16.9918131Z ##[endgroup]
+2026-09-30T22:05:16.9918774Z ##[group]Runner Image
+2026-09-30T22:05:16.9919386Z Image: ubuntu-24.04
+2026-09-30T22:05:16.9920007Z Version: 20260920.314.1
+2026-09-30T22:05:16.9921324Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260920.314/images/ubuntu/Ubuntu2404-Readme.md
+2026-09-30T22:05:16.9922964Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260920.314
+2026-09-30T22:05:16.9923942Z ##[endgroup]
+2026-09-30T22:05:16.9925549Z ##[group]GITHUB_TOKEN Permissions
+2026-09-30T22:05:16.9927471Z Contents: read
+2026-09-30T22:05:16.9928227Z Metadata: read
+2026-09-30T22:05:16.9928813Z Packages: read
+2026-09-30T22:05:16.9929447Z ##[endgroup]
+2026-09-30T22:05:16.9931825Z Secret source: Actions
+2026-09-30T22:05:16.9932768Z Cache mode: write
+2026-09-30T22:05:16.9933555Z Prepare workflow directory
+2026-09-30T22:05:17.0270882Z Prepare all required actions
+2026-09-30T22:05:17.0317485Z Getting action download info
+2026-09-30T22:05:17.3929688Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-30T22:05:17.4930399Z Download action repository 'cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7' (SHA:b85815f71a6de0ddee80b8a80a98d43f4bcc66c7)
+2026-09-30T22:05:18.6600275Z Complete job name: linux
+2026-09-30T22:05:18.7419756Z ##[group]Run actions/checkout@v4
+2026-09-30T22:05:18.7421215Z with:
+2026-09-30T22:05:18.7421738Z   fetch-depth: 0
+2026-09-30T22:05:18.7422261Z   repository: any-0/mux
+2026-09-30T22:05:18.7426679Z   token: ***
+2026-09-30T22:05:18.7427182Z   ssh-strict: true
+2026-09-30T22:05:18.7427678Z   ssh-user: git
+2026-09-30T22:05:18.7428177Z   persist-credentials: true
+2026-09-30T22:05:18.7428722Z   clean: true
+2026-09-30T22:05:18.7429219Z   sparse-checkout-cone-mode: true
+2026-09-30T22:05:18.7429792Z   fetch-tags: false
+2026-09-30T22:05:18.7430282Z   show-progress: true
+2026-09-30T22:05:18.7430768Z   lfs: false
+2026-09-30T22:05:18.7431240Z   submodules: false
+2026-09-30T22:05:18.7431743Z   set-safe-directory: true
+2026-09-30T22:05:18.7432298Z   allow-unsafe-pr-checkout: false
+2026-09-30T22:05:18.7433204Z ##[endgroup]
+2026-09-30T22:05:18.8436486Z Syncing repository: any-0/mux
+2026-09-30T22:05:18.8438742Z ##[group]Getting Git version info
+2026-09-30T22:05:18.8439677Z Working directory is '/home/runner/work/mux/mux'
+2026-09-30T22:05:18.8440757Z [command]/usr/bin/git version
+2026-09-30T22:05:18.8541243Z git version 2.55.0
+2026-09-30T22:05:18.8566123Z ##[endgroup]
+2026-09-30T22:05:18.8582135Z Temporarily overriding HOME='/home/runner/work/_temp/c5f43fdc-2699-4b68-bc15-bd9a1d11f393' before making global git config changes
+2026-09-30T22:05:18.8584666Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-30T22:05:18.8586974Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/mux/mux
+2026-09-30T22:05:18.8643548Z Deleting the contents of '/home/runner/work/mux/mux'
+2026-09-30T22:05:18.8653146Z ##[group]Initializing the repository
+2026-09-30T22:05:18.8655980Z [command]/usr/bin/git init /home/runner/work/mux/mux
+2026-09-30T22:05:18.8775007Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-30T22:05:18.8777111Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-30T22:05:18.8778826Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-30T22:05:18.8780174Z hint: call:
+2026-09-30T22:05:18.8781064Z hint:
+2026-09-30T22:05:18.8781940Z hint: 	git config --global init.defaultBranch <name>
+2026-09-30T22:05:18.8782796Z hint:
+2026-09-30T22:05:18.8783681Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-30T22:05:18.8785563Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-30T22:05:18.8786561Z hint:
+2026-09-30T22:05:18.8787183Z hint: 	git branch -m <name>
+2026-09-30T22:05:18.8787862Z hint:
+2026-09-30T22:05:18.8788698Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-30T22:05:18.8790175Z Initialized empty Git repository in /home/runner/work/mux/mux/.git/
+2026-09-30T22:05:18.8793245Z [command]/usr/bin/git remote add origin https://github.com/any-0/mux
+2026-09-30T22:05:18.8855419Z ##[endgroup]
+2026-09-30T22:05:18.8856461Z ##[group]Disabling automatic garbage collection
+2026-09-30T22:05:18.8859831Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-30T22:05:18.8894089Z ##[endgroup]
+2026-09-30T22:05:18.8895298Z ##[group]Setting up auth
+2026-09-30T22:05:18.8901991Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-30T22:05:18.8937081Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-30T22:05:18.9346996Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-30T22:05:18.9386664Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-30T22:05:18.9614618Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-30T22:05:18.9653273Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-30T22:05:18.9882978Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-30T22:05:18.9923912Z ##[endgroup]
+2026-09-30T22:05:18.9925130Z ##[group]Fetching the repository
+2026-09-30T22:05:18.9935451Z [command]/usr/bin/git -c protocol.version=2 fetch --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
+2026-09-30T22:05:21.2344239Z From https://github.com/any-0/mux
+2026-09-30T22:05:21.2347417Z  * [new branch]      bench/hosted-ci-results -> origin/bench/hosted-ci-results
+2026-09-30T22:05:21.2350183Z  * [new branch]      bench/nix-pty-comparison -> origin/bench/nix-pty-comparison
+2026-09-30T22:05:21.2352495Z  * [new branch]      fix/terminal-session-regressions -> origin/fix/terminal-session-regressions
+2026-09-30T22:05:21.2355101Z  * [new branch]      main                    -> origin/main
+2026-09-30T22:05:21.2357553Z  * [new branch]      perf/profile-driven-latency -> origin/perf/profile-driven-latency
+2026-09-30T22:05:21.2359733Z  * [new branch]      test/terminal-correctness-stress -> origin/test/terminal-correctness-stress
+2026-09-30T22:05:21.2363865Z [command]/usr/bin/git branch --list --remote origin/bench/hosted-ci-results
+2026-09-30T22:05:21.2388024Z   origin/bench/hosted-ci-results
+2026-09-30T22:05:21.2398760Z [command]/usr/bin/git rev-parse refs/remotes/origin/bench/hosted-ci-results
+2026-09-30T22:05:21.2426387Z c651f0e74e75ab9f3e8efbf27fd1c2aabff7f13f
+2026-09-30T22:05:21.2441751Z ##[endgroup]
+2026-09-30T22:05:21.2444046Z ##[group]Determining the checkout info
+2026-09-30T22:05:21.2447091Z ##[endgroup]
+2026-09-30T22:05:21.2448733Z [command]/usr/bin/git sparse-checkout disable
+2026-09-30T22:05:21.2502604Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-30T22:05:21.2537214Z ##[group]Checking out the ref
+2026-09-30T22:05:21.2540620Z [command]/usr/bin/git checkout --progress --force -B bench/hosted-ci-results refs/remotes/origin/bench/hosted-ci-results
+2026-09-30T22:05:21.6368784Z Switched to a new branch 'bench/hosted-ci-results'
+2026-09-30T22:05:21.6375655Z branch 'bench/hosted-ci-results' set up to track 'origin/bench/hosted-ci-results'.
+2026-09-30T22:05:21.6407594Z ##[endgroup]
+2026-09-30T22:05:21.6455959Z [command]/usr/bin/git log -1 --format=%H
+2026-09-30T22:05:21.6483631Z c651f0e74e75ab9f3e8efbf27fd1c2aabff7f13f
+2026-09-30T22:05:21.6736851Z ##[group]Run cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+2026-09-30T22:05:21.6737307Z with:
+2026-09-30T22:05:21.6737503Z   enable_kvm: true
+2026-09-30T22:05:21.6737716Z   set_as_trusted_user: true
+2026-09-30T22:05:21.6737940Z ##[endgroup]
+2026-09-30T22:05:21.6802135Z ##[start-action display=Run ${GITHUB_ACTION_PATH}/install-nix.sh;id=__cachix_install-nix-action.__run]
+2026-09-30T22:05:21.6923121Z ##[group]Run ${GITHUB_ACTION_PATH}/install-nix.sh
+2026-09-30T22:05:21.6923668Z [36;1m${GITHUB_ACTION_PATH}/install-nix.sh[0m
+2026-09-30T22:05:21.7233128Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-30T22:05:21.7233541Z env:
+2026-09-30T22:05:21.7233763Z   INPUT_EXTRA_NIX_CONFIG: 
+2026-09-30T22:05:21.7234044Z   INPUT_GITHUB_ACCESS_TOKEN: 
+2026-09-30T22:05:21.7234312Z   INPUT_INSTALL_OPTIONS: 
+2026-09-30T22:05:21.7234562Z   INPUT_INSTALL_URL: 
+2026-09-30T22:05:21.7235037Z   INPUT_NIX_PATH: 
+2026-09-30T22:05:21.7235303Z   INPUT_ENABLE_KVM: true
+2026-09-30T22:05:21.7235619Z   INPUT_SET_AS_TRUSTED_USER: true
+2026-09-30T22:05:21.7238995Z   GITHUB_TOKEN: ***
+2026-09-30T22:05:21.7239333Z ##[endgroup]
+2026-09-30T22:05:21.7381748Z ##[group]Enabling KVM support
+2026-09-30T22:05:21.7449365Z KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"
+2026-09-30T22:05:21.7758267Z Enabled KVM
+2026-09-30T22:05:21.7759231Z ##[endgroup]
+2026-09-30T22:05:21.7760135Z ##[group]Installing Nix
+2026-09-30T22:05:21.8046188Z installer options: --no-channel-add --nix-extra-conf-file /tmp/tmp.ORlyvWfUYk/nix.conf --daemon --daemon-user-count 8
+2026-09-30T22:05:21.8584134Z * Host releases.nixos.org:443 was resolved.
+2026-09-30T22:05:21.8589109Z * IPv6: 2a04:4e42:67::347
+2026-09-30T22:05:21.8589505Z * IPv4: 199.232.157.91
+2026-09-30T22:05:21.8589844Z *   Trying 199.232.157.91:443...
+2026-09-30T22:05:21.8592567Z * Connected to releases.nixos.org (199.232.157.91) port 443
+2026-09-30T22:05:21.8608333Z * ALPN: curl offers h2,http/1.1
+2026-09-30T22:05:21.8609910Z } [5 bytes data]
+2026-09-30T22:05:21.8610365Z * TLSv1.3 (OUT), TLS handshake, Client hello (1):
+2026-09-30T22:05:21.8610895Z } [512 bytes data]
+2026-09-30T22:05:21.8791938Z *  CAfile: /etc/ssl/certs/ca-certificates.crt
+2026-09-30T22:05:21.8792516Z *  CApath: /etc/ssl/certs
+2026-09-30T22:05:21.8792908Z { [5 bytes data]
+2026-09-30T22:05:21.8793211Z * TLSv1.3 (IN), TLS handshake, Server hello (2):
+2026-09-30T22:05:21.8793577Z { [122 bytes data]
+2026-09-30T22:05:21.8794052Z * TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+2026-09-30T22:05:21.8794642Z { [19 bytes data]
+2026-09-30T22:05:21.8795208Z * TLSv1.3 (IN), TLS handshake, Certificate (11):
+2026-09-30T22:05:21.8795585Z { [4081 bytes data]
+2026-09-30T22:05:21.8802839Z * TLSv1.3 (IN), TLS handshake, CERT verify (15):
+2026-09-30T22:05:21.8803366Z { [264 bytes data]
+2026-09-30T22:05:21.8803789Z * TLSv1.3 (IN), TLS handshake, Finished (20):
+2026-09-30T22:05:21.8804291Z { [36 bytes data]
+2026-09-30T22:05:21.8805073Z * TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+2026-09-30T22:05:21.8805675Z } [1 bytes data]
+2026-09-30T22:05:21.8806261Z * TLSv1.3 (OUT), TLS handshake, Finished (20):
+2026-09-30T22:05:21.8806775Z } [36 bytes data]
+2026-09-30T22:05:21.8807366Z * SSL connection using TLSv1.3 / TLS_AES_128_GCM_SHA256 / X25519 / RSASSA-PSS
+2026-09-30T22:05:21.8808086Z * ALPN: server accepted h2
+2026-09-30T22:05:21.8808504Z * Server certificate:
+2026-09-30T22:05:21.8808914Z *  subject: CN=releases.nixos.org
+2026-09-30T22:05:21.8809384Z *  start date: Sep  9 22:18:06 2026 GMT
+2026-09-30T22:05:21.8810092Z *  expire date: Dec  8 22:18:05 2026 GMT
+2026-09-30T22:05:21.8810583Z *  subjectAltName: host "releases.nixos.org" matched cert's "releases.nixos.org"
+2026-09-30T22:05:21.8811085Z *  issuer: C=US; O=Let's Encrypt; CN=YR1
+2026-09-30T22:05:21.8811408Z *  SSL certificate verify ok.
+2026-09-30T22:05:21.8811945Z *   Certificate level 0: Public key type RSA (2048/112 Bits/secBits), signed using sha256WithRSAEncryption
+2026-09-30T22:05:21.8813193Z *   Certificate level 1: Public key type RSA (2048/112 Bits/secBits), signed using sha256WithRSAEncryption
+2026-09-30T22:05:21.8814279Z *   Certificate level 2: Public key type RSA (4096/152 Bits/secBits), signed using sha256WithRSAEncryption
+2026-09-30T22:05:21.8815433Z *   Certificate level 3: Public key type RSA (4096/152 Bits/secBits), signed using sha256WithRSAEncryption
+2026-09-30T22:05:21.8815925Z { [5 bytes data]
+2026-09-30T22:05:21.8816196Z * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+2026-09-30T22:05:21.8816510Z { [201 bytes data]
+2026-09-30T22:05:21.8816758Z * using HTTP/2
+2026-09-30T22:05:21.8817132Z * [HTTP/2] [1] OPENED stream for https://releases.nixos.org/nix/nix-2.35.2/install
+2026-09-30T22:05:21.8817560Z * [HTTP/2] [1] [:method: GET]
+2026-09-30T22:05:21.8817815Z * [HTTP/2] [1] [:scheme: https]
+2026-09-30T22:05:21.8818098Z * [HTTP/2] [1] [:authority: releases.nixos.org]
+2026-09-30T22:05:21.8818425Z * [HTTP/2] [1] [:path: /nix/nix-2.35.2/install]
+2026-09-30T22:05:21.8818736Z * [HTTP/2] [1] [user-agent: curl/8.5.0]
+2026-09-30T22:05:21.8819151Z * [HTTP/2] [1] [accept: */*]
+2026-09-30T22:05:21.8819394Z } [5 bytes data]
+2026-09-30T22:05:21.8819768Z > GET /nix/nix-2.35.2/install HTTP/2
+2026-09-30T22:05:21.8820252Z > Host: releases.nixos.org
+2026-09-30T22:05:21.8820554Z > User-Agent: curl/8.5.0
+2026-09-30T22:05:21.8820961Z > Accept: */*
+2026-09-30T22:05:21.8821268Z > 
+2026-09-30T22:05:21.8821555Z { [5 bytes data]
+2026-09-30T22:05:21.8821904Z < HTTP/2 200 
+2026-09-30T22:05:21.8822270Z < last-modified: Wed, 12 Aug 2026 22:06:45 GMT
+2026-09-30T22:05:21.8822778Z < etag: "9f08ad80caddcb58f53e8551ff155b13"
+2026-09-30T22:05:21.8823091Z < x-amz-server-side-encryption: AES256
+2026-09-30T22:05:21.8823369Z < content-type: text/plain
+2026-09-30T22:05:21.8823593Z < server: AmazonS3
+2026-09-30T22:05:21.8823800Z < via: 1.1 varnish, 1.1 varnish
+2026-09-30T22:05:21.8824051Z < access-control-allow-origin: *
+2026-09-30T22:05:21.8824327Z < accept-ranges: bytes
+2026-09-30T22:05:21.8824589Z < date: Wed, 30 Sep 2026 22:05:21 GMT
+2026-09-30T22:05:21.8825085Z < age: 63363
+2026-09-30T22:05:21.8825404Z < x-served-by: cache-dub4323-DUB, cache-qro-mmqt1070071-QRO
+2026-09-30T22:05:21.8825733Z < x-cache: HIT, HIT
+2026-09-30T22:05:21.8825936Z < x-cache-hits: 56, 8
+2026-09-30T22:05:21.8826146Z < content-length: 4499
+2026-09-30T22:05:21.8826347Z < 
+2026-09-30T22:05:21.8826515Z { [4499 bytes data]
+2026-09-30T22:05:21.8826756Z * Connection #0 to host releases.nixos.org left intact
+2026-09-30T22:05:21.8889710Z downloading Nix 2.35.2 binary tarball for x86_64-linux from 'https://releases.nixos.org/nix/nix-2.35.2/nix-2.35.2-x86_64-linux.tar.xz' to '/tmp/nix-binary-tarball-unpack.Th5EDwP94x'...
+2026-09-30T22:05:21.8936189Z   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+2026-09-30T22:05:21.8937255Z                                  Dload  Upload   Total   Spent    Left  Speed
+2026-09-30T22:05:21.8937711Z 
+2026-09-30T22:05:21.9733833Z   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+2026-09-30T22:05:21.9734655Z 100 25.8M  100 25.8M    0     0   323M      0 --:--:-- --:--:-- --:--:--  327M
+2026-09-30T22:05:23.8262967Z Note: a multi-user installation is possible. See https://nix.dev/manual/nix/stable/installation/installing-binary.html#multi-user-installation
+2026-09-30T22:05:23.8273509Z [1;31mSwitching to the Multi-user Installer[0m
+2026-09-30T22:05:23.8373960Z [32mWelcome to the Multi-User Nix Installation
+2026-09-30T22:05:23.8383810Z [0m
+2026-09-30T22:05:23.8384292Z This installation tool will set up your computer with the Nix package
+2026-09-30T22:05:23.8385652Z manager. This will happen in a few stages:
+2026-09-30T22:05:23.8386031Z 
+2026-09-30T22:05:23.8386354Z 1. Make sure your computer doesn't already have Nix. If it does, I
+2026-09-30T22:05:23.8387158Z    will show you instructions on how to clean up your old install.
+2026-09-30T22:05:23.8387749Z 
+2026-09-30T22:05:23.8388046Z 2. Show you what I am going to install and where. Then I will ask
+2026-09-30T22:05:23.8388913Z    if you are ready to continue.
+2026-09-30T22:05:23.8389258Z 
+2026-09-30T22:05:23.8389721Z 3. Create the system users [34m(uids [30001..30008])[0m and groups [34m(gid 30000)[0m
+2026-09-30T22:05:23.8390295Z    that the Nix daemon uses to run builds. To create system users
+2026-09-30T22:05:23.8390742Z    in a different range, exit and run this tool again with
+2026-09-30T22:05:23.8391098Z    NIX_FIRST_BUILD_UID set.
+2026-09-30T22:05:23.8391261Z 
+2026-09-30T22:05:23.8391449Z 4. Perform the basic installation of the Nix files daemon.
+2026-09-30T22:05:23.8391733Z 
+2026-09-30T22:05:23.8391928Z 5. Configure your shell to import special Nix Profile files, so you
+2026-09-30T22:05:23.8392320Z    can use Nix.
+2026-09-30T22:05:23.8392451Z 
+2026-09-30T22:05:23.8392543Z 6. Start the Nix daemon.
+2026-09-30T22:05:23.8392706Z 
+2026-09-30T22:05:23.8392977Z [32m[4;32mWould you like to see a more detailed list of what I will do?
+2026-09-30T22:05:23.8393447Z [0mNo TTY, assuming you would say yes :)
+2026-09-30T22:05:23.8397507Z 
+2026-09-30T22:05:23.8397920Z I will:
+2026-09-30T22:05:23.8399746Z 
+2026-09-30T22:05:23.8405712Z  - make sure your computer doesn't already have Nix files
+2026-09-30T22:05:23.8406518Z    (if it does, I will tell you how to clean them up.)
+2026-09-30T22:05:23.8407335Z  - create local users (see the list above for the users I'll make)
+2026-09-30T22:05:23.8408119Z  - create a local group (nixbld)
+2026-09-30T22:05:23.8408674Z  - install Nix in /nix
+2026-09-30T22:05:23.8409196Z  - create a configuration file in /etc/nix
+2026-09-30T22:05:23.8409931Z  - set up the "default profile" by creating some Nix-related files in
+2026-09-30T22:05:23.8410684Z    /root
+2026-09-30T22:05:23.8414357Z  - back up /etc/bash.bashrc to /etc/bash.bashrc.backup-before-nix
+2026-09-30T22:05:23.8415409Z  - update /etc/bash.bashrc to include some Nix configuration
+2026-09-30T22:05:23.8426732Z  - load and start a service (at /etc/systemd/system/nix-daemon.service
+2026-09-30T22:05:23.8427674Z    and /etc/systemd/system/nix-daemon.socket) for nix-daemon
+2026-09-30T22:05:23.8428238Z 
+2026-09-30T22:05:23.8428772Z [32m[4;32mReady to continue?
+2026-09-30T22:05:23.8429326Z [0mNo TTY, assuming you would say yes :)
+2026-09-30T22:05:23.8448029Z 
+2026-09-30T22:05:23.8449186Z [34m---- let's talk about sudo -----------------------------------------------------
+2026-09-30T22:05:23.8460344Z [0mThis script is going to call sudo a lot. Normally, it would show you
+2026-09-30T22:05:23.8461349Z exactly what commands it is running and why. However, the script is
+2026-09-30T22:05:23.8462135Z run in a headless fashion, like this:
+2026-09-30T22:05:23.8462588Z 
+2026-09-30T22:05:23.8463045Z   $ curl -L https://nixos.org/nix/install | sh
+2026-09-30T22:05:23.8463438Z 
+2026-09-30T22:05:23.8463730Z or maybe in a CI pipeline. Because of that, I'm going to skip the
+2026-09-30T22:05:23.8464386Z verbose output in the interest of brevity.
+2026-09-30T22:05:23.8464737Z 
+2026-09-30T22:05:23.8465128Z If you would like to
+2026-09-30T22:05:23.8465516Z see the output, try like this:
+2026-09-30T22:05:23.8465817Z 
+2026-09-30T22:05:23.8466081Z   $ curl -L -o install-nix https://nixos.org/nix/install
+2026-09-30T22:05:23.8466635Z   $ sh ./install-nix
+2026-09-30T22:05:23.8466885Z 
+2026-09-30T22:05:23.8466890Z 
+2026-09-30T22:05:23.8467259Z [32m~~> Checking for artifacts of previous installs
+2026-09-30T22:05:23.8476021Z [0mBefore I try to install, I'll check for signs Nix already is or has
+2026-09-30T22:05:23.8476709Z been installed on this system.
+2026-09-30T22:05:23.8523741Z 
+2026-09-30T22:05:23.8524350Z [34m---- Nix config report ---------------------------------------------------------
+2026-09-30T22:05:23.8525504Z [0m[1m        Temp Dir[0m:	/tmp/tmp.roPI3tM9BN
+2026-09-30T22:05:23.8525868Z [1m        Nix Root[0m:	/nix
+2026-09-30T22:05:23.8528132Z [1m     Build Users[0m:	8
+2026-09-30T22:05:23.8528638Z [1m  Build Group ID[0m:	30000
+2026-09-30T22:05:23.8529148Z [1mBuild Group Name[0m:	nixbld
+2026-09-30T22:05:23.8529424Z 
+2026-09-30T22:05:23.8529615Z [4;34mbuild users:
+2026-09-30T22:05:23.8530251Z [0m[1m    Username[0m:	UID
+2026-09-30T22:05:23.8557155Z [1m     nixbld1[0m:	30001
+2026-09-30T22:05:23.8567285Z [1m     nixbld2[0m:	30002
+2026-09-30T22:05:23.8577448Z [1m     nixbld3[0m:	30003
+2026-09-30T22:05:23.8588075Z [1m     nixbld4[0m:	30004
+2026-09-30T22:05:23.8598170Z [1m     nixbld5[0m:	30005
+2026-09-30T22:05:23.8608163Z [1m     nixbld6[0m:	30006
+2026-09-30T22:05:23.8618159Z [1m     nixbld7[0m:	30007
+2026-09-30T22:05:23.8628297Z [1m     nixbld8[0m:	30008
+2026-09-30T22:05:23.8628564Z 
+2026-09-30T22:05:23.8628916Z [32m[4;32mReady to continue?
+2026-09-30T22:05:23.8629427Z [0mNo TTY, assuming you would say yes :)
+2026-09-30T22:05:23.8629730Z 
+2026-09-30T22:05:23.8629883Z [32m~~> Setting up the build group nixbld
+2026-09-30T22:05:23.8852613Z [0m[1m            Created[0m:	Yes
+2026-09-30T22:05:23.8875551Z 
+2026-09-30T22:05:23.8876256Z [32m~~> Setting up the build user nixbld1
+2026-09-30T22:05:23.9048826Z useradd warning: nixbld1's uid 30001 is greater than SYS_UID_MAX 999
+2026-09-30T22:05:23.9148241Z [0m[1m           Created[0m:	Yes
+2026-09-30T22:05:23.9153513Z [1m            Hidden[0m:	Yes
+2026-09-30T22:05:23.9171309Z [1m    Home Directory[0m:	/var/empty
+2026-09-30T22:05:23.9191233Z [1m              Note[0m:	Nix build user 1
+2026-09-30T22:05:23.9208976Z [1m   Logins Disabled[0m:	Yes
+2026-09-30T22:05:23.9235286Z [1m  Member of nixbld[0m:	Yes
+2026-09-30T22:05:23.9253072Z [1m    PrimaryGroupID[0m:	30000
+2026-09-30T22:05:23.9264487Z 
+2026-09-30T22:05:23.9265065Z [32m~~> Setting up the build user nixbld2
+2026-09-30T22:05:23.9398767Z useradd warning: nixbld2's uid 30002 is greater than SYS_UID_MAX 999
+2026-09-30T22:05:23.9490182Z [0m[1m           Created[0m:	Yes
+2026-09-30T22:05:23.9495905Z [1m            Hidden[0m:	Yes
+2026-09-30T22:05:23.9513875Z [1m    Home Directory[0m:	/var/empty
+2026-09-30T22:05:23.9534328Z [1m              Note[0m:	Nix build user 2
+2026-09-30T22:05:23.9552218Z [1m   Logins Disabled[0m:	Yes
+2026-09-30T22:05:23.9572134Z [1m  Member of nixbld[0m:	Yes
+2026-09-30T22:05:23.9590159Z [1m    PrimaryGroupID[0m:	30000
+2026-09-30T22:05:23.9601411Z 
+2026-09-30T22:05:23.9601715Z [32m~~> Setting up the build user nixbld3
+2026-09-30T22:05:23.9730863Z useradd warning: nixbld3's uid 30003 is greater than SYS_UID_MAX 999
+2026-09-30T22:05:23.9824174Z [0m[1m           Created[0m:	Yes
+2026-09-30T22:05:23.9829765Z [1m            Hidden[0m:	Yes
+2026-09-30T22:05:23.9849058Z [1m    Home Directory[0m:	/var/empty
+2026-09-30T22:05:23.9883228Z [1m              Note[0m:	Nix build user 3
+2026-09-30T22:05:23.9901328Z [1m   Logins Disabled[0m:	Yes
+2026-09-30T22:05:23.9920241Z [1m  Member of nixbld[0m:	Yes
+2026-09-30T22:05:23.9938302Z [1m    PrimaryGroupID[0m:	30000
+2026-09-30T22:05:23.9949728Z 
+2026-09-30T22:05:23.9950033Z [32m~~> Setting up the build user nixbld4
+2026-09-30T22:05:24.0087621Z useradd warning: nixbld4's uid 30004 is greater than SYS_UID_MAX 999
+2026-09-30T22:05:24.0180751Z [0m[1m           Created[0m:	Yes
+2026-09-30T22:05:24.0186355Z [1m            Hidden[0m:	Yes
+2026-09-30T22:05:24.0205994Z [1m    Home Directory[0m:	/var/empty
+2026-09-30T22:05:24.0226460Z [1m              Note[0m:	Nix build user 4
+2026-09-30T22:05:24.0244525Z [1m   Logins Disabled[0m:	Yes
+2026-09-30T22:05:24.0263999Z [1m  Member of nixbld[0m:	Yes
+2026-09-30T22:05:24.0282317Z [1m    PrimaryGroupID[0m:	30000
+2026-09-30T22:05:24.0293444Z 
+2026-09-30T22:05:24.0293744Z [32m~~> Setting up the build user nixbld5
+2026-09-30T22:05:24.0426826Z useradd warning: nixbld5's uid 30005 is greater than SYS_UID_MAX 999
+2026-09-30T22:05:24.0535209Z [0m[1m           Created[0m:	Yes
+2026-09-30T22:05:24.0541142Z [1m            Hidden[0m:	Yes
+2026-09-30T22:05:24.0559290Z [1m    Home Directory[0m:	/var/empty
+2026-09-30T22:05:24.0579766Z [1m              Note[0m:	Nix build user 5
+2026-09-30T22:05:24.0602588Z [1m   Logins Disabled[0m:	Yes
+2026-09-30T22:05:24.0626539Z [1m  Member of nixbld[0m:	Yes
+2026-09-30T22:05:24.0645130Z [1m    PrimaryGroupID[0m:	30000
+2026-09-30T22:05:24.0656386Z 
+2026-09-30T22:05:24.0656759Z [32m~~> Setting up the build user nixbld6
+2026-09-30T22:05:24.0791362Z useradd warning: nixbld6's uid 30006 is greater than SYS_UID_MAX 999
+2026-09-30T22:05:24.0882800Z [0m[1m           Created[0m:	Yes
+2026-09-30T22:05:24.0888652Z [1m            Hidden[0m:	Yes
+2026-09-30T22:05:24.0935379Z [1m    Home Directory[0m:	/var/empty
+2026-09-30T22:05:24.0951841Z [1m              Note[0m:	Nix build user 6
+2026-09-30T22:05:24.0978417Z [1m   Logins Disabled[0m:	Yes
+2026-09-30T22:05:24.1009867Z [1m  Member of nixbld[0m:	Yes
+2026-09-30T22:05:24.1033241Z [1m    PrimaryGroupID[0m:	30000
+2026-09-30T22:05:24.1047496Z 
+2026-09-30T22:05:24.1049666Z [32m~~> Setting up the build user nixbld7
+2026-09-30T22:05:24.2557285Z useradd warning: nixbld7's uid 30007 is greater than SYS_UID_MAX 999
+2026-09-30T22:05:24.2653460Z [0m[1m           Created[0m:	Yes
+2026-09-30T22:05:24.2659324Z [1m            Hidden[0m:	Yes
+2026-09-30T22:05:24.2677916Z [1m    Home Directory[0m:	/var/empty
+2026-09-30T22:05:24.2698347Z [1m              Note[0m:	Nix build user 7
+2026-09-30T22:05:24.2716407Z [1m   Logins Disabled[0m:	Yes
+2026-09-30T22:05:24.2741487Z [1m  Member of nixbld[0m:	Yes
+2026-09-30T22:05:24.2760219Z [1m    PrimaryGroupID[0m:	30000
+2026-09-30T22:05:24.2771081Z 
+2026-09-30T22:05:24.2771489Z [32m~~> Setting up the build user nixbld8
+2026-09-30T22:05:24.2906314Z useradd warning: nixbld8's uid 30008 is greater than SYS_UID_MAX 999
+2026-09-30T22:05:24.2996593Z [0m[1m           Created[0m:	Yes
+2026-09-30T22:05:24.3001996Z [1m            Hidden[0m:	Yes
+2026-09-30T22:05:24.3021055Z [1m    Home Directory[0m:	/var/empty
+2026-09-30T22:05:24.3041964Z [1m              Note[0m:	Nix build user 8
+2026-09-30T22:05:24.3060273Z [1m   Logins Disabled[0m:	Yes
+2026-09-30T22:05:24.3079781Z [1m  Member of nixbld[0m:	Yes
+2026-09-30T22:05:24.3098548Z [1m    PrimaryGroupID[0m:	30000
+2026-09-30T22:05:24.3098934Z 
+2026-09-30T22:05:24.3099154Z [32m~~> Setting up the basic directory structure
+2026-09-30T22:05:24.3187038Z [0minstall: creating directory '/nix'
+2026-09-30T22:05:24.3187600Z install: creating directory '/nix/var'
+2026-09-30T22:05:24.3188098Z install: creating directory '/nix/var/log'
+2026-09-30T22:05:24.3188441Z install: creating directory '/nix/var/log/nix'
+2026-09-30T22:05:24.3188813Z install: creating directory '/nix/var/log/nix/drvs'
+2026-09-30T22:05:24.3189305Z install: creating directory '/nix/var/nix'
+2026-09-30T22:05:24.3189848Z install: creating directory '/nix/var/nix/db'
+2026-09-30T22:05:24.3190436Z install: creating directory '/nix/var/nix/gcroots'
+2026-09-30T22:05:24.3190805Z install: creating directory '/nix/var/nix/profiles'
+2026-09-30T22:05:24.3191162Z install: creating directory '/nix/var/nix/temproots'
+2026-09-30T22:05:24.3191511Z install: creating directory '/nix/var/nix/userpool'
+2026-09-30T22:05:24.3191879Z install: creating directory '/nix/var/nix/daemon-socket'
+2026-09-30T22:05:24.3192275Z install: creating directory '/nix/var/nix/gcroots/per-user'
+2026-09-30T22:05:24.3192703Z install: creating directory '/nix/var/nix/profiles/per-user'
+2026-09-30T22:05:24.3266314Z install: creating directory '/nix/store'
+2026-09-30T22:05:24.3343221Z install: creating directory '/etc/nix'
+2026-09-30T22:05:24.3352890Z 
+2026-09-30T22:05:24.3353492Z [32m~~> Installing Nix
+2026-09-30T22:05:24.5214619Z [0m      Alright! We have our first nix at /nix/store/irfrbndi76zhkvqsfhmsn4a99iafck29-nix-2.35.2
+2026-09-30T22:05:24.5649839Z       Just finished getting the nix database ready.
+2026-09-30T22:05:24.5653010Z 
+2026-09-30T22:05:24.5654180Z [32m~~> Setting up shell profiles: /etc/bashrc /etc/profile.d/nix.sh /etc/zshrc /etc/bash.bashrc /etc/zsh/zshrc
+2026-09-30T22:05:24.5841067Z [0m
+2026-09-30T22:05:24.5841303Z # Nix
+2026-09-30T22:05:24.5841672Z if [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then
+2026-09-30T22:05:24.5842414Z   . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+2026-09-30T22:05:24.5843017Z fi
+2026-09-30T22:05:24.5843319Z # End Nix
+2026-09-30T22:05:24.5843815Z 
+2026-09-30T22:05:24.6013249Z 
+2026-09-30T22:05:24.6013541Z # Nix
+2026-09-30T22:05:24.6014102Z if [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then
+2026-09-30T22:05:24.6015273Z   . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+2026-09-30T22:05:24.6015694Z fi
+2026-09-30T22:05:24.6015869Z # End Nix
+2026-09-30T22:05:24.6015983Z 
+2026-09-30T22:05:24.6185199Z 
+2026-09-30T22:05:24.6185398Z # Nix
+2026-09-30T22:05:24.6185894Z if [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then
+2026-09-30T22:05:24.6186418Z   . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+2026-09-30T22:05:24.6186746Z fi
+2026-09-30T22:05:24.6187061Z # End Nix
+2026-09-30T22:05:24.6187244Z 
+2026-09-30T22:05:24.6350257Z 
+2026-09-30T22:05:24.6350408Z # Nix
+2026-09-30T22:05:24.6350953Z if [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then
+2026-09-30T22:05:24.6351815Z   . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+2026-09-30T22:05:24.6352419Z fi
+2026-09-30T22:05:24.6352713Z # End Nix
+2026-09-30T22:05:24.6352897Z 
+2026-09-30T22:05:24.6353156Z # System-wide .bashrc file for interactive bash(1) shells.
+2026-09-30T22:05:24.6353568Z 
+2026-09-30T22:05:24.6353903Z # To enable the settings / commands in this file for login shells as well,
+2026-09-30T22:05:24.6354608Z # this file has to be sourced in /etc/profile.
+2026-09-30T22:05:24.6355218Z 
+2026-09-30T22:05:24.6355428Z # If not running interactively, don't do anything
+2026-09-30T22:05:24.6355937Z [ -z "$PS1" ] && return
+2026-09-30T22:05:24.6356186Z 
+2026-09-30T22:05:24.6356455Z # check the window size after each command and, if necessary,
+2026-09-30T22:05:24.6357044Z # update the values of LINES and COLUMNS.
+2026-09-30T22:05:24.6357499Z shopt -s checkwinsize
+2026-09-30T22:05:24.6357717Z 
+2026-09-30T22:05:24.6358072Z # set variable identifying the chroot you work in (used in the prompt below)
+2026-09-30T22:05:24.6358855Z if [ -z "${debian_chroot:-}" ] && [ -r /etc/debian_chroot ]; then
+2026-09-30T22:05:24.6359446Z     debian_chroot=$(cat /etc/debian_chroot)
+2026-09-30T22:05:24.6359886Z fi
+2026-09-30T22:05:24.6360046Z 
+2026-09-30T22:05:24.6360330Z # set a fancy prompt (non-color, overwrite the one in /etc/profile)
+2026-09-30T22:05:24.6361020Z # but only if not SUDOing and have SUDO_PS1 set; then assume smart user.
+2026-09-30T22:05:24.6361528Z if ! [ -n "${SUDO_USER}" -a -n "${SUDO_PS1}" ]; then
+2026-09-30T22:05:24.6361858Z   PS1='${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '
+2026-09-30T22:05:24.6362159Z fi
+2026-09-30T22:05:24.6362275Z 
+2026-09-30T22:05:24.6362503Z # Commented out, don't overwrite xterm -T "title" -n "icontitle" by default.
+2026-09-30T22:05:24.6362915Z # If this is an xterm set the title to user@host:dir
+2026-09-30T22:05:24.6363196Z #case "$TERM" in
+2026-09-30T22:05:24.6363385Z #xterm*|rxvt*)
+2026-09-30T22:05:24.6363676Z #    PROMPT_COMMAND='echo -ne "\033]0;${USER}@${HOSTNAME}: ${PWD}\007"'
+2026-09-30T22:05:24.6364014Z #    ;;
+2026-09-30T22:05:24.6364179Z #*)
+2026-09-30T22:05:24.6364370Z #    ;;
+2026-09-30T22:05:24.6364547Z #esac
+2026-09-30T22:05:24.6364668Z 
+2026-09-30T22:05:24.6365047Z # enable bash completion in interactive shells
+2026-09-30T22:05:24.6365554Z #if ! shopt -oq posix; then
+2026-09-30T22:05:24.6365858Z #  if [ -f /usr/share/bash-completion/bash_completion ]; then
+2026-09-30T22:05:24.6366207Z #    . /usr/share/bash-completion/bash_completion
+2026-09-30T22:05:24.6366506Z #  elif [ -f /etc/bash_completion ]; then
+2026-09-30T22:05:24.6366773Z #    . /etc/bash_completion
+2026-09-30T22:05:24.6367201Z #  fi
+2026-09-30T22:05:24.6367362Z #fi
+2026-09-30T22:05:24.6367457Z 
+2026-09-30T22:05:24.6367533Z # sudo hint
+2026-09-30T22:05:24.6367834Z if [ ! -e "$HOME/.sudo_as_admin_successful" ] && [ ! -e "$HOME/.hushlogin" ] ; then
+2026-09-30T22:05:24.6368231Z     case " $(groups) " in *\ admin\ *|*\ sudo\ *)
+2026-09-30T22:05:24.6368509Z     if [ -x /usr/bin/sudo ]; then
+2026-09-30T22:05:24.6368740Z 	cat <<-EOF
+2026-09-30T22:05:24.6369134Z 	To run a command as administrator (user "root"), use "sudo <command>".
+2026-09-30T22:05:24.6369493Z 	See "man sudo_root" for details.
+2026-09-30T22:05:24.6369711Z 	
+2026-09-30T22:05:24.6369861Z 	EOF
+2026-09-30T22:05:24.6370017Z     fi
+2026-09-30T22:05:24.6370180Z     esac
+2026-09-30T22:05:24.6370339Z fi
+2026-09-30T22:05:24.6370431Z 
+2026-09-30T22:05:24.6370573Z # if the command-not-found package is installed, use it
+2026-09-30T22:05:24.6371050Z if [ -x /usr/lib/command-not-found -o -x /usr/share/command-not-found/command-not-found ]; then
+2026-09-30T22:05:24.6371493Z 	function command_not_found_handle {
+2026-09-30T22:05:24.6371811Z 	        # check because c-n-f could've been removed in the meantime
+2026-09-30T22:05:24.6372173Z                 if [ -x /usr/lib/command-not-found ]; then
+2026-09-30T22:05:24.6372474Z 		   /usr/lib/command-not-found -- "$1"
+2026-09-30T22:05:24.6372730Z                    return $?
+2026-09-30T22:05:24.6373039Z                 elif [ -x /usr/share/command-not-found/command-not-found ]; then
+2026-09-30T22:05:24.6373450Z 		   /usr/share/command-not-found/command-not-found -- "$1"
+2026-09-30T22:05:24.6373763Z                    return $?
+2026-09-30T22:05:24.6373975Z 		else
+2026-09-30T22:05:24.6374176Z 		   printf "%s: command not found\n" "$1" >&2
+2026-09-30T22:05:24.6374439Z 		   return 127
+2026-09-30T22:05:24.6374616Z 		fi
+2026-09-30T22:05:24.6374774Z 	}
+2026-09-30T22:05:24.6375203Z fi
+2026-09-30T22:05:24.6377568Z 
+2026-09-30T22:05:24.6378499Z [32m~~> Setting up shell profiles for Fish with conf.d/nix.fish inside /etc/fish /usr/local/etc/fish /opt/homebrew/etc/fish /opt/local/etc/fish
+2026-09-30T22:05:24.6457429Z [0m
+2026-09-30T22:05:24.6457873Z [32m~~> Setting up the default profile
+2026-09-30T22:05:24.6752509Z installing 'nix-2.35.2'
+2026-09-30T22:05:24.6925624Z building '/nix/store/3v9waf1zcy52sd2xf30ndbwssp7d4sza-user-environment.drv'...
+2026-09-30T22:05:24.7361231Z installing 'nix-manual-2.35.2-man'
+2026-09-30T22:05:24.7528713Z building '/nix/store/87kv2ra7c0a549l86df0y18w8w3ir6qk-user-environment.drv'...
+2026-09-30T22:05:24.7963551Z installing 'nss-cacert-3.123'
+2026-09-30T22:05:24.8136800Z building '/nix/store/aq6vipp55pqkyy4i7v7sxjrfdibk3a8s-user-environment.drv'...
+2026-09-30T22:05:24.8368326Z [0m
+2026-09-30T22:05:24.8369172Z [32m~~> Setting up the nix-daemon systemd service
+2026-09-30T22:05:24.8742972Z Created symlink /etc/systemd/system/nix-daemon.service → /nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.service.
+2026-09-30T22:05:25.1504504Z Created symlink /etc/systemd/system/nix-daemon.socket → /nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.socket.
+2026-09-30T22:05:25.1507861Z Created symlink /etc/systemd/system/sockets.target.wants/nix-daemon.socket → /nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.socket.
+2026-09-30T22:05:25.7219091Z [0m[32mAlright! We're done!
+2026-09-30T22:05:25.7242309Z [0mTry it! Open a new terminal, and type:
+2026-09-30T22:05:25.7243339Z 
+2026-09-30T22:05:25.7243787Z   $ nix-shell -p nix-info --run "nix-info -m"
+2026-09-30T22:05:25.7244310Z 
+2026-09-30T22:05:25.7244760Z Thank you for using this installer. If you have any feedback or need
+2026-09-30T22:05:25.7245839Z help, don't hesitate:
+2026-09-30T22:05:25.7246126Z 
+2026-09-30T22:05:25.7246279Z You can open an issue at
+2026-09-30T22:05:25.7246932Z https://github.com/NixOS/nix/issues/new?labels=installer&template=installer.md
+2026-09-30T22:05:25.7247620Z 
+2026-09-30T22:05:25.7247909Z Or get in touch with the community: https://nixos.org/community
+2026-09-30T22:05:25.7269189Z 
+2026-09-30T22:05:25.7269989Z [34m---- Reminders -----------------------------------------------------------------
+2026-09-30T22:05:25.7271071Z [0m[34m[ 1 ][0m
+2026-09-30T22:05:25.7271568Z Nix won't work in active shell sessions until you restart them.
+2026-09-30T22:05:25.7272007Z 
+2026-09-30T22:05:25.8207028Z ##[endgroup]
+2026-09-30T22:05:25.8243559Z ##[end-action id=__cachix_install-nix-action.__run;outcome=success;conclusion=success;duration_ms=4144]
+2026-09-30T22:05:25.8280408Z ##[group]Run ./scripts/test-nix
+2026-09-30T22:05:25.8280715Z [36;1m./scripts/test-nix[0m
+2026-09-30T22:05:25.8348507Z shell: /usr/bin/bash -e {0}
+2026-09-30T22:05:25.8348773Z env:
+2026-09-30T22:05:25.8348982Z   TMPDIR: /home/runner/work/_temp
+2026-09-30T22:05:25.8349368Z   NIX_PROFILES: /nix/var/nix/profiles/default /home/runner/.nix-profile
+2026-09-30T22:05:25.8349833Z   NIX_SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+2026-09-30T22:05:25.8350153Z ##[endgroup]
+2026-09-30T22:05:26.0672216Z copying path '/nix/store/zkrz054gvl1dcxkw25d8lgx8l10px665-source' from 'https://cache.nixos.org'...
+2026-09-30T22:05:35.8257964Z copying path '/nix/store/xqnf1bdi96i044mgfqvw9kll3554nbr9-rust-lib-src' from 'https://cache.nixos.org'...
+2026-09-30T22:05:35.8325122Z copying path '/nix/store/s0xj50a5awma0jwgsqws61014nxzxy19-gnu-config-2024-01-01' from 'https://cache.nixos.org'...
+2026-09-30T22:05:35.8342629Z copying path '/nix/store/97rn2wpm09db8278qzjvbss9ybxhfsxf-gcc-15.2.0-libgcc' from 'https://cache.nixos.org'...
+2026-09-30T22:05:35.8382563Z copying path '/nix/store/r7vdyf8pwlqsgd5ydak9fmq3q1i5nm3m-xgcc-15.2.0-libgcc' from 'https://cache.nixos.org'...
+2026-09-30T22:05:35.8436722Z copying path '/nix/store/25h01lplynxf9s0yh75brdhxzcjv4kzp-linux-headers-6.18.7' from 'https://cache.nixos.org'...
+2026-09-30T22:05:35.8457957Z copying path '/nix/store/gz3rknshr1ywis4mjaqrgj3z2shp3n3v-update-autotools-gnu-config-scripts-hook' from 'https://cache.nixos.org'...
+2026-09-30T22:05:35.8466308Z copying path '/nix/store/1xakvg5jqmaiawwk0n1sbhvsvrdya512-libunistring-1.4.1' from 'https://cache.nixos.org'...
+2026-09-30T22:05:35.8488223Z copying path '/nix/store/y7yfaxd7jsldgfvxpj3vlqcyidakp36y-publicsuffix-list-0-unstable-2026-01-25' from 'https://cache.nixos.org'...
+2026-09-30T22:05:35.8960391Z copying path '/nix/store/ylvn8sswwfdp6l71hmz9ic8m4w9996j5-libidn2-2.3.8' from 'https://cache.nixos.org'...
+2026-09-30T22:05:35.9091727Z copying path '/nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2948633Z copying path '/nix/store/7ssfvw8z4ylzjkw73z1y78svbhkdlkvb-attr-2.5.2' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2949967Z copying path '/nix/store/2hjsch59amjs3nbgh7ahcfzm2bfwl8zi-bash-5.3p9' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2952731Z copying path '/nix/store/nnhkhd6pj8zqd3m3yanpgky02ywrkhms-ed-1.22.4' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2954166Z copying path '/nix/store/ydpw9xwv0j5v8swa6wlz1ag2p19635mi-bzip2-1.0.8' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2955931Z copying path '/nix/store/harqqq4p37lpfj0h57xnwcag9ls0d2fs-expand-response-params' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2957798Z copying path '/nix/store/gf7b4yz4vhd0y2hnnrimhh875ghwzzzj-gawk-5.3.2' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2959485Z copying path '/nix/store/sb2rv4sivgmmgdwszyhjbsb51gs3dpai-brotli-1.2.0-lib' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2963605Z copying path '/nix/store/ihpdbhy4rfxaixiamyb588zfc3vj19al-gcc-15.2.0-lib' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2965264Z copying path '/nix/store/njcs5bsgvn7qdzfr7kxjvn0fq8y6i4ys-gmp-6.3.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2987535Z copying path '/nix/store/fw2d81ms5a8627ichs9a8fqc5dk9s5gc-keyutils-1.6.3-lib' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2989006Z copying path '/nix/store/0xw6y53ijaqwfd9c99wyaqiinychzv1f-gnumake-4.4.1' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2990405Z copying path '/nix/store/5mnq195cx3cagnpbbvf5ncbp4fjgy0sz-libffi-3.5.2' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2992101Z copying path '/nix/store/qvxaabi4w7isbp0vxqqsx4brl5n1qnjh-libpsl-0.21.5' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2993634Z copying path '/nix/store/wv7qq5yb8plyhxji9x3r5gpkyfm2kf29-gnused-4.9' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.2995767Z copying path '/nix/store/2c48s343k15i0cmwb9cp1vi6randmzcw-glibc-2.42-51-bin' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3014162Z copying path '/nix/store/l3gqwj9zk4xgqv9kxfkvx9qc51m8j8x3-libxml2-2.15.1' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3015985Z copying path '/nix/store/vl8jkqpr0l3fac3cxiy4nwc5paiww1lv-zlib-1.3.1' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3038283Z copying path '/nix/store/p96a7p297gmia8zcy4i72qd45wzw8lh6-openssl-3.6.1' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3039872Z copying path '/nix/store/8y5jm97n4lyw80gh71yihghbhqc11fdz-patch-2.8' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3060297Z copying path '/nix/store/x8l7qzpab2gpdrp89g48mxlrsiz4f0gm-bzip2-1.0.8-bin' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3128939Z copying path '/nix/store/vfa8fqz4k8dnlwivphif88qai54nxnqf-acl-2.3.2' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3230711Z copying path '/nix/store/j3hs745klzarm7lrlpsyl8skx5czg0z0-pcre2-10.46' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3433428Z copying path '/nix/store/khd9yb8b0npl5x98y7d5l102v0wp600l-xz-5.8.2' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3515112Z copying path '/nix/store/4g2q10kbj49j0cpyal731ilca7d78z6z-nghttp2-1.67.1-lib' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3527777Z copying path '/nix/store/5gmx4ls0l2jq468j179z0ncp6l4g9gjj-nghttp3-1.14.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3637309Z copying path '/nix/store/p69faj0lr3lqljvrnybmkpxw18skfqlf-isl-0.20' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3656570Z copying path '/nix/store/y9xh8dxxbi6ss7mawx5glgazslii4f63-mpfr-4.2.2' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3672795Z copying path '/nix/store/p3j7lphwlci13f9w2v4rav6rbvpi80li-file-5.45' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3686312Z copying path '/nix/store/3nlzlnpqa7fsbx4f0sdd642cjw4rysa6-binutils-2.44-lib' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3765735Z copying path '/nix/store/w1n7yp2vnldr395hbwbcaw9sflh413bm-gzip-1.14' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.3807008Z copying path '/nix/store/isva9q9zx3frx6hh6cnpihh1kd2bx6bk-gnutar-1.35' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.4372268Z copying path '/nix/store/j8irrc0mpx029dw0rmadsjylg7h31ync-glibc-2.42-51-dev' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.4527846Z copying path '/nix/store/27fx8p4k6098wan3zahdbyj79ndcn03z-xz-5.8.2-bin' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.4678444Z copying path '/nix/store/r9kx65g5cjf1ifsrh6b02y8jsvjprk36-libmpc-1.3.1' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.4723370Z copying path '/nix/store/8laf6k81j9ckylrigj3xsk76j69knhvl-gnugrep-3.12' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.5744673Z copying path '/nix/store/9nmzd62x45ayp4vmswvn6z45h6bzrsla-binutils-2.44' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.5747508Z copying path '/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.5763535Z copying path '/nix/store/3z4n8rmy4cfp0km5jaczz7f404j9sa64-gmp-with-cxx-6.3.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.5765752Z copying path '/nix/store/m27kji8vcm9hn8jyn3dxixxkgbs6p0kp-zstd-1.5.7' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.5767194Z copying path '/nix/store/s6v0k4cvllyp5cy03ngxz0snj7z23ljm-llvm-21.1.8-lib' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.5768603Z copying path '/nix/store/zm5pnbyzh3drnb0z0m8y1zgs141x07xv-rust-analyzer-unwrapped-2026-02-16' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.5769822Z copying path '/nix/store/590yx3aynyhs48jyk8ip37fk1mjqfhkb-patchelf-0.15.2' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.5986976Z copying path '/nix/store/38bhsc4kzxd47z36mmzr2410mq1zc5i4-libssh2-1.11.1' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.5988584Z copying path '/nix/store/xfjkn6pgqyd4h18fdbf5fshadqyzdklp-krb5-1.22.1-lib' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.5990305Z copying path '/nix/store/y9085qj0nl9yr9px055n2mlnhx1pkfmw-ngtcp2-1.19.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.6127144Z copying path '/nix/store/hlxw2q9qansq7bn52xvlb5badw3z1v8s-coreutils-9.10' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.7220415Z copying path '/nix/store/i59cbsr9zwy57hp41pa3wg1cbzm0yjpr-curl-8.18.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.7330154Z copying path '/nix/store/icrrz26xbyp293kagrlkab1bhc6gra0r-diffutils-3.12' from 'https://cache.nixos.org'...
+2026-09-30T22:05:36.7340666Z copying path '/nix/store/b3rx5wac9hhfxn9120xkcvdwj51mc9z2-findutils-4.10.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:37.1912744Z copying path '/nix/store/4yi6jj75bb5hhdzpzlxfyf69d35wsf2x-binutils-wrapper-2.44' from 'https://cache.nixos.org'...
+2026-09-30T22:05:37.5759169Z copying path '/nix/store/3h49id8siw8mlpkk47n8bxbkhiqwwc15-rust-analyzer-2026-02-16' from 'https://cache.nixos.org'...
+2026-09-30T22:05:40.0783360Z copying path '/nix/store/kbw2j1vag664b3sj3rjwz9v53cqx87sb-gcc-wrapper-15.2.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:40.0936213Z copying path '/nix/store/zkiy4zv8wz3v95bj6fdmkqwql8x1vnhb-stdenv-linux' from 'https://cache.nixos.org'...
+2026-09-30T22:05:42.0252926Z copying path '/nix/store/5gk010lr12bwp64cm9rj3pj21c0hviw8-rustc-1.93.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:52.6170330Z copying path '/nix/store/0yj3hz7imj1zxmppn9gfps8h2jmvdi7g-clippy-1.93.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:52.6172251Z copying path '/nix/store/rsy1282lj3dg4wdf5d00yvz7f6hjzxin-rustc-wrapper-1.93.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:52.6217405Z copying path '/nix/store/p96faw8wiwi10cy94hr42gzmiapv15fm-cargo-1.93.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:53.0589087Z copying path '/nix/store/yb62fm7wf3ysn5rnfj2r03snmk9pwwa2-rustfmt-1.93.0' from 'https://cache.nixos.org'...
+2026-09-30T22:05:53.2384443Z building '/nix/store/qim6ddcj1aq8id43hpzwizrdrn14n0kf-nix-shell-env.drv'...
+2026-09-30T22:05:53.7579281Z these 4 paths will be fetched (1.9 MiB download, 11.4 MiB unpacked):
+2026-09-30T22:05:53.7580179Z   /nix/store/0550j0i8bmzxbcnzrg1g51zigj7y12ih-bash-interactive-5.3p9
+2026-09-30T22:05:53.7581038Z   /nix/store/5vmwpgmif2wa2hw5ip3ab6q40wvyfw2w-bash-interactive-5.3p9-man
+2026-09-30T22:05:53.7581807Z   /nix/store/5qrvz1d1f813wcw6b752d4daaqxxbd1r-ncurses-6.6
+2026-09-30T22:05:53.7582471Z   /nix/store/d2231a3r3fgc0a40fx8ym82k162bajhj-readline-8.3p3
+2026-09-30T22:05:53.7587863Z copying path '/nix/store/5vmwpgmif2wa2hw5ip3ab6q40wvyfw2w-bash-interactive-5.3p9-man' from 'https://cache.nixos.org'...
+2026-09-30T22:05:53.7591821Z copying path '/nix/store/5qrvz1d1f813wcw6b752d4daaqxxbd1r-ncurses-6.6' from 'https://cache.nixos.org'...
+2026-09-30T22:05:53.8955603Z copying path '/nix/store/d2231a3r3fgc0a40fx8ym82k162bajhj-readline-8.3p3' from 'https://cache.nixos.org'...
+2026-09-30T22:05:53.9066918Z copying path '/nix/store/0550j0i8bmzxbcnzrg1g51zigj7y12ih-bash-interactive-5.3p9' from 'https://cache.nixos.org'...
+2026-09-30T22:05:54.3615350Z     Updating crates.io index
+2026-09-30T22:05:54.7897342Z  Downloading crates ...
+2026-09-30T22:05:54.9148665Z   Downloaded serde_spanned v1.1.1
+2026-09-30T22:05:54.9169078Z   Downloaded jobserver v0.1.35
+2026-09-30T22:05:54.9192955Z   Downloaded document-features v0.2.12
+2026-09-30T22:05:54.9210108Z   Downloaded litrs v1.0.0
+2026-09-30T22:05:54.9243781Z   Downloaded filedescriptor v0.8.3
+2026-09-30T22:05:54.9258671Z   Downloaded hashbrown v0.17.1
+2026-09-30T22:05:54.9314947Z   Downloaded lock_api v0.4.14
+2026-09-30T22:05:54.9331982Z   Downloaded bincode_derive v2.0.1
+2026-09-30T22:05:54.9346185Z   Downloaded errno v0.3.14
+2026-09-30T22:05:54.9366278Z   Downloaded serial2 v0.2.38
+2026-09-30T22:05:54.9400777Z   Downloaded find-msvc-tools v0.1.10
+2026-09-30T22:05:54.9423017Z   Downloaded cfg_aliases v0.2.2
+2026-09-30T22:05:54.9440937Z   Downloaded signal-hook-mio v0.2.5
+2026-09-30T22:05:54.9457815Z   Downloaded shell-words v1.1.1
+2026-09-30T22:05:54.9470823Z   Downloaded rustc_version v0.4.1
+2026-09-30T22:05:54.9490354Z   Downloaded zstd-safe v7.2.4
+2026-09-30T22:05:54.9515794Z   Downloaded zstd v0.13.3
+2026-09-30T22:05:54.9573342Z   Downloaded vte v0.15.0
+2026-09-30T22:05:54.9580101Z   Downloaded smallvec v1.15.2
+2026-09-30T22:05:54.9599490Z   Downloaded serde v1.0.229
+2026-09-30T22:05:54.9638802Z   Downloaded unicode-segmentation v1.13.3
+2026-09-30T22:05:54.9674225Z   Downloaded mio v1.2.2
+2026-09-30T22:05:54.9744536Z   Downloaded memchr v2.8.3
+2026-09-30T22:05:54.9802380Z   Downloaded winnow v1.0.4
+2026-09-30T22:05:54.9904307Z   Downloaded winnow v0.7.15
+2026-09-30T22:05:55.0003606Z   Downloaded serde_json v1.0.151
+2026-09-30T22:05:55.0080887Z   Downloaded serde_derive v1.0.229
+2026-09-30T22:05:55.0115825Z   Downloaded serde_core v1.0.229
+2026-09-30T22:05:55.0145970Z   Downloaded proc-macro2 v1.0.107
+2026-09-30T22:05:55.0179007Z   Downloaded unicode-width v0.2.2
+2026-09-30T22:05:55.0234483Z   Downloaded syn v3.0.3
+2026-09-30T22:05:55.0342213Z   Downloaded syn v2.0.119
+2026-09-30T22:05:55.0448694Z   Downloaded nix v0.30.1
+2026-09-30T22:05:55.0565550Z   Downloaded nix v0.28.0
+2026-09-30T22:05:55.0677011Z   Downloaded parking_lot v0.12.5
+2026-09-30T22:05:55.0702778Z   Downloaded unicode-ident v1.0.24
+2026-09-30T22:05:55.0731611Z   Downloaded toml_parser v1.1.3+spec-1.1.0
+2026-09-30T22:05:55.0755391Z   Downloaded toml_datetime v0.7.5+spec-1.1.0
+2026-09-30T22:05:55.0769024Z   Downloaded rustix v1.1.4
+2026-09-30T22:05:55.1045817Z   Downloaded toml v0.9.12+spec-1.1.0
+2026-09-30T22:05:55.1087881Z   Downloaded signal-hook v0.3.18
+2026-09-30T22:05:55.1118829Z   Downloaded quote v1.0.47
+2026-09-30T22:05:55.1147185Z   Downloaded pkg-config v0.3.33
+2026-09-30T22:05:55.1163686Z   Downloaded parking_lot_core v0.9.12
+2026-09-30T22:05:55.1195779Z   Downloaded bitflags v2.13.1
+2026-09-30T22:05:55.1234387Z   Downloaded zmij v1.0.23
+2026-09-30T22:05:55.1253925Z   Downloaded virtue v0.0.18
+2026-09-30T22:05:55.1280700Z   Downloaded toml_writer v1.1.2+spec-1.1.0
+2026-09-30T22:05:55.1294965Z   Downloaded thiserror v1.0.69
+2026-09-30T22:05:55.1354428Z   Downloaded shlex v2.0.1
+2026-09-30T22:05:55.1368672Z   Downloaded semver v1.0.28
+2026-09-30T22:05:55.1395129Z   Downloaded unty v0.0.4
+2026-09-30T22:05:55.1405042Z   Downloaded thiserror-impl v1.0.69
+2026-09-30T22:05:55.1419241Z   Downloaded signal-hook-registry v1.4.8
+2026-09-30T22:05:55.1431943Z   Downloaded portable-pty v0.9.0
+2026-09-30T22:05:55.1449817Z   Downloaded libc v0.2.189
+2026-09-30T22:05:55.1892706Z   Downloaded zstd-sys v2.0.16+zstd.1.5.7
+2026-09-30T22:05:55.2055980Z   Downloaded scopeguard v1.2.0
+2026-09-30T22:05:55.2068062Z   Downloaded indexmap v2.14.0
+2026-09-30T22:05:55.2110660Z   Downloaded equivalent v1.0.2
+2026-09-30T22:05:55.2120953Z   Downloaded derive_more v2.1.1
+2026-09-30T22:05:55.2255344Z   Downloaded itoa v1.0.18
+2026-09-30T22:05:55.2269857Z   Downloaded arrayvec v0.7.8
+2026-09-30T22:05:55.2290893Z   Downloaded derive_more-impl v2.1.1
+2026-09-30T22:05:55.2344537Z   Downloaded cfg-if v1.0.4
+2026-09-30T22:05:55.2358209Z   Downloaded bincode v2.0.1
+2026-09-30T22:05:55.2412333Z   Downloaded downcast-rs v1.2.1
+2026-09-30T22:05:55.2425555Z   Downloaded crossterm v0.29.0
+2026-09-30T22:05:55.2495760Z   Downloaded convert_case v0.10.0
+2026-09-30T22:05:55.2512894Z   Downloaded cfg_aliases v0.1.1
+2026-09-30T22:05:55.2521756Z   Downloaded cc v1.4.2
+2026-09-30T22:05:55.2552236Z   Downloaded base64 v0.22.1
+2026-09-30T22:05:55.2591230Z   Downloaded log v0.4.33
+2026-09-30T22:05:55.2617122Z   Downloaded anyhow v1.0.104
+2026-09-30T22:05:55.2712540Z   Downloaded linux-raw-sys v0.12.1
+2026-09-30T22:05:55.3742258Z    Compiling libc v0.2.189
+2026-09-30T22:05:55.3742753Z    Compiling proc-macro2 v1.0.107
+2026-09-30T22:05:55.3757266Z    Compiling unicode-ident v1.0.24
+2026-09-30T22:05:55.3758295Z    Compiling quote v1.0.47
+2026-09-30T22:05:55.7453065Z    Compiling shlex v2.0.1
+2026-09-30T22:05:55.9505949Z    Compiling serde_core v1.0.229
+2026-09-30T22:05:56.3646176Z    Compiling find-msvc-tools v0.1.10
+2026-09-30T22:05:57.0769523Z    Compiling syn v2.0.119
+2026-09-30T22:05:57.1446020Z    Compiling cfg-if v1.0.4
+2026-09-30T22:05:57.1945952Z    Compiling pkg-config v0.3.33
+2026-09-30T22:05:57.8266224Z    Compiling jobserver v0.1.35
+2026-09-30T22:05:58.3566010Z    Compiling cc v1.4.2
+2026-09-30T22:05:58.9385972Z    Compiling bitflags v2.13.1
+2026-09-30T22:05:59.2615800Z    Compiling errno v0.3.14
+2026-09-30T22:05:59.4095857Z    Compiling cfg_aliases v0.1.1
+2026-09-30T22:05:59.4606003Z    Compiling unicode-segmentation v1.13.3
+2026-09-30T22:06:00.1575888Z    Compiling log v0.4.33
+2026-09-30T22:06:00.3856536Z    Compiling parking_lot_core v0.9.12
+2026-09-30T22:06:00.7000397Z    Compiling zstd-safe v7.2.4
+2026-09-30T22:06:00.9567304Z    Compiling thiserror v1.0.69
+2026-09-30T22:06:01.2659158Z    Compiling zstd-sys v2.0.16+zstd.1.5.7
+2026-09-30T22:06:01.3278556Z    Compiling signal-hook v0.3.18
+2026-09-30T22:06:01.6277082Z    Compiling convert_case v0.10.0
+2026-09-30T22:06:01.6435954Z    Compiling thiserror-impl v1.0.69
+2026-09-30T22:06:02.0165894Z    Compiling nix v0.28.0
+2026-09-30T22:06:02.4615902Z    Compiling signal-hook-registry v1.4.8
+2026-09-30T22:06:02.5274054Z    Compiling syn v3.0.3
+2026-09-30T22:06:02.8020235Z    Compiling serde v1.0.229
+2026-09-30T22:06:03.1781848Z    Compiling rustix v1.1.4
+2026-09-30T22:06:03.5799227Z    Compiling scopeguard v1.2.0
+2026-09-30T22:06:03.6506764Z    Compiling zmij v1.0.23
+2026-09-30T22:06:03.7006322Z    Compiling smallvec v1.15.2
+2026-09-30T22:06:03.9145212Z    Compiling memchr v2.8.3
+2026-09-30T22:06:04.0346016Z    Compiling anyhow v1.0.104
+2026-09-30T22:06:04.4215802Z    Compiling cfg_aliases v0.2.2
+2026-09-30T22:06:04.4795842Z    Compiling nix v0.30.1
+2026-09-30T22:06:05.4416233Z    Compiling lock_api v0.4.14
+2026-09-30T22:06:05.7886093Z    Compiling derive_more-impl v2.1.1
+2026-09-30T22:06:06.2066072Z    Compiling mio v1.2.2
+2026-09-30T22:06:06.9386369Z    Compiling serde_derive v1.0.229
+2026-09-30T22:06:07.1055988Z    Compiling arrayvec v0.7.8
+2026-09-30T22:06:07.2114695Z    Compiling litrs v1.0.0
+2026-09-30T22:06:07.3786095Z    Compiling itoa v1.0.18
+2026-09-30T22:06:07.6203772Z    Compiling winnow v1.0.4
+2026-09-30T22:06:08.0836237Z    Compiling serde_json v1.0.151
+2026-09-30T22:06:08.2745910Z    Compiling linux-raw-sys v0.12.1
+2026-09-30T22:06:08.3165993Z    Compiling virtue v0.0.18
+2026-09-30T22:06:09.4086531Z    Compiling bincode_derive v2.0.1
+2026-09-30T22:06:10.5266303Z    Compiling toml_parser v1.1.3+spec-1.1.0
+2026-09-30T22:06:10.6576283Z    Compiling document-features v0.2.12
+2026-09-30T22:06:11.5141263Z    Compiling vte v0.15.0
+2026-09-30T22:06:11.7439224Z    Compiling derive_more v2.1.1
+2026-09-30T22:06:11.8016072Z    Compiling signal-hook-mio v0.2.5
+2026-09-30T22:06:11.8986560Z    Compiling parking_lot v0.12.5
+2026-09-30T22:06:12.5238360Z    Compiling filedescriptor v0.8.3
+2026-09-30T22:06:13.3093678Z    Compiling serde_spanned v1.1.1
+2026-09-30T22:06:13.4557771Z    Compiling toml_datetime v0.7.5+spec-1.1.0
+2026-09-30T22:06:13.7926098Z    Compiling serial2 v0.2.38
+2026-09-30T22:06:13.9366064Z    Compiling unicode-width v0.2.2
+2026-09-30T22:06:14.2891628Z    Compiling winnow v0.7.15
+2026-09-30T22:06:14.3692519Z    Compiling toml_writer v1.1.2+spec-1.1.0
+2026-09-30T22:06:14.6006266Z    Compiling unty v0.0.4
+2026-09-30T22:06:14.6615840Z    Compiling shell-words v1.1.1
+2026-09-30T22:06:14.7735931Z    Compiling downcast-rs v1.2.1
+2026-09-30T22:06:14.8185798Z    Compiling bincode v2.0.1
+2026-09-30T22:06:14.8414778Z    Compiling portable-pty v0.9.0
+2026-09-30T22:06:17.2016770Z    Compiling toml v0.9.12+spec-1.1.0
+2026-09-30T22:06:18.0116498Z    Compiling zstd v0.13.3
+2026-09-30T22:06:18.4396584Z    Compiling vt100 v0.16.2 (/home/runner/work/mux/mux/vendor/vt100)
+2026-09-30T22:06:18.7845730Z    Compiling crossterm v0.29.0
+2026-09-30T22:06:20.2735948Z    Compiling base64 v0.22.1
+2026-09-30T22:06:21.2699493Z    Compiling mux v0.1.0 (/home/runner/work/mux/mux)
+2026-09-30T22:06:34.6020984Z     Finished `test` profile [unoptimized + debuginfo] target(s) in 40.30s
+2026-09-30T22:06:34.6206780Z      Running unittests src/main.rs (target/debug/deps/mux-8e40ed5ffcd8c274)
+2026-09-30T22:06:34.6224273Z 
+2026-09-30T22:06:34.6224536Z running 195 tests
+2026-09-30T22:06:34.6230493Z test client::tests::attaching_from_inside_the_same_daemon_is_refused ... ok
+2026-09-30T22:06:34.6235959Z test client::tests::function_keys_are_forwarded_through_the_protocol ... ok
+2026-09-30T22:06:34.6236912Z test client::tests::shifted_alt_letters_are_canonicalized_for_bindings ... ok
+2026-09-30T22:06:34.6237971Z test client::tests::truecolor_is_taken_from_colorterm_or_a_direct_term ... ok
+2026-09-30T22:06:34.6239012Z test client::tests::terminal_clipboard_is_an_osc_52_write ... ok
+2026-09-30T22:06:34.6240035Z test client::tests::zero_sized_pty_reports_a_usable_terminal_size ... ok
+2026-09-30T22:06:34.6241185Z test config::tests::an_empty_config_keeps_the_built_in_bindings ... ok
+2026-09-30T22:06:34.6242221Z test config::tests::an_explicit_config_path_must_exist ... ok
+2026-09-30T22:06:34.6243474Z test config::tests::bell_style_defaults_to_the_shimmer_and_names_a_bad_value ... ok
+2026-09-30T22:06:34.6255750Z test config::tests::bad_binding_has_specific_error ... ok
+2026-09-30T22:06:34.6263540Z test config::tests::a_theme_binding_only_takes_actions_the_picker_has ... ok
+2026-09-30T22:06:34.6264493Z test config::tests::checked_in_preset_loads_expected_motion_overrides ... ok
+2026-09-30T22:06:34.6265556Z test config::tests::color_overrides_accept_hash_or_plain_hex ... ok
+2026-09-30T22:06:34.6266337Z test config::tests::function_keys_can_be_bound_with_modifiers ... ok
+2026-09-30T22:06:34.6267037Z test config::tests::invalid_color_names_the_role ... ok
+2026-09-30T22:06:34.6267745Z test config::tests::the_default_config_lives_under_the_config_home ... ok
+2026-09-30T22:06:34.6268689Z test config::tests::the_theme_file_says_what_a_colour_is_and_mux_says_where_it_goes ... ok
+2026-09-30T22:06:34.6269767Z test config::tests::the_theme_command_and_directory_have_working_defaults ... ok
+2026-09-30T22:06:34.6270667Z test config::tests::user_binding_replaces_and_unbinds_defaults ... ok
+2026-09-30T22:06:34.6271447Z test frame::tests::a_first_frame_clears_and_paints_everything ... ok
+2026-09-30T22:06:34.6272421Z test frame::tests::a_hidden_cursor_stays_hidden_but_still_takes_its_position ... ok
+2026-09-30T22:06:34.6275856Z test frame::tests::a_moved_cursor_alone_is_repositioned ... ok
+2026-09-30T22:06:34.6276593Z test frame::tests::a_resize_repaints_the_whole_screen ... ok
+2026-09-30T22:06:34.6277366Z test frame::tests::a_terminal_without_truecolor_is_sent_palette_entries ... ok
+2026-09-30T22:06:34.6278237Z test frame::tests::a_wide_character_is_not_painted_without_two_cells ... ok
+2026-09-30T22:06:34.6279153Z test frame::tests::an_overlapping_wide_glyph_clears_the_previous_trailing_half ... ok
+2026-09-30T22:06:34.6280004Z test frame::tests::an_unchanged_frame_sends_no_bytes ... ok
+2026-09-30T22:06:34.6280918Z test frame::tests::attributes_are_written_once_per_run ... ok
+2026-09-30T22:06:34.6281660Z test frame::tests::curly_underlines_survive_a_pane_repaint ... ok
+2026-09-30T22:06:34.6287496Z test frame::tests::a_resize_diff_lands_where_a_full_repaint_would ... ok
+2026-09-30T22:06:34.6301080Z test config::tests::default_cursor_shape_loads_and_rejects_unknown_shapes ... ok
+2026-09-30T22:06:34.6303331Z test frame::tests::interface_text_does_not_emit_control_characters ... ok
+2026-09-30T22:06:34.6304184Z test frame::tests::interface_text_uses_terminal_cell_widths ... ok
+2026-09-30T22:06:34.6305179Z test frame::tests::only_changed_cells_are_repainted ... ok
+2026-09-30T22:06:34.6306018Z test frame::tests::overwriting_either_half_clears_the_old_wide_character ... ok
+2026-09-30T22:06:34.6306987Z test frame::tests::painting_never_leaves_the_cursor_on_the_last_painted_cell ... ok
+2026-09-30T22:06:34.6308143Z test frame::tests::nearby_runs_merge_instead_of_repositioning ... ok
+2026-09-30T22:06:34.6309347Z test frame::tests::palette_entries_come_from_the_cube_or_the_finer_grey_ramp ... ok
+2026-09-30T22:06:34.6310195Z test frame::tests::wide_characters_repaint_as_one_unit ... ok
+2026-09-30T22:06:34.6310957Z test protocol::tests::framed_message_round_trips ... ok
+2026-09-30T22:06:34.6318042Z test protocol::tests::oversized_inbound_message_is_rejected_before_allocation ... ok
+2026-09-30T22:06:34.6320612Z test protocol::tests::partial_header_is_not_treated_as_a_clean_disconnect ... ok
+2026-09-30T22:06:34.6321964Z test protocol::tests::wrong_wire_version_has_an_actionable_error ... ok
+2026-09-30T22:06:34.6481091Z test frame::tests::incremental_diffs_land_exactly_where_a_full_repaint_would ... ok
+2026-09-30T22:06:34.6516818Z test server::journal::writer_tests::asynchronous_compaction_stays_ordered_with_later_output ... ok
+2026-09-30T22:06:34.7040482Z test server::lifecycle_tests::daemon_restarts_from_durable_state ... ok
+2026-09-30T22:06:34.7041486Z test server::lifecycle_tests::daemon_worker ... ignored
+2026-09-30T22:06:34.7246032Z test client::tests::daemon_start_error_includes_captured_stderr ... ok
+2026-09-30T22:06:34.7399300Z test server::command::tests::json_queries_use_ids_and_explicit_panes_are_never_redirected ... ok
+2026-09-30T22:06:34.7748219Z test server::output_budget::tests::budget_is_released_when_the_last_pipeline_stage_drops_the_permit ... ok
+2026-09-30T22:06:34.7754228Z test server::process::tests::a_pipeline_with_an_exited_leader_still_has_a_program ... ok
+2026-09-30T22:06:34.7765632Z test server::process::tests::foreground_selection_ignores_icons_background_jobs_and_helpers ... ok
+2026-09-30T22:06:34.7786553Z test server::process::tests::foreground_selection_steps_past_a_node_command_launcher ... ok
+2026-09-30T22:06:34.7825928Z test server::process::tests::icons_match_exact_executable_names ... ok
+2026-09-30T22:06:34.7829460Z test server::process::tests::identity_child ... ignored, subprocess fixture that waits for stdin to close
+2026-09-30T22:06:34.7854670Z test server::process::tests::live_identity_ignores_argv_and_disappears_after_exit ... ok
+2026-09-30T22:06:34.7856753Z test server::process::tests::stat_parser_handles_parentheses_and_excludes_stopped_and_dead_jobs ... ok
+2026-09-30T22:06:34.7858061Z test server::pty_input::tests::input_preserves_paste_boundaries_and_order ... ok
+2026-09-30T22:06:34.7905463Z test server::pty_input::tests::stalled_input_does_not_block_the_caller_and_has_a_byte_limit ... ok
+2026-09-30T22:06:34.8123737Z test server::lifecycle_tests::real_pty_history_and_styles_survive_restart_and_a_corrupt_sibling ... ok
+2026-09-30T22:06:34.8532427Z test server::responsiveness_tests::a_blocked_real_pty_does_not_stall_queries_or_shutdown ... ok
+2026-09-30T22:06:34.8556058Z test server::session_regression_tests::every_torn_journal_boundary_replays_only_complete_records ... ok
+2026-09-30T22:06:34.8729977Z test server::session_regression_tests::generated_scrollback_keeps_text_and_styles_through_resize_and_compaction ... ok
+2026-09-30T22:06:34.8749079Z test server::session_regression_tests::malformed_persisted_history_is_rejected_before_render_or_reflow ... ok
+2026-09-30T22:06:35.1437252Z test server::session_regression_tests::background_pty_bell_cannot_overwrite_the_mode_tile_after_narrow_resize ... ok
+2026-09-30T22:06:35.1460843Z test protocol::tests::oversized_outbound_message_is_rejected ... ok
+2026-09-30T22:06:35.5212728Z test server::session_regression_tests::mouse_clicks_follow_the_visible_sidebar_after_narrow_resize ... ok
+2026-09-30T22:06:35.5893638Z test server::session_regression_tests::pty_scroll_regions_edits_and_malformed_strings_keep_the_sidebar_intact ... ok
+2026-09-30T22:06:35.5897701Z test server::session_regression_tests::resizing_through_a_wide_cell_then_erasing_does_not_panic ... ok
+2026-09-30T22:06:35.5902783Z test server::session_regression_tests::supported_style_transitions_and_active_attributes_survive_journal_compaction ... ok
+2026-09-30T22:06:35.9927958Z test server::persist::writer_tests::continuous_state_changes_are_saved_before_the_producer_stops ... ok
+2026-09-30T22:06:36.0547648Z test server::session_regression_tests::tree_keeps_the_selected_pane_when_an_earlier_background_shell_exits ... ok
+2026-09-30T22:06:36.1749279Z test server::session_regression_tests::real_pty_mouse_reports_are_local_to_the_clicked_split_and_popups_consume_clicks ... ok
+2026-09-30T22:06:36.1751154Z test server::terminal::key_sequence_tests::navigation_keys_include_modifiers ... ok
+2026-09-30T22:06:36.1752582Z test server::terminal::key_sequence_tests::xterm_function_keys_include_modifiers ... ok
+2026-09-30T22:06:36.1789388Z test server::terminal_query_tests::an_oversized_clipboard_sequence_is_discarded_instead_of_truncated ... ok
+2026-09-30T22:06:36.1798602Z test server::terminal_query_tests::ordinary_clipboard_payloads_fit_in_the_bounded_osc_buffer ... ok
+2026-09-30T22:06:36.1801569Z test server::terminal_query_tests::queries_are_answered_at_their_position_in_the_stream ... ok
+2026-09-30T22:06:36.1804266Z test server::terminal_query_tests::split_queries_are_completed_by_the_parser_callbacks ... ok
+2026-09-30T22:06:36.1828592Z test server::terminal_query_tests::unfinished_osc_input_does_not_accumulate_in_mux_storage ... ok
+2026-09-30T22:06:36.1829648Z test server::tests::a_bell_without_a_shimmer_rests_bright_or_is_not_drawn_at_all ... ok
+2026-09-30T22:06:36.1883091Z test server::tests::a_client_that_stops_reading_falls_behind_instead_of_blocking_the_daemon ... ok
+2026-09-30T22:06:36.1894377Z test server::tests::a_failed_journal_replacement_keeps_saved_history ... ok
+2026-09-30T22:06:36.1896419Z test server::tests::a_journal_that_cannot_be_written_gives_up_instead_of_failing_forever ... ok
+2026-09-30T22:06:36.1899751Z test server::tests::a_pane_reports_osc_52_clipboard_writes ... ok
+2026-09-30T22:06:36.1902546Z test server::tests::a_pane_reports_the_title_its_program_sets ... ok
+2026-09-30T22:06:36.1907191Z test server::tests::a_popup_without_an_input_field_leaves_the_pane_cursor_alone ... ok
+2026-09-30T22:06:36.1909904Z test server::tests::a_preview_borrows_the_cursor_of_the_pane_it_shows ... ok
+2026-09-30T22:06:36.1914309Z test server::tests::a_private_directory_is_created_and_a_shared_one_is_refused ... ok
+2026-09-30T22:06:36.2157639Z test server::session_regression_tests::pty_undercurl_clear_alt_screen_zoom_and_window_switch_restore_sidebar ... ok
+2026-09-30T22:06:36.2159952Z test server::tests::a_reporting_popup_sits_on_the_bottom_rows_and_stays_centred_across ... ok
+2026-09-30T22:06:36.2492131Z test server::tests::a_rejected_final_frame_stays_pending_until_the_client_catches_up ... ok
+2026-09-30T22:06:36.2495214Z test server::tests::a_status_message_disappears_on_its_own ... ok
+2026-09-30T22:06:36.2496288Z test server::tests::a_swatch_is_never_labelled_in_its_own_colour ... ok
+2026-09-30T22:06:36.2496985Z test server::tests::a_zoomed_window_shows_only_the_active_pane ... ok
+2026-09-30T22:06:36.2497989Z test server::tests::an_overgrown_journal_asks_to_be_compacted ... ok
+2026-09-30T22:06:36.2500770Z test server::tests::an_unfinished_synchronized_redraw_expires ... ok
+2026-09-30T22:06:36.2503620Z test server::tests::application_cursor_shapes_are_preserved_without_blinking ... ok
+2026-09-30T22:06:36.2505300Z test server::tests::bar_width_and_vertical_center_follow_window_count ... ok
+2026-09-30T22:06:36.2700840Z test server::tests::a_shimmer_pause_schedules_a_future_wake_without_a_new_render ... ok
+2026-09-30T22:06:36.2765262Z test server::tests::block_compressed_scrollback_discards_exactly_the_oldest_rows ... ok
+2026-09-30T22:06:36.2867298Z test server::tests::block_compressed_scrollback_preserves_terminal_cells_losslessly ... ok
+2026-09-30T22:06:36.4630239Z test server::session_regression_tests::tree_keeps_the_selected_session_when_an_earlier_background_shell_exits ... ok
+2026-09-30T22:06:36.4634703Z test server::tests::compact_scrollback_preserves_text_width_and_colors_losslessly ... ok
+2026-09-30T22:06:36.4674689Z test server::tests::compacting_a_journal_keeps_the_screen_and_recent_scrollback ... ok
+2026-09-30T22:06:36.4677308Z test server::tests::cursor_reset_restores_each_clients_default_after_application_overrides ... ok
+2026-09-30T22:06:36.4956536Z test server::tests::clipboard_copy_finishes_on_a_worker ... ok
+2026-09-30T22:06:36.4975287Z test server::tests::direct_tree_keys_leave_tree_commands_available ... ok
+2026-09-30T22:06:36.4977884Z test server::tests::dividers_that_meet_are_joined_instead_of_overwriting_each_other ... ok
+2026-09-30T22:06:36.4981765Z test server::tests::entered_prompt_text_prevents_prompt_replacement ... ok
+2026-09-30T22:06:36.5025279Z test server::tests::file_backed_scrollback_leaves_the_heap_and_reads_back_losslessly ... ok
+2026-09-30T22:06:36.5031654Z test server::tests::idle_prompt_markers_restore_the_screen_before_the_prompt ... ok
+2026-09-30T22:06:36.5049275Z test server::tests::journal_replacement_preserves_the_old_inode_and_appends_to_the_new_one ... ok
+2026-09-30T22:06:36.5055195Z test server::tests::leader_defaults_cover_session_and_pane_commands ... ok
+2026-09-30T22:06:36.5058075Z test server::tests::lower_scroll_regions_do_not_pollute_history ... ok
+2026-09-30T22:06:36.5063681Z test server::tests::mouse_events_reach_only_the_programs_that_asked_for_them ... ok
+2026-09-30T22:06:36.5065998Z test server::tests::only_one_daemon_holds_the_state_directory ... ok
+2026-09-30T22:06:36.5068790Z test server::tests::pane_journal_replays_output_resizes_and_ignores_a_torn_tail ... ok
+2026-09-30T22:06:36.5070185Z test server::tests::pane_layout_splits_collapses_and_finds_neighbors ... ok
+2026-09-30T22:06:36.5071210Z test server::tests::pane_navigation_returns_to_the_previous_branch_on_a_tie ... ok
+2026-09-30T22:06:36.5074697Z test server::tests::pane_preview_renders_current_terminal_cells ... ok
+2026-09-30T22:06:36.5077587Z test server::tests::pane_terminal_matches_the_emulator_and_backspace_matches_its_terminfo ... ok
+2026-09-30T22:06:36.5225814Z test server::tests::detached_sessions_do_not_poll_process_icons ... ok
+2026-09-30T22:06:36.5235861Z test server::tests::persisted_state_migrates_v1_and_keeps_the_last_active_pane_in_v2 ... ok
+2026-09-30T22:06:36.5239326Z test server::tests::popup_text_scrolls_to_keep_the_cursor_visible ... ok
+2026-09-30T22:06:36.5828735Z test server::tests::quiet_panes_refresh_icons_without_output_and_reject_stale_samples ... ok
+2026-09-30T22:06:36.5830063Z test server::tests::reads_the_working_directory_of_a_process ... ok
+2026-09-30T22:06:36.5831168Z test server::tests::rename_input_edits_at_a_unicode_character_cursor ... ok
+2026-09-30T22:06:36.5832315Z test server::tests::rename_input_supports_terminal_style_line_editing ... ok
+2026-09-30T22:06:36.5834257Z test server::tests::repeated_synchronized_begin_keeps_the_original_screen_and_hidden_cursor ... ok
+2026-09-30T22:06:36.6252677Z test server::tests::pending_bells_do_not_defer_session_saves_until_shutdown ... ok
+2026-09-30T22:06:36.6256395Z test server::tests::resized_scrollback_keeps_wide_characters_whole ... ok
+2026-09-30T22:06:36.6259987Z test server::tests::resized_scrollback_reflows_instead_of_truncating_lines ... ok
+2026-09-30T22:06:36.6261210Z test server::tests::resizing_moves_the_nearest_divider_and_stops_at_the_edges ... ok
+2026-09-30T22:06:36.6262382Z test server::tests::session_preview_grid_shows_every_window ... ok
+2026-09-30T22:06:36.6269235Z test server::tests::shrinking_a_pane_keeps_output_above_the_idle_cursor_in_history ... ok
+2026-09-30T22:06:36.6272406Z test server::tests::snapshotting_scrollback_keeps_styled_blanks_past_the_last_character ... ok
+2026-09-30T22:06:36.6274207Z test server::tests::state_saved_before_resizable_splits_comes_back_split_evenly ... ok
+2026-09-30T22:06:36.6278544Z test server::tests::synchronized_output_queries_report_the_mode_at_the_query ... ok
+2026-09-30T22:06:36.6293886Z test server::tests::synchronized_redraw_never_renders_an_intermediate_cursor ... ok
+2026-09-30T22:06:36.6353242Z test server::tests::terminal_bells_ignore_osc_terminators_and_render_truecolor_shimmer ... ok
+2026-09-30T22:06:36.6354484Z test server::tests::terminal_keys_preserve_alt_and_modified_arrows ... ok
+2026-09-30T22:06:36.6356622Z test server::tests::the_state_dot_colours_the_mode_that_owns_the_keys ... ok
+2026-09-30T22:06:36.6462433Z test server::tests::the_theme_picker_fits_whatever_terminal_it_is_opened_in ... ok
+2026-09-30T22:06:36.6526009Z test server::tests::the_theme_picker_lists_every_theme_and_shows_the_palette_of_one ... ok
+2026-09-30T22:06:36.6531530Z test server::tests::the_theme_picker_opens_with_alt_c_and_is_driven_like_a_list ... ok
+2026-09-30T22:06:36.6576465Z test server::tests::the_theme_picker_paints_itself_in_the_theme_it_is_offering ... ok
+2026-09-30T22:06:36.6577631Z test server::tests::theme_tabs_wrap_onto_as_many_rows_as_they_need ... ok
+2026-09-30T22:06:36.6588928Z test server::tests::themes_are_read_from_their_directories_and_sorted ... ok
+2026-09-30T22:06:36.6593842Z test server::tests::top_anchored_scroll_regions_preserve_codex_history ... ok
+2026-09-30T22:06:36.6595256Z test server::tests::tree_display_adds_root_rows_without_consuming_shortcuts ... ok
+2026-09-30T22:06:36.6600434Z test server::tests::tree_starts_folded_and_arrows_control_it ... ok
+2026-09-30T22:06:37.5607163Z test server::session_regression_tests::two_clients_observe_shared_windows_but_keep_independent_history_viewports ... ok
+2026-09-30T22:06:38.1230855Z test server::tests::two_digit_sidebar_process_tiles_keep_their_background_through_the_right_edge ... ok
+2026-09-30T22:06:38.1237457Z test server::tests::vim_render_is_confined_to_the_active_pane_region ... ok
+2026-09-30T22:06:38.1265746Z test server::tests::vim_render_paints_full_multi_key_jump_hints ... ok
+2026-09-30T22:06:38.1266774Z test server::tests::vim_snapshot_preserves_terminal_formatting ... ok
+2026-09-30T22:06:38.1267966Z test server::tests::visiting_a_bell_starts_one_complete_active_pass ... ok
+2026-09-30T22:06:38.1269086Z test server::tests::widening_a_pane_keeps_scrollback_cells_consistent ... ok
+2026-09-30T22:06:38.1270149Z test server::tests::zle_cursor_save_restore_keeps_the_entered_command ... ok
+2026-09-30T22:06:38.1271204Z test server::tests::zsh_startup_keeps_mux_visible_while_sourcing_zshrc ... ok
+2026-09-30T22:06:38.1275853Z test server::ui::unicode_tests::clipping_counts_display_cells_and_keeps_combining_marks_with_their_base ... ok
+2026-09-30T22:06:38.1278808Z test server::ui::unicode_tests::rename_cursor_is_positioned_in_display_cells ... ok
+2026-09-30T22:06:38.1281274Z test tests::attach_options_are_not_parsed_as_commands ... ok
+2026-09-30T22:06:38.1283799Z test tests::auto_attach_defaults_to_yes_and_accepts_no ... ok
+2026-09-30T22:06:38.1286669Z test tests::auto_attach_only_confirms_for_an_ssh_tty ... ok
+2026-09-30T22:06:38.1289248Z test tests::auto_attach_reprompts_after_an_unknown_answer_and_declines_eof ... ok
+2026-09-30T22:06:38.1305059Z test tests::panes_and_windows_can_be_moved ... ok
+2026-09-30T22:06:38.1335462Z test tests::panes_can_be_resized_focused_and_named ... ok
+2026-09-30T22:06:38.1336612Z test tests::parses_command_pane_option_without_changing_command_aliases ... ok
+2026-09-30T22:06:38.1365503Z test tests::parses_query_output_and_pane_options ... ok
+2026-09-30T22:06:38.1370317Z test tests::parses_tmux_style_commands_for_existing_features ... ok
+2026-09-30T22:06:38.1371268Z test tests::queries_are_separate_from_commands ... ok
+2026-09-30T22:06:38.1372160Z test vim::tests::a_cancelled_search_leaves_nothing_highlighted ... ok
+2026-09-30T22:06:38.1373220Z test vim::tests::a_mode_started_on_a_jump_is_already_asking_for_the_character ... ok
+2026-09-30T22:06:38.1374273Z test vim::tests::a_new_jump_discards_newer_jump_positions ... ok
+2026-09-30T22:06:38.1375477Z test vim::tests::arrow_keys_follow_basic_motions ... ok
+2026-09-30T22:06:38.1425939Z test vim::tests::character_line_and_block_selections_yank ... ok
+2026-09-30T22:06:38.1445505Z test vim::tests::counts_and_word_motions ... ok
+2026-09-30T22:06:38.1475469Z test vim::tests::find_till_and_swappable_repeats ... ok
+2026-09-30T22:06:38.1518110Z test vim::tests::forward_backward_search_and_repeats_wrap ... ok
+2026-09-30T22:06:38.1527985Z test vim::tests::jump_hints_alternate_forward_and_backward_from_the_cursor ... ok
+2026-09-30T22:06:38.1555678Z test vim::tests::jump_hints_use_two_keys_after_single_keys_run_out ... ok
+2026-09-30T22:06:38.1595450Z test vim::tests::jumps_move_backward_and_forward_with_counts ... ok
+2026-09-30T22:06:38.1625370Z test vim::tests::line_vertical_page_and_file_motions ... ok
+2026-09-30T22:06:38.1705606Z test vim::tests::ordinary_motions_do_not_enter_the_jump_list ... ok
+2026-09-30T22:06:38.1706771Z test vim::tests::searching_highlights_every_match_while_the_pattern_is_typed ... ok
+2026-09-30T22:06:38.1735482Z test vim::tests::space_labels_visible_character_matches_and_jumps_by_hint ... ok
+2026-09-30T22:06:38.1745479Z test vim::tests::the_wheel_scrolls_the_viewport_and_stops_at_the_bottom ... ok
+2026-09-30T22:06:38.1765915Z test vim::tests::word_and_big_word_classes_differ ... ok
+2026-09-30T22:06:38.1795579Z test vim::tests::word_motions_are_safe_on_an_empty_screen ... ok
+2026-09-30T22:06:38.1836118Z test vim::tests::yank_with_motion_and_escape_selection_rule ... ok
+2026-09-30T22:06:38.6618666Z test server::tests::bench_snapshot ... ok
+2026-09-30T22:06:38.9043515Z test server::tests::twenty_thousand_full_ascii_rows_use_less_than_three_mibibytes ... ok
+2026-09-30T22:06:39.9436298Z test server::tests::representative_terminal_histories_stay_small ... ok
+2026-09-30T22:06:39.9437031Z 
+2026-09-30T22:06:39.9437594Z test result: ok. 193 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 5.32s
+2026-09-30T22:06:39.9438140Z 
+2026-09-30T22:06:39.9483841Z      Running tests/interactive_client.rs (target/debug/deps/interactive_client-2dda087dc7fed5f3)
+2026-09-30T22:06:39.9497466Z 
+2026-09-30T22:06:39.9497765Z running 1 test
+2026-09-30T22:06:45.0446125Z test executable_decodes_keys_bracketed_paste_and_mouse_then_selects_visible_windows ... FAILED
+2026-09-30T22:06:45.0446982Z 
+2026-09-30T22:06:45.0447152Z failures:
+2026-09-30T22:06:45.0447343Z 
+2026-09-30T22:06:45.0447781Z ---- executable_decodes_keys_bracketed_paste_and_mouse_then_selects_visible_windows stdout ----
+2026-09-30T22:06:45.0448283Z 
+2026-09-30T22:06:45.0449073Z thread 'executable_decodes_keys_bracketed_paste_and_mouse_then_selects_visible_windows' (7781) panicked at tests/interactive_client.rs:124:18:
+2026-09-30T22:06:45.0450261Z client produced no terminal output: Timeout
+2026-09-30T22:06:45.0451015Z note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+2026-09-30T22:06:45.0451569Z 
+2026-09-30T22:06:45.0451595Z 
+2026-09-30T22:06:45.0451739Z failures:
+2026-09-30T22:06:45.0452329Z     executable_decodes_keys_bracketed_paste_and_mouse_then_selects_visible_windows
+2026-09-30T22:06:45.0452828Z 
+2026-09-30T22:06:45.0453142Z test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.09s
+2026-09-30T22:06:45.0453576Z 
+2026-09-30T22:06:45.0453800Z error: test failed, to rerun pass `--test interactive_client`
+2026-09-30T22:06:45.0519807Z ##[error]Process completed with exit code 101.
+2026-09-30T22:06:45.0670135Z Post job cleanup.
+2026-09-30T22:06:45.1542738Z [command]/usr/bin/git version
+2026-09-30T22:06:45.1589354Z git version 2.55.0
+2026-09-30T22:06:45.1631706Z Temporarily overriding HOME='/home/runner/work/_temp/b7bc3d1e-3aaf-4f67-8ad0-87b15b0895b8' before making global git config changes
+2026-09-30T22:06:45.1633506Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-30T22:06:45.1637766Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/mux/mux
+2026-09-30T22:06:45.1678192Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-30T22:06:45.1720514Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-30T22:06:45.2001169Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-30T22:06:45.2033092Z http.https://github.com/.extraheader
+2026-09-30T22:06:45.2047720Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-09-30T22:06:45.2087290Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-30T22:06:45.2363240Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-30T22:06:45.2403868Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-30T22:06:45.2861036Z Cleaning up orphan processes
+2026-09-30T22:06:45.3241161Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+

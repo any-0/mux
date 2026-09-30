@@ -86,7 +86,10 @@ class Cold(Interactive):
                     self.capture.unlink(missing_ok=True)
                     self.keys(b'\x1bw');self.client.input(b'ggVGy')
                     self.client.until(self.capture.exists)
-                    text=self.capture.read_text();self.keys(b'\x1b')
+                    text=self.capture.read_text()
+                    # Yank retains native copy mode. Escape clears selection,
+                    # then a second Escape leaves it before live-shell probes.
+                    self.keys(b'\x1b');self.keys(b'\x1b');self.client.drain(.15)
                 else:text=self.cli('capture-pane','-p','-J','-S','-','-t',p['id'])
                 actual=re.findall(label+r'-H\d{5} x{12}',text)
                 assert actual==records(label),(phase,label,len(actual))
