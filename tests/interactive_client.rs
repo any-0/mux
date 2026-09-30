@@ -121,7 +121,12 @@ impl TerminalSession {
             let bytes = self
                 .output
                 .recv_timeout(remaining)
-                .expect("client produced no terminal output");
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "client produced no terminal output: {error:?}; current screen: {:?}",
+                        self.terminal.screen().contents()
+                    )
+                });
             self.terminal.process(&bytes);
         }
     }

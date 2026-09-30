@@ -43,15 +43,17 @@ jobs:
           BENCH_MUX_SOURCE_DIR: ${{ github.workspace }}/baseline
         run: |
           mkdir -p evidence
+          status=0
           for group in '1 idle' '3 busy'; do
             read -r windows load <<< "$group"
-            for mode in strace perf; do
-              nix develop ./.nix#benchmark --command python3 scripts/performance/profile.py --harness harness --output "evidence/w${windows}-${load}-${mode}" --windows "$windows" --load "$load" --mode "$mode"
+            for mode in perf strace; do
+              nix develop ./.nix#benchmark --command python3 scripts/performance/profile.py --harness harness --output "evidence/w${windows}-${load}-${mode}" --windows "$windows" --load "$load" --mode "$mode" || status=1
               if [ "$mode" = perf ]; then
-                "$PERF_BINARY" report -i "evidence/w${windows}-${load}-${mode}/perf.data" --stdio --no-children --percent-limit .2 > "evidence/w${windows}-${load}-${mode}/perf-report.txt"
+                "$PERF_BINARY" report -i "evidence/w${windows}-${load}-${mode}/perf.data" --stdio --no-children --percent-limit .2 > "evidence/w${windows}-${load}-${mode}/perf-report.txt" || status=1
               fi
             done
           done
+          exit "$status"
       - name: Retain raw profile and workload correctness evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
