@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Small real-PTY reproductions distilled from stress failures."""
 import argparse
+import json
 from pathlib import Path
 from run import Session, write_json
 
@@ -30,6 +31,29 @@ def sidebar(binary, directory):
         session.close()
 
 
+def intended_intensity_failure(directory):
+    path = directory/'witness-styled-intensity-diff.json'
+    if not path.exists():
+        return False
+    errors = json.loads(path.read_text())
+    if len(errors) != 1 or errors[0]['total_cell_differences'] != 4:
+        return False
+    error = errors[0]
+    for field in ('cursor','hidden','shape'):
+        if error.get('expected_'+field) != error.get('actual_'+field):
+            return False
+    cells = error['cells']
+    if len(cells) != 4:
+        return False
+    for x, (letter, cell) in enumerate(zip('BOTH',cells)):
+        expected = [letter,'default','default',True,True,False,False,3,'00d7ff']
+        actual = list(expected)
+        actual[3] = False
+        if cell != {'row':0,'col':x,'expected':expected,'actual':actual}:
+            return False
+    return True
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', type=Path, required=True)
@@ -43,7 +67,8 @@ if __name__ == '__main__':
         {'intensity': intensity, 'sidebar': sidebar}[args.case](args.binary.resolve(), args.output)
     except AssertionError as error:
         # A setup timeout, EOF or unrelated harness issue is not evidence.
-        if not any(marker in str(error) for marker in ('witness-styled-intensity: independent cell/cursor/attribute mismatch', 'sidebar icon tile background')):
+        intended = intended_intensity_failure(args.output) if args.case == 'intensity' else 'sidebar icon tile background' in str(error)
+        if not intended:
             raise
         failed = True
         write_json(args.output / 'witness-result.json', {'failed': True, 'error': str(error)})

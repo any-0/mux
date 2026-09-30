@@ -140,6 +140,7 @@ class Terminal:
         self.stream = Stream(self.screen)
         self.decoder = codecs.getincrementaldecoder('utf8')('strict')
         self.pending = ''
+        self.synchronized_output_pending = False
 
     def feed(self, data):
         self.pending += self.decoder.decode(data)
@@ -172,6 +173,10 @@ class Terminal:
                     pass  # XTerm modifyOtherKeys is not graphic rendition.
                 elif raw == '?1049' and final in 'hl':
                     self.screen.alternate(final == 'h')
+                elif raw == '?2026' and final in 'hl':
+                    # Logical buffer still advances. Generic comparisons cannot
+                    # infer presentation or an emulator-specific expiry timer.
+                    self.synchronized_output_pending = final == 'h'
                 else:
                     self.stream.feed(seq)
                 self.pending = self.pending[len(seq):]
@@ -189,13 +194,16 @@ class Terminal:
                     break
                 if self.pending[:end] == '\x1bc':
                     self.cursor_shape = self.default_cursor_shape
+                    self.synchronized_output_pending = False
                 self.stream.feed(self.pending[:end])
                 self.pending = self.pending[end:]
 
     def resize(self, rows, cols):
         self.screen.resize(lines=rows, columns=cols)
 
-    def snapshot(self, left=0, width=None):
+    def snapshot(self, left=0, width=None, allow_uncommitted=False):
+        if self.synchronized_output_pending and not allow_uncommitted:
+            raise AssertionError('generic oracle unsupported: in-progress or timed synchronized output; use explicit presentation fixture')
         screen = self.screen
         width = screen.columns - left if width is None else width
         fields = ('data', 'fg', 'bg', 'bold', 'dim', 'italics', 'reverse', 'underline_style', 'underline_color')
