@@ -44,6 +44,25 @@ class Terminal:
         master = self.master
 
         class AttachedScreen(pyte.Screen):
+            @property
+            def display(self):
+                from wcwidth import wcwidth
+                lines = []
+                for y in range(self.lines):
+                    text, continuation = [], False
+                    for x in range(self.columns):
+                        if continuation:
+                            continuation = False
+                            continue
+                        # Incremental redraw can overwrite a wide glyph's
+                        # leading cell while pyte retains its empty stub.
+                        # An orphan stub is a blank cell, not a new glyph.
+                        data = self.buffer[y][x].data or ' '
+                        continuation = wcwidth(data[0]) == 2
+                        text.append(data)
+                    lines.append(''.join(text))
+                return lines
+
             def write_process_input(self, data):
                 os.write(master, data.encode())
 
@@ -231,7 +250,11 @@ def trial(variant, number, output, args):
         workload = ['python3', str(ROOT / 'benchmarks/workload.py'), '--rows', str(args.rows)]
         result['commands'].append(workload)
         start = terminal.input((shlex.join(workload) + '\n').encode())
-        end = terminal.until(lambda: terminal.contains('BENCH_OUTPUT_DONE'), timeout=120)
+        def output_rendered():
+            visible = terminal.rows()
+            return (terminal.contains('BENCH_OUTPUT_DONE') and len(visible) >= 35
+                    and visible == list(range(args.rows - len(visible), args.rows)))
+        end = terminal.until(output_rendered, timeout=120)
         visible = terminal.rows()
         if len(visible) < 35 or visible != list(range(args.rows - len(visible), args.rows)):
             raise RuntimeError('output viewport failed: expected contiguous final workload rows')

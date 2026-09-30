@@ -39,8 +39,8 @@ without changing either PR branch; CI supplies its own separate pinned checkout.
 The runner builds mux once with `cargo build --locked --release` inside the Nix shell and
 then runs each variant sequentially. It rejects changes to runtime sources or
 Cargo inputs relative to mux commit
-`d328bd3cf503e22855818a20353964c4879bc67b`. The source pin is tracked in `benchmarks/mux-revision`, currently PR #2
-revision `d328bd3cf503e22855818a20353964c4879bc67b`. Benchmark documentation
+`af93924bad3553806f3d5bb3d732714dba91f02e`. The source pin is tracked in `benchmarks/mux-revision`, currently PR #2
+revision `af93924bad3553806f3d5bb3d732714dba91f02e`. Benchmark documentation
 and harness changes do not change that runtime pin. If the test/fix task produces a new
 runtime commit, explicitly update the pin and rerun all three variants.
 
