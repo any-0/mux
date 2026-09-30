@@ -3,6 +3,7 @@
 use std::{
     env, fs,
     io::{Read, Write},
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     process::{Command, Stdio},
     sync::mpsc::{self, Receiver},
@@ -28,6 +29,7 @@ impl TerminalSession {
         let runtime = root.join("runtime");
         let home = root.join("home");
         fs::create_dir_all(&runtime).unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
         fs::create_dir_all(&home).unwrap();
         let config = root.join("config.toml");
         fs::write(&config, "mouse = true\n").unwrap();
