@@ -14,21 +14,6 @@
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
-      packages = [
-              pkgs.rustc pkgs.cargo pkgs.tmux benchmarkPython
-              pkgs.bash pkgs.coreutils pkgs.procps pkgs.git pkgs.util-linux
-              pkgs.gnutar pkgs.gzip pkgs.gnused pkgs.gawk pkgs.gnugrep
-              pkgs.findutils pkgs.diffutils
-              pkgs.tmuxPlugins.resurrect pkgs.tmuxPlugins.continuum
-            ];
-            BENCH_SHELL = "${benchmarkShell}";
-            BENCH_RESURRECT = "${pkgs.tmuxPlugins.resurrect.rtp}";
-            BENCH_CONTINUUM = "${pkgs.tmuxPlugins.continuum.rtp}";
-            BENCH_NIXPKGS_REV = nixpkgs.rev;
-            BENCH_RUST_VERSION = pkgs.rustc.version;
-            BENCH_TMUX_VERSION = pkgs.tmux.version;
-          };
-        });
       packages = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };

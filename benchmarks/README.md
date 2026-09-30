@@ -39,7 +39,7 @@ without changing either PR branch; CI supplies its own separate pinned checkout.
 The runner builds mux once with `cargo build --locked --release` inside the Nix shell and
 then runs each variant sequentially. It rejects changes to runtime sources or
 Cargo inputs relative to mux commit
-`6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`. The source pin is tracked in `benchmarks/mux-revision`, currently PR #2
+`6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`. The source pin is tracked in `benchmarks/mux-revision`, currently the PR #2 branch candidate (not upstream main),
 revision `6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`. Benchmark documentation
 and harness changes do not change that runtime pin. If the test/fix task produces a new
 runtime commit, explicitly update the pin and rerun all three variants.
@@ -387,4 +387,29 @@ variant, with `performance_comparison: false`, not a median/p95 sample set.
 Default-period crash integration and full repeated measurements remain pending.
 PR #2's final tested handoff advanced to
 `6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`; the explicit runtime pin now selects
-that head and requires its own validation rather than reusing earlier results.
+that head. Its separate validation is recorded below.
+
+
+Current candidate validation: [run 36740002774](https://github.com/any-0/mux/actions/runs/36740002774)
+passed **44 Nix tests and all six serial real integration gates** at harness
+`9c7f3984792f1d38e51617b9e2a634435c746b98`, runtime
+`6da51cf7a776a81b8be6d8dbf16ea498e7f8385c` from the PR #2 branch candidate
+`fix/terminal-session-regressions`, **not upstream main**. Full raw evidence is
+`results/ci-validation/36740002774-passing-candidate-smoke.zip`, with ZIP
+checksums in `checksums.json`. The plugins were actually loaded; the clean
+snapshot archive, restored complete tagged histories, sampled ANSI styling,
+metadata and fresh shells passed. Six correctness smoke trials contain actual
+diagnostic timings, but there are **0 accepted performance trials**, no
+median/p95 comparison, and no default-period crash integration result.
+
+Cloud access was rechecked at **2026-09-30 15:55 UTC**. Both the standard Nix
+cache and GNU Bash source URLs still return proxy `CONNECT ... 403`; see
+`cache-http-recheck.log` and `gnu-source-http-recheck.log`. The corrected native
+`.nix#benchmark` invocation again exited 1 on the Bash source dependency
+(`development-nix-develop-recheck.log`). No allowlist change was assumed. The
+owner/platform action remains a policy-supported native `/nix/store` and locked
+dependency closure/access on this selected cloud machine. CI correctness is a
+supported route; same-runner micro/clean performance pilot data would need a
+separate hosted-CI table, randomized paired trials and recorded runner/load.
+It cannot stand in for Julian's selected cloud hardware. No network-policy
+bypass, environment move or merge was performed.
