@@ -275,9 +275,12 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.client.input(('python3 -c '+shlex.quote("import time;print('BELL_ARMED',flush=True);time.sleep(1);print(chr(7))")+'\n').encode())
         r.client.until(lambda:r.client.contains('BELL_ARMED'))
         r.window(scratch);r.client.until(lambda:r.client.contains('SCRATCH>'))
-        bar_before=r.bar()
         if variant=='mux':
-            r.client.until(lambda:r.bar()!=bar_before)
+            # Other sidebar repaints (focus/cwd/activity) are not a bell. The
+            # pinned default palette's steady bell paints the window label in
+            # its exact accent colour; wait for that specific visible state.
+            bell_row=(r.client.screen.lines-2-bell_window*3)//2+(bell_window-1)*3+1
+            r.client.until(lambda:r.client.screen.buffer[bell_row][1].bg=='9fa8f2')
         else:
             r.wait(lambda:r.cli('display-message','-p','-t',f':{bell_window}','#{window_bell_flag}')=='1')
         r.action('navigate_pending_bell',b'\x1bab',lambda:r.client.contains('BELL>') and not r.client.contains('SCRATCH>'),lambda:r.windows())
