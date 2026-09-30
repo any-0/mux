@@ -186,6 +186,182 @@ Apart from that explicit install step, no binaries or configuration files are
 installed; only the durable runtime state described below is written.
 
 
+<!-- interactive-followup:start -->
+### Complete expanded interactive sweep (hosted CI, 2026-09-30)
+
+[Run 36774371342](https://github.com/any-0/mux/actions/runs/36774371342): **360 accepted paired
+trials**, 20 per variant in each of six groups, **53 endpoints per trial**;
+18 warm-ups excluded. A separate **20-trial, 12-endpoint mux-only UI suite** also
+passed (one warm-up excluded). These are real attached-PTY measurements, not
+diagnostic smoke timings. All trials, including warm-ups, passed visible-result
+gates. Paired groups pass independent fixture/input/resource audits; mux-only UI
+passes complete input/timestamp/visible-transition/resource audits. The corrected logical pane
+mapping makes all four-pane content/geometry slots equal across variants.
+
+Measured mux: `d6dd228054231e77772bd17a412d8f0d07871835`. Executed harness:
+`a9134207e3c3130994dcdd919ffcaf18025a74a8` (branch candidate `406ae9a514ab7e16084f2e623324592c2f491f9a`).
+Project Nix pin `2fc6539b481e1d2569f25f8799236694180c0993`, Rust/Cargo 1.93.0, tmux 3.6a,
+Bash 5.3.9, Python 3.13.12. Resurrect/continuum pins and loaded-plugin checks are
+documented above. No PR #4 code is mixed into this runtime. All groups ran
+sequentially on the same hosted VM; variant order is shuffled within each block.
+Each declared group resets the documented shuffle seed. Exact runner hardware,
+image, commands, dependency versions and raw input/output are retained in each ZIP.
+The VM reported AMD EPYC 7763 64-Core Processor, 4 logical CPUs, 16373452 KiB RAM,
+runner image `20260920.314.1`.
+
+Seeded layouts are 1×1, 3×2 and 6×4 windows×panes, plus one equal background
+window; mutations use one scratch window and create a second session. Content
+area is 100×40 cells, 1,000 low-entropy ASCII tagged records per seeded pane, retained-history cap
+20,000. Outer PTYs are mux 105×40 and tmux 100×41 to compensate for the
+five-column sidebar versus one-row status line; this is a content-matched rather
+than equal-outer-rectangle experiment. Idle and busy fixtures match; busy adds the same 50 Hz, five-line ANSI
+producer. Native chrome/bootstrap command history differ. Memory includes the
+daemon, attached client, shells and producer, and is sampled before mutations.
+
+Every value is **median / nearest-rank p95**, 20 fresh process trials per cell.
+Build/filesystem caches are warm; 20 trials give a coarse tail estimate.
+Latency stops at decoded correct viewport/cursor/selection style, with metadata
+checked afterward. Populated startup means client attach to an existing daemon,
+not cold populated restart. Native editors/confirmations are prepared untimed;
+character selection times two selected cells, not an invisible selection start.
+Join measures CLI dispatch→viewport, detach process exit, and yank an atomic
+clipboard-file receipt with up to 50 ms polling. These endpoints are not equated
+with rendering. Zoom/sidebar geometry and native editor policies differ.
+
+CPU is a separate ≥3-second process-tree tick observation, percentage of one CPU,
+and misses exited helpers. PSS/RSS are resident snapshots, not peak usage.
+Observed state-directory storage is not equal durability: mux journals continuously;
+the stack has not reached its real 15-minute scheduled save in these short trials.
+Controller/decoder cost is included, pixels and exclusive physical hardware are
+not measured. Hosted VM data are not Julian's hardware and do not establish a
+universal ranking. Earlier accepted scroll/throughput/clean-recovery and core
+datasets below remain separate; do not pool across VMs or changed endpoints.
+Restored-layout scale coverage and default-period crash recovery remain unmeasured.
+
+#### Initial PSS (MiB)
+
+| Seeded layout / load | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| 1×1 idle | 10.138 / 10.187 | 9.643 / 9.643 | 9.654 / 9.682 |
+| 1×1 busy | 16.705 / 16.748 | 16.188 / 16.191 | 16.199 / 16.250 |
+| 3×2 idle | 16.663 / 16.698 | 15.870 / 15.878 | 15.890 / 15.929 |
+| 3×2 busy | 23.171 / 23.198 | 22.361 / 22.365 | 22.361 / 22.377 |
+| 6×4 idle | 37.638 / 37.740 | 37.401 / 37.409 | 37.415 / 37.421 |
+| 6×4 busy | 44.182 / 44.240 | 43.839 / 43.854 | 43.856 / 43.870 |
+
+#### Profile CPU (% of one CPU; lower bound)
+
+| Seeded layout / load | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| 1×1 idle | 2.315 / 2.319 | 0.000 / 0.000 | 0.331 / 0.662 |
+| 1×1 busy | 4.133 / 4.632 | 0.827 / 1.323 | 0.993 / 1.325 |
+| 3×2 idle | 7.607 / 7.928 | 0.000 / 0.000 | 0.331 / 0.662 |
+| 3×2 busy | 9.592 / 10.242 | 0.662 / 1.323 | 1.323 / 1.651 |
+| 6×4 idle | 28.532 / 30.920 | 0.000 / 0.330 | 0.330 / 0.661 |
+| 6×4 busy | 30.801 / 32.344 | 0.991 / 1.319 | 1.650 / 1.982 |
+
+<details>
+<summary>1×1 idle: all 53 endpoints</summary>
+
+| Operation (ms) | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| break pane | 6.488 / 6.772 | 5.681 / 6.043 | 5.881 / 6.642 |
+| cancel character selection | 0.742 / 0.849 | 1.057 / 1.195 | 1.066 / 1.214 |
+| commit session rename | 11.045 / 11.249 | 3.213 / 3.511 | 3.373 / 3.484 |
+| commit window rename | 10.959 / 11.167 | 3.302 / 3.561 | 3.420 / 3.766 |
+| copy big word forward | 1.318 / 1.549 | 1.142 / 1.296 | 1.132 / 1.262 |
+| copy cursor left | 0.736 / 0.841 | 1.093 / 1.193 | 1.031 / 1.215 |
+| copy cursor right | 0.727 / 0.869 | 1.060 / 1.166 | 1.069 / 1.180 |
+| copy find character commit | 0.811 / 0.837 | 3.627 / 3.775 | 3.757 / 5.321 |
+| create session | 11.795 / 12.299 | 8.596 / 9.280 | 8.749 / 9.298 |
+| create window | 11.644 / 12.055 | 8.449 / 8.934 | 7.685 / 8.410 |
+| delete pane horizontal | 58.365 / 60.841 | 4.021 / 4.341 | 4.035 / 4.974 |
+| delete pane vertical | 54.698 / 56.737 | 3.893 / 4.126 | 3.925 / 4.098 |
+| delete session | 57.856 / 59.948 | 3.162 / 3.431 | 3.183 / 4.425 |
+| delete window | 54.981 / 55.741 | 3.981 / 4.236 | 3.997 / 5.225 |
+| Detach (process exit) | 1.118 / 1.135 | 1.120 / 1.129 | 1.130 / 3.253 |
+| enter copy mode | 1.136 / 1.338 | 4.641 / 4.922 | 4.539 / 5.263 |
+| exit copy mode | 1.022 / 1.169 | 3.819 / 4.067 | 4.047 / 4.245 |
+| extend character selection | 0.753 / 0.863 | 0.324 / 0.365 | 0.321 / 0.372 |
+| focus horizontal | 0.539 / 9.668 | 1.071 / 1.183 | 1.067 / 1.130 |
+| focus horizontal back | 0.532 / 9.931 | 1.043 / 1.117 | 1.041 / 1.157 |
+| focus vertical | 0.556 / 9.744 | 0.958 / 1.080 | 0.952 / 2.087 |
+| focus vertical back | 0.567 / 9.645 | 0.935 / 1.062 | 0.938 / 1.077 |
+| history bottom | 3.457 / 3.786 | 3.600 / 4.210 | 4.062 / 4.341 |
+| history search backward commit | 15.212 / 17.235 | 11.359 / 11.717 | 11.364 / 11.850 |
+| history search forward commit | 14.823 / 16.497 | 9.951 / 10.185 | 10.043 / 10.706 |
+| history search next match | 2.455 / 2.756 | 2.327 / 2.806 | 2.495 / 2.935 |
+| history search previous match | 2.205 / 2.682 | 2.189 / 2.800 | 2.453 / 2.923 |
+| history top | 2.440 / 2.774 | 2.903 / 3.310 | 2.602 / 3.209 |
+| Join pane (CLI dispatch → viewport) | 7.224 / 7.565 | 7.656 / 8.520 | 7.842 / 8.596 |
+| navigate pending bell | 4.920 / 13.356 | 4.637 / 4.915 | 4.756 / 5.276 |
+| open session rename | 2.405 / 10.922 | 2.052 / 2.130 | 2.078 / 2.174 |
+| open window rename | 2.417 / 10.995 | 2.075 / 2.209 | 2.063 / 2.148 |
+| Populated client attach (existing daemon) | 17.936 / 25.672 | 16.492 / 21.367 | 16.878 / 21.245 |
+| reattach | 19.451 / 24.802 | 15.529 / 18.708 | 21.933 / 26.041 |
+| reorder window left | 0.827 / 10.232 | 2.533 / 2.644 | 2.607 / 2.678 |
+| reorder window right | 0.849 / 9.862 | 2.516 / 2.665 | 2.573 / 3.349 |
+| resize horizontal | 9.322 / 9.921 | 3.583 / 3.808 | 3.598 / 3.768 |
+| resize vertical | 2.010 / 9.456 | 2.391 / 2.575 | 2.398 / 2.532 |
+| second client attach | 18.837 / 23.185 | 16.306 / 17.800 | 16.636 / 19.120 |
+| select two characters | 0.761 / 0.860 | 1.243 / 1.289 | 1.178 / 1.370 |
+| split for break | 11.960 / 12.821 | 8.029 / 9.105 | 8.166 / 8.962 |
+| split horizontal | 15.599 / 15.955 | 8.574 / 9.413 | 8.661 / 9.075 |
+| split vertical | 11.900 / 12.292 | 8.189 / 9.231 | 8.189 / 9.723 |
+| switch session | 4.892 / 5.449 | 2.720 / 2.951 | 2.510 / 2.962 |
+| switch session back | 4.810 / 5.090 | 4.549 / 4.820 | 4.336 / 4.838 |
+| switch window | 3.806 / 4.000 | 4.049 / 4.233 | 4.001 / 5.062 |
+| switch window back | 3.841 / 4.148 | 4.070 / 4.399 | 4.054 / 5.174 |
+| terminal resize viewport | 8.680 / 14.396 | 4.843 / 4.999 | 4.760 / 5.415 |
+| unzoom horizontal | 11.261 / 12.619 | 5.679 / 6.117 | 5.724 / 5.942 |
+| unzoom vertical | 10.532 / 11.172 | 4.513 / 4.846 | 4.483 / 4.912 |
+| Yank line (clipboard receipt upper bound) | 9.401 / 9.591 | 54.451 / 54.680 | 54.439 / 54.762 |
+| zoom horizontal | 9.664 / 10.144 | 4.985 / 5.342 | 5.024 / 5.780 |
+| zoom vertical | 8.879 / 9.323 | 4.878 / 5.058 | 4.992 / 5.829 |
+
+</details>
+
+<details>
+<summary>RSS and observed state storage</summary>
+
+#### Initial RSS (MiB)
+
+| Seeded layout / load | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| 1×1 idle | 19.779 / 19.828 | 19.777 / 19.777 | 19.789 / 19.816 |
+| 1×1 busy | 31.039 / 31.082 | 31.078 / 31.082 | 31.090 / 31.141 |
+| 3×2 idle | 45.666 / 45.711 | 45.367 / 45.375 | 45.387 / 45.426 |
+| 3×2 busy | 56.930 / 56.957 | 56.668 / 56.672 | 56.668 / 56.684 |
+| 6×4 idle | 137.037 / 137.145 | 137.273 / 137.281 | 137.285 / 137.293 |
+| 6×4 busy | 148.340 / 148.398 | 148.555 / 148.570 | 148.572 / 148.586 |
+
+#### Observed state logical bytes (different durability)
+
+| Seeded layout / load | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| 1×1 idle | 62359.000 / 62684.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 1×1 busy | 120509.000 / 120992.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 3×2 idle | 205817.500 / 206415.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 3×2 busy | 264231.000 / 264640.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 6×4 idle | 722297.500 / 724339.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 6×4 busy | 781002.500 / 782644.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+
+#### Observed state allocated bytes (different durability)
+
+| Seeded layout / load | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| 1×1 idle | 77824.000 / 81920.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 1×1 busy | 135168.000 / 139264.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 3×2 idle | 227328.000 / 237568.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 3×2 busy | 286720.000 / 290816.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 6×4 idle | 763904.000 / 782336.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 6×4 busy | 823296.000 / 835584.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+
+</details>
+
+[All six groups, 53 endpoints, RSS/storage and mux-only UI tables](benchmarks/README.md#complete-expanded-interactive-sweep-hosted-ci-2026-09-30), [raw manifest](benchmarks/results/hosted-ci/36774371342/manifest.json), and [coverage inventory](benchmarks/COVERAGE.md).
+<!-- interactive-followup:end -->
+
 <!-- interactive-results:start -->
 ### Expanded interactive measurements (hosted CI, 2026-09-30)
 
@@ -195,7 +371,7 @@ accept **240 trials**: 20 per variant in each of four groups (1×1 and 3×2,
 idle/busy), plus excluded warm-ups. Each trial covers 45 endpoints across roughly
 20 operation families. The two 6×4 groups are **rejected** because native pane
 numbering put tagged content in different grid slots; their raw samples and audit
-failures are retained, and corrected logical-slot fixtures are being rerun.
+failures are retained. The corrected follow-up sweep above accepts all six groups.
 
 Runtime: `d6dd228054231e77772bd17a412d8f0d07871835`. Actual executed harness:
 `efc5c1551adf0fc24f55e9c15bd444658442efde` (PR merge of branch `ee916e0`).
@@ -211,7 +387,8 @@ window, and mutations use a temporary scratch window. Content area is 100×40,
 retained tagged history is 1,000 records per seeded pane, cap 20,000. Native chrome
 and bootstrap command history differ. Busy adds the same 50 Hz, five-line in-place
 ANSI producer. Full tagged histories and pane dimensions are independently checked.
-The two accepted scales use full-width panes; wider grids require the pending fix.
+The two accepted historical scales use full-width panes. Corrected wider-grid
+results are in the separate follow-up above; these original large groups remain rejected.
 
 All table entries are **median / nearest-rank p95**, 20 independent process trials
 per cell. Interaction latency stops at the decoded correct viewport/cursor/style,

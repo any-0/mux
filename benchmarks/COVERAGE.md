@@ -38,9 +38,9 @@ a separate performance metric.
 | Search repeat, pane-local jump list, character hints | Search repeats implemented; jump list/hints pending | Next/previous search match implemented; no identical tmux mux jump-list/hint UI |
 | Sustained/background output | Interactive idle/busy profiles + accepted finite throughput | Equal 50 Hz in-place ANSI producer in isolated background window; finite active-pane output already measured |
 | Working directory/session root, rename | Seeded cwd / existing clean fidelity; window/session rename editor opening and commit implemented | Session-root UI implemented in mux-only suite; policy differs from tmux working directories |
-| Bell/activity navigation | Paired suite implemented; pending validation | Must generate actual bell in background pane and confirm target selection |
-| Session tree preview/expand/collapse | Mux-only suite implemented; pending validation | tmux choose-tree exists but different preview/rendering semantics |
-| Theme picker, palette update | Mux-only suite implemented; pending validation | Can report mux-only UI latency; no equivalent tmux picker |
+| Bell/activity navigation | Accepted follow-up paired suite | Must generate actual bell in background pane and confirm target selection |
+| Session tree preview/expand/collapse | Accepted follow-up mux-only suite | tmux choose-tree exists but different preview/rendering semantics |
+| Theme picker, palette update | Accepted follow-up mux-only suite | Can report mux-only UI latency; no equivalent tmux picker |
 | Manual clean save/restart/restore | Accepted 30 trials, preserved separately | Full history/layout/cwd/sampled style/fresh shell gates |
 | Default-period crash recovery | Explicitly unmeasured, long-run limit | Never relabel clean results or shorten continuum timer |
 | List/query commands | Setup and after-operation correctness evidence | Read-only metadata, not a visible interactive operation |
@@ -59,12 +59,23 @@ Raw frames, input timestamps, commands, process-tree resource evidence and failu
 are retained. CPU ticks miss exited helpers and are a lower bound. Any unequal paired fixture or failed trial
 blocks the complete profile/scale comparison; no surviving subset is reported.
 
-Status: the core suite has 240 independently accepted trials at 1×1 and 3×2,
-idle/busy, with 45 endpoints. Both 6×4 groups from the first sweep are blocked by
-the native pane-order mismatch; full raw samples are preserved. The logical-slot
-fix and additional bell/search/selection/mux-only UI cases are in Nix validation.
-Their new timings remain unaccepted until all gates and independent audits pass.
-Prior measured micro/clean data remain valid.
+Status: [follow-up run 36774371342](https://github.com/any-0/mux/actions/runs/36774371342)
+accepts all **360 measured paired trials** at 1×1, 3×2 and 6×4, idle/busy,
+with 53 endpoints across roughly 20 operation families. Eighteen warm-ups are
+excluded. All logical pane slots, dimensions, complete seeded histories, attached
+inputs, timestamp math and resident-resource sums pass independent audits. The
+separate mux-only suite accepts 20 trials with 12 endpoints, one warm-up excluded.
+Tree/theme/root UI is intentionally not given a tmux ratio.
+
+Historical core run 36762906986 retains its 240 accepted 45-endpoint trials and
+both rejected 6×4 groups. Intermediate run 36769182665 retains three accepted
+53-endpoint groups and its entire rejected 3×2 busy group. Diagnostic failure
+run 36773777142 has zero performance trials. Their raw data, failures and distinct
+scope remain preserved; none is pooled with the complete replacement sweep.
+Prior measured micro/clean data remain valid. Cold restored-layout startup across
+this scale matrix, remaining Vim line/block motions, pane-local jump-list/hints,
+different-size client contention and default-period crash recovery remain open.
+This completes the declared sweep, not every possible feature combination.
 
 Completed groups are independently publishable only after all three variants pass
 their diagnostic preflight and every measured trial plus excluded warm-up passes
@@ -90,4 +101,8 @@ actual isolated palette application, and session-root update from a real `cd`.
 Theme preview correctness includes exact rendered cell background values, not
 text alone. Its independent audit verifies inputs, timestamps and complete trials.
 It follows the paired groups on the same runner and has no tmux ratio or ranking.
-These new cases are implemented but unmeasured until pinned-Nix validation passes.
+All 20 measured trials now pass pinned-Nix execution and independent auditing;
+the complete tables and raw artifact manifest are linked from the benchmark README.
+
+See [optimization handoff](OPTIMIZATION_HANDOFF.md) for exact pinned invocation,
+raw profile-counter evidence and input/render correctness pitfalls.

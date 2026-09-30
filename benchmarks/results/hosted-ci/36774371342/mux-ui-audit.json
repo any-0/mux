@@ -1,0 +1,69 @@
+{
+  "audit": "passed",
+  "scope": "mux-only UI; no tmux comparison",
+  "measured_trials": 20,
+  "warmups_excluded": 1,
+  "operations_per_trial": 12,
+  "operations": {
+    "tree_open": {
+      "n": 20,
+      "median": 7.6318090000000005,
+      "p95": 8.223307
+    },
+    "tree_expand": {
+      "n": 20,
+      "median": 2.3380644999999998,
+      "p95": 2.538029
+    },
+    "tree_preview_second_window": {
+      "n": 20,
+      "median": 11.497498,
+      "p95": 11.643273
+    },
+    "tree_choose_preview": {
+      "n": 20,
+      "median": 10.7120335,
+      "p95": 12.289826
+    },
+    "tree_collapse": {
+      "n": 20,
+      "median": 3.2273085000000004,
+      "p95": 3.556786
+    },
+    "tree_cancel": {
+      "n": 20,
+      "median": 8.172307,
+      "p95": 8.618806
+    },
+    "theme_picker_open": {
+      "n": 20,
+      "median": 5.54741,
+      "p95": 7.147071
+    },
+    "theme_preview_next": {
+      "n": 20,
+      "median": 4.223796999999999,
+      "p95": 5.045761
+    },
+    "theme_preview_previous": {
+      "n": 20,
+      "median": 4.179024999999999,
+      "p95": 4.496805
+    },
+    "theme_picker_cancel": {
+      "n": 20,
+      "median": 3.9959455000000004,
+      "p95": 4.302275
+    },
+    "theme_apply_palette": {
+      "n": 20,
+      "median": 11.1428085,
+      "p95": 11.649685
+    },
+    "session_root_from_cwd": {
+      "n": 20,
+      "median": 2.682569,
+      "p95": 3.866886
+    }
+  }
+}
