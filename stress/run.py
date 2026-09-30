@@ -99,7 +99,7 @@ class Session:
         client = {'name': name, 'fd': master, 'process': process, 'terminal': Terminal(self.rows, self.cols),
                   'raw': (self.root / f'{name}.ansi').open('wb'),
                   'events': (self.root / f'{name}.events.jsonl').open('w', buffering=1), 'offset': 0}
-        client['events'].write(json.dumps({'event': 'resize', 'offset': 0, 'rows': self.rows, 'cols': self.cols}) + '\n')
+        client['events'].write(json.dumps({'event': 'resize', 'offset': 0, 'rows': self.rows, 'cols': self.cols, 'action_index': getattr(self, 'action_index', 0)}) + '\n')
         self.clients.append(client)
         self.action('attach', name=name, rows=self.rows, cols=self.cols)
         return client
@@ -160,7 +160,7 @@ class Session:
         self.rows, self.cols = rows, cols
         self.action('resize', rows=rows, cols=cols)
         for client in self.clients:
-            client['events'].write(json.dumps({'event': 'resize', 'offset': client['offset'], 'rows': rows, 'cols': cols}) + '\n')
+            client['events'].write(json.dumps({'event': 'resize', 'offset': client['offset'], 'rows': rows, 'cols': cols, 'action_index': self.action_index - 1}) + '\n')
             fcntl.ioctl(client['fd'], termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
             client['terminal'].resize(rows, cols)
         # No undocumented reflow rule is inferred from mux. Ctrl-L asks each
