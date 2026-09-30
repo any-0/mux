@@ -30,7 +30,7 @@ a separate performance metric.
 | Join pane into another window | CLI-only mux control; expanded coverage pending | Needs separately labeled command-dispatch-to-render path; no standard mux attached-key action |
 | Detach/reattach | Interactive suite | Actual attached process exits; fresh attached process displays preserved viewport |
 | Multiple clients | Interactive suite | Second actual attached PTY sees preserved content; same size |
-| Outer terminal resize | Interactive suite | Resize plus real shell `stty size` probe; endpoint explicitly includes probe overhead |
+| Outer terminal resize | Interactive suite | Native resize signal to correctly repositioned sidebar/status and retained shell viewport; exact pane dimensions verified afterward |
 | History scroll | Accepted prior 30 trials / 600 events | Exact contiguous numbered viewport transition |
 | History search/top/bottom | Interactive suite | Off-screen matched record becomes visible, then first/last retained records |
 | Copy/yank and selection | Full-history seed gate plus timed line-yank receipt | Exact captured text; clipboard receipt is a different endpoint from display; Clipboard receipt explicitly labeled separately from render latency |
