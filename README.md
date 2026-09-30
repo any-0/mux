@@ -81,7 +81,8 @@ restrictions; the devShell expression evaluated, but no variant executed.
 The microbenchmark and save/restart/restore/recovery-fidelity harnesses are
 implemented. Supported Nix CI has built the pinned backend and exposed harness
 issues in real smoke interactions. [Candidate Nix CI](https://github.com/any-0/mux/actions/runs/36740002774)
-passed 44 tests and six integration gates at PR #2 candidate `6da51cf`;
+passed 44 tests and six integration gates at the earlier PR #2 candidate
+`6da51cf`. The benchmark now pins its upstream main merge `d19f0dc`;
 validation and raw artifacts are linked
 in the benchmark draft. No
 median/p95 or performance advantage is claimed. The methodology, pinned

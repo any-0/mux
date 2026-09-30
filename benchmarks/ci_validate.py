@@ -19,7 +19,7 @@ def main():
     a.output = a.output.resolve()
     a.output.mkdir(parents=True, exist_ok=False)
     if command(['git', '-C', str(SOURCE_ROOT), 'rev-parse', 'HEAD']) != SOURCE_COMMIT:
-        p.error('runtime revision differs from pinned PR #2 revision')
+        p.error('runtime revision differs from pinned mux revision')
     env = {'kind': 'hosted-ci-correctness-validation', 'performance_comparison': False,
            'source_commit': SOURCE_COMMIT, 'harness_commit': command(['git', '-C', str(ROOT), 'rev-parse', 'HEAD']),
            'nixpkgs_rev': os.environ['BENCH_NIXPKGS_REV'],

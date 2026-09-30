@@ -39,8 +39,8 @@ without changing either PR branch; CI supplies its own separate pinned checkout.
 The runner builds mux once with `cargo build --locked --release` inside the Nix shell and
 then runs each variant sequentially. It rejects changes to runtime sources or
 Cargo inputs relative to mux commit
-`6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`. The source pin is tracked in `benchmarks/mux-revision`, currently the PR #2 branch candidate (not upstream main),
-revision `6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`. Benchmark documentation
+`d19f0dc8ab4d7f4a5d2accb3bbbdac7acd2b33cb`. The source pin is tracked in `benchmarks/mux-revision`
+and selects the upstream main merge of PR #2. Benchmark documentation
 and harness changes do not change that runtime pin. If the test/fix task produces a new
 runtime commit, explicitly update the pin and rerun all three variants.
 
@@ -390,7 +390,7 @@ PR #2's final tested handoff advanced to
 that head. Its separate validation is recorded below.
 
 
-Current candidate validation: [run 36740002774](https://github.com/any-0/mux/actions/runs/36740002774)
+Historical candidate validation: [run 36740002774](https://github.com/any-0/mux/actions/runs/36740002774)
 passed **44 Nix tests and all six serial real integration gates** at harness
 `9c7f3984792f1d38e51617b9e2a634435c746b98`, runtime
 `6da51cf7a776a81b8be6d8dbf16ea498e7f8385c` from the PR #2 branch candidate
@@ -413,3 +413,12 @@ supported route; same-runner micro/clean performance pilot data would need a
 separate hosted-CI table, randomized paired trials and recorded runner/load.
 It cannot stand in for Julian's selected cloud hardware. No network-policy
 bypass, environment move or merge was performed.
+
+
+The benchmark branch incorporates upstream main merge
+`d19f0dc8ab4d7f4a5d2accb3bbbdac7acd2b33cb` and now pins that merged revision.
+Its runtime and Cargo inputs are identical to the tested PR #2 candidate
+`6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`; previous ZIP artifacts remain
+labeled with the exact candidate revisions they actually validated. The final
+branch runs its own pinned-Nix project checks and benchmark correctness smoke.
+No new performance trials or performance statistics are implied by this update.

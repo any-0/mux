@@ -33,7 +33,7 @@ jobs:
       - name: Read exact runtime pin
         id: pin
         run: echo "revision=$(cat benchmarks/mux-revision)" >> "$GITHUB_OUTPUT"
-      - name: Checkout PR 2 runtime independently
+      - name: Checkout exact pinned mux runtime independently
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.pin.outputs.revision }}
