@@ -1466,6 +1466,20 @@ impl Server {
         else {
             return Ok(());
         };
+        // A background exit can remove rows before an open tree's selection.
+        // Remember the selected object before changing the hierarchy, rather
+        // than letting the same list index silently select its next neighbor.
+        let tree_targets: Vec<_> = self
+            .clients
+            .iter()
+            .filter_map(|(id, client)| {
+                let tree = client.tree.as_ref()?;
+                self.tree_items(&tree.expanded)
+                    .get(tree.selected)
+                    .cloned()
+                    .map(|item| (*id, item))
+            })
+            .collect();
         let closed_session_id = self.sessions[session_index].id;
         for client in self.clients.values_mut() {
             client.vim.remove(&pane_id);
@@ -1550,6 +1564,46 @@ impl Server {
                 session.windows.len(),
             );
             play_bell_once(&mut session.windows[session.current_window].bell, shimmer);
+        }
+        for (id, mut target) in tree_targets {
+            if target.session_id == closed_session_id {
+                if removed_window {
+                    if let Some(window) = target.window {
+                        if window == window_index {
+                            target.window = None;
+                            target.pane = None;
+                        } else if window > window_index {
+                            target.window = Some(window - 1);
+                        }
+                    }
+                } else if target.window == Some(window_index) {
+                    target.pane = target.pane.and_then(|pane| {
+                        if pane == pane_index {
+                            None
+                        } else {
+                            Some(pane - usize::from(pane > pane_index))
+                        }
+                    });
+                }
+            }
+            let Some(tree) = self
+                .clients
+                .get(&id)
+                .and_then(|client| client.tree.as_ref())
+            else {
+                continue;
+            };
+            let items = self.tree_items(&tree.expanded);
+            let selected = items
+                .iter()
+                .position(|item| {
+                    item.session_id == target.session_id
+                        && item.window == target.window
+                        && item.pane == target.pane
+                })
+                .unwrap_or_else(|| tree.selected.min(items.len().saturating_sub(1)));
+            let client = self.clients.get_mut(&id).unwrap();
+            client.tree.as_mut().unwrap().selected = selected;
         }
         let client_ids: Vec<_> = self.clients.keys().copied().collect();
         for client_id in client_ids {
@@ -2682,6 +2736,8 @@ fn automatic_session_name(number: usize) -> String {
 mod lifecycle_tests;
 #[cfg(test)]
 mod responsiveness_tests;
+#[cfg(test)]
+mod session_regression_tests;
 #[cfg(test)]
 mod terminal_query_tests;
 #[cfg(test)]

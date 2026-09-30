@@ -304,7 +304,10 @@ impl Server {
                 frame.set_text(icon_row, 1, &icon_label, attributes);
             }
         }
-        if let Some((count, bell)) = self.other_session_bells(id)
+        // The notification uses the reserved bottom row. A one-row client
+        // has only the mode tile, which must remain visible after a bell.
+        if rows > 1
+            && let Some((count, bell)) = self.other_session_bells(id)
             && let Some(visual) = bell_visual(bell, bell_style)
         {
             render_bell_label(
