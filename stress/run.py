@@ -43,7 +43,7 @@ class Session:
                         STRESS_RC=str(directory / 'home/.bashrc'), ZDOTDIR=str(directory / 'home'))
         self.profile()
         theme = directory / 'theme.toml'
-        theme.write_text('variant = "dark"\n[palette]\nbackground = "#010203"\nsecondary = "#113355"\nsurface_raised = "#223344"\n')
+        theme.write_text('variant = "dark"\n[palette]\nbackground = "#010203"\nsecondary = "#113355"\nsurface_raised = "#223344"\nsurface = "#334455"\nmuted = "#778899"\naccent = "#446688"\n')
         (directory / 'config.toml').write_text(f'mouse = true\ndefault_cursor_shape = "underline"\ntheme = "{theme}"\n')
         self.stderr = (directory / 'daemon.stderr').open('wb')
         self.daemon = subprocess.Popen([self.binary, '__server', str(directory / 'runtime/mux.sock')],
@@ -153,6 +153,14 @@ class Session:
         env = self.env | {'MUX': str(self.root / 'runtime/mux.sock')}
         result = subprocess.run([self.binary, *args], env=env, capture_output=True, timeout=10)
         assert result.returncode == 0, result.stderr.decode(errors='replace')
+
+    def query(self, name):
+        env = self.env | {'MUX': str(self.root / 'runtime/mux.sock')}
+        result = subprocess.run([self.binary, name, '--json'], env=env, capture_output=True, timeout=10)
+        assert result.returncode == 0, result.stderr.decode(errors='replace')
+        value = json.loads(result.stdout)
+        self.action('query-observed', name=name, value=value)
+        return value
 
     def resize(self, rows, cols):
         self.rows, self.cols = rows, cols

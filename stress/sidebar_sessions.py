@@ -24,6 +24,23 @@ def icon(session, expected):
         assert time.monotonic() < deadline, f'foreground icon expected {expected!r}, got {actual!r}'
 
 
+def mode(session, glyph, background, foreground):
+    session.settle()
+    screen = session.clients[0]['terminal'].screen
+    actual = ''.join(screen.buffer[0][x].data for x in range(3))
+    assert actual == glyph, f'mode glyph expected {glyph!r}, got {actual!r}'
+    cell = screen.buffer[0][1]
+    assert (cell.fg, cell.bg) == (foreground, background), 'mode colors differ from declared profile palette'
+    session.action('mode-check', glyph=glyph, foreground=foreground, background=background)
+
+
+def metadata(session, expected):
+    actual = session.query('list-sessions')
+    projected = {s['name']: (s['windows'], s['panes'], s['attached']) for s in actual}
+    assert projected == expected, f'action-derived session metadata: expected {expected}, got {projected}'
+    session.action('session-model-check', expected=expected)
+
+
 def run(binary, directory, shell):
     session = Session(binary, directory, shell, proxied=False)
     try:
@@ -62,6 +79,34 @@ def run(binary, directory, shell):
         session.settle()
         session.input(b'\x1bf')
         session.sidebar(12, 5)
+        metadata(session, {'stress': (12, 12, True)})
+        session.command('new-session', '-s', 'auxiliary')
+        session.command('rename-session', 'aux-renamed')
+        session.command('rename-window', 'named-window')
+        session.bar = 5
+        session.sidebar(1, 0)
+        metadata(session, {'stress': (12, 12, False), 'aux-renamed': (1, 1, True)})
+        windows = session.query('list-windows')
+        assert [(w['name'], w['active'], w['panes']) for w in windows] == [('named-window', True, 1)]
+        session.command('split-window', '-h')
+        metadata(session, {'stress': (12, 12, False), 'aux-renamed': (1, 2, True)})
+        panes = session.query('list-panes')
+        assert [(p['index'], p['active']) for p in panes] == [(1, False), (2, True)]
+        session.command('kill-pane')
+        metadata(session, {'stress': (12, 12, False), 'aux-renamed': (1, 1, True)})
+        session.command('choose-tree')
+        session.wait_text('aux-renamed')
+        session.input(b'\x1b')
+        session.sidebar(1, 0)
+        mode(session, ' ● ', '334455', '778899')
+        session.input(b'\x1ba')
+        mode(session, ' ● ', '113355', '010203')
+        session.input(b'\x1b')
+        mode(session, ' ● ', '334455', '778899')
+        session.command('vim-mode')
+        mode(session, ' ● ', '446688', '010203')
+        session.input(b'\x1b')
+        mode(session, ' ● ', '334455', '778899')
         return {'shell': shell, 'passed': True}
     finally:
         session.close()
