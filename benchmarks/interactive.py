@@ -32,6 +32,7 @@ class Interactive(Recovery):
                         'bind -n M-w copy-mode',
                         'bind -T copy-mode-vi g send-keys -X history-top',
                         'bind -T copy-mode-vi G send-keys -X history-bottom',
+                        'bind -T copy-mode-vi Escape send-keys -X cancel',
                         'bind -T bench - split-window -v -l 50%', 'bind -T bench | split-window -h -l 50%',
                         'bind -T bench x confirm-before -p "kill pane?" kill-pane', 'bind -T bench ! break-pane',
                         'bind -T bench > swap-window -d -t +1', 'bind -T bench < swap-window -d -t -1',
