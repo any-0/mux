@@ -44,7 +44,9 @@ class Session:
                         STRESS_REAL_SHELL=shutil.which(shell), STRESS_CAPTURE=str(directory / 'capture'),
                         STRESS_RC=str(directory / 'home/.bashrc'), ZDOTDIR=str(directory / 'home'))
         self.profile()
-        (directory / 'config.toml').write_text('mouse = true\n')
+        theme = directory / 'theme.toml'
+        theme.write_text('variant = "dark"\n[palette]\nbackground = "#010203"\nsecondary = "#113355"\nsurface_raised = "#223344"\n')
+        (directory / 'config.toml').write_text(f'mouse = true\ndefault_cursor_shape = "underline"\ntheme = "{theme}"\n')
         self.stderr = (directory / 'daemon.stderr').open('wb')
         self.daemon = subprocess.Popen([self.binary, '__server', str(directory / 'runtime/mux.sock')],
                                        env=self.env, cwd=directory / 'work', stderr=self.stderr)
@@ -59,6 +61,7 @@ class Session:
         self.capture_pending = ''
         self.expected = Terminal(self.rows, self.cols - self.bar)
         self.capture_path = None
+        self.capture_excluded = set()
         self.checkpoints = 0
         self.proxied = proxied
         try:
@@ -114,7 +117,7 @@ class Session:
             client['terminal'].feed(data)
         if self.proxied:
             if self.capture_path is None:
-                paths = list((self.root / 'capture').glob('*.jsonl'))
+                paths = [p for p in (self.root / 'capture').glob('*.jsonl') if p.name not in self.capture_excluded]
                 if paths:
                     self.capture_path = paths[0]
             if self.capture_path:
@@ -201,20 +204,65 @@ class Session:
     def sidebar(self, count, active):
         # Scenario-owned window count and active index, never query mux for expected state.
         self.settle()
-        capacity = (self.rows - 2) // 3
+        capacity = max(0, (self.rows - 2) // 3)
         visible = min(count, capacity)
         start = max(0, min(active - visible // 2, count - visible)) if count > visible else 0
         top = 1 + (self.rows - 2 - visible * 3) // 2
+        digits = len(str(count))
+        label_width = digits + 2
         expected = {top + offset * 3: '•' if start + offset == active else str(start + offset + 1)
                     for offset in range(visible)}
         for client in self.clients:
             screen = client['terminal'].screen
-            actual = {y: ''.join(screen.buffer[y][x].data for x in range(3)).strip()
+            actual = {y: ''.join(screen.buffer[y][x].data for x in range(label_width)).strip()
                       for y in range(1, self.rows - 1)}
             actual = {y: text for y, text in actual.items() if text and text != '·'
                       and (text == '•' or text.isdecimal())}
             assert actual == expected, f'sidebar action model: expected {expected}, actual {actual}'
+            for row, label in expected.items():
+                background = '113355' if label == '•' else '223344'
+                for y in (row, row + 1):
+                    for x in range(label_width):
+                        cell = screen.buffer[y][x]
+                        assert cell.bg == background, (f'sidebar icon tile background at {y},{x}: '
+                                                       f'expected {background}, actual {cell.bg}')
+                        assert not cell.underscore and not cell.italics and not cell.bold, 'pane SGR leaked into sidebar'
         self.action('sidebar-check', count=count, active=active, expected=expected)
+
+    def restart(self, crash=False):
+        self.action('restart', crash=crash)
+        # Give the documented asynchronous state writer time to checkpoint;
+        # crash testing here targets durable completed output, not an undefined
+        # last-few-milliseconds loss budget.
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            self.pump(.02)
+        self.capture_excluded.update(p.name for p in (self.root / 'capture').glob('*.jsonl'))
+        for client in self.clients:
+            client['process'].terminate()
+            client['process'].wait(timeout=5)
+            os.close(client['fd'])
+            client['raw'].close()
+            client['events'].close()
+        self.clients.clear()
+        if crash:
+            self.daemon.kill()
+        else:
+            self.command('kill-server')
+        self.daemon.wait(timeout=10)
+        socket = self.root / 'runtime/mux.sock'
+        self.daemon = subprocess.Popen([self.binary, '__server', str(socket)],
+                                       env=self.env, cwd=self.root / 'work', stderr=self.stderr)
+        # A killed daemon leaves a socket pathname; attach retries connect, but
+        # first require this process to remain alive and finish startup.
+        time.sleep(.15)
+        assert self.daemon.poll() is None, 'restarted daemon exited'
+        self.capture_path = None
+        self.capture_offset = 0
+        self.capture_pending = ''
+        self.attach('crash-restored' if crash else 'graceful-restored')
+        self.wait_text('READY>')
+        self.settle()
 
     def close(self):
         for client in getattr(self, 'clients', []):
@@ -303,14 +351,27 @@ def run_profile(binary, directory, shell, cycles, seed):
         session.input(b'cat sample.txt\r')
         session.settle()
         session.checkpoint('two-client-output')
-        for count in range(2, 10):
+        # A running foreground command has no idle prompt to remove. The
+        # independent source screen survives the restart; fresh shell bytes
+        # from the new recorder are fed on top, exactly as protocol dictates.
+        recovery = (b'\x1bc\x1b[?2004l\x1b[1;2;3;4:3;58;5;45mRECOVERY-PAYLOAD '
+                    + '界 e\u0301'.encode() + b'\x1b[0m\r\n')
+        (directory / 'work/recovery.ansi').write_bytes(recovery)
+        for crash in (False, True):
+            session.input(b'cat recovery.ansi; sleep 1000\r')
+            session.wait_text('RECOVERY-PAYLOAD')
+            session.checkpoint('pre-crash' if crash else 'pre-graceful-stop')
+            session.restart(crash=crash)
+            session.checkpoint('after-crash-restore' if crash else 'after-graceful-restore')
+            session.sidebar(1, 0)
+        for count in range(2, 13):
             session.command('new-window')
-            session.bar = 5
+            session.bar = len(str(count)) + 4
             session.wait_text('READY>')
             session.sidebar(count, count - 1)
         for active in [0, 8, 3, 7, 1, 5]:
             session.command('select-window', str(active + 1))
-            session.sidebar(9, active)
+            session.sidebar(12, active)
         return {'shell': shell, 'cycles': cycles, 'checkpoints': session.checkpoints, 'passed': True}
     finally:
         session.close()

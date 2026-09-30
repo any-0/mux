@@ -2532,3 +2532,37 @@ fn detached_sessions_do_not_poll_process_icons() {
     drop(server);
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn two_digit_sidebar_process_tiles_keep_their_background_through_the_right_edge() {
+    let directory = env::temp_dir().join(format!("mux-wide-bar-{}", std::process::id()));
+    let (mut server, _events, _client) = server_with_pending_bell(&directory);
+    let client = server.clients.get_mut(&1).unwrap();
+    client.initialized = true;
+    client.session_id = Some(server.sessions[0].id);
+    server.sessions[0].windows[0].bell = None;
+    for _ in 1..10 {
+        server.new_window(1).unwrap();
+    }
+    let theme = server.clients[&1].rendered_theme();
+    let mut frame = Frame::default();
+    frame.reset(24, 80);
+    server.render_bar(1, &mut frame, 24, false, 6);
+    let mut bytes = Vec::new();
+    frame.diff(&Frame::default(), ColorDepth::TrueColor, &mut bytes);
+    let mut terminal = vt100::Parser::new(24, 80, 0);
+    terminal.process(&bytes);
+    // Ten windows, the last selected, seven tiles visible: first tile is
+    // window 4 at row 2; last tile is window 10 at row 20 (one-based).
+    let inactive_edge = terminal.screen().cell(2, 3).unwrap().bgcolor();
+    let active_edge = terminal.screen().cell(20, 3).unwrap().bgcolor();
+    for window in &mut server.sessions[0].windows {
+        for pane in &mut window.panes {
+            pane.child.kill().unwrap();
+        }
+    }
+    drop(server);
+    fs::remove_dir_all(directory).unwrap();
+    assert_eq!(inactive_edge, rgb(theme.bar_inactive));
+    assert_eq!(active_edge, rgb(theme.bar_active));
+}
