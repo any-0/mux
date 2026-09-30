@@ -125,7 +125,7 @@ impl Session {
         let screen = self.capture();
         for &(row, text) in expected {
             let actual = (0..3)
-                .map(|col| screen.cell(row - 1, col).unwrap().contents())
+                .map(|col| screen.cell(row - 1, col).unwrap().contents().to_owned())
                 .collect::<String>();
             assert_eq!(actual, text, "sidebar row {row}");
         }
