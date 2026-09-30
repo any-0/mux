@@ -1038,7 +1038,7 @@ mod history_restore_tests {
             .iter()
             .map(|row| {
                 (0..4)
-                    .map(|x| row.get(x).unwrap().contents())
+                    .map(|x| row.get(x).unwrap().contents().to_string())
                     .collect::<String>()
             })
             .collect();
@@ -1068,7 +1068,7 @@ mod history_restore_tests {
         let first_cells: Vec<_> = parser
             .screen()
             .all_rows()
-            .map(|row| row.get(0).unwrap().contents())
+            .map(|row| row.get(0).unwrap().contents().to_string())
             .collect();
         assert_eq!(first_cells, ["A", "B", "C", "D", "E", "F"]);
     }
