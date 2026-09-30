@@ -32,7 +32,7 @@ a separate performance metric.
 | Multiple clients | Interactive suite | Second actual attached PTY sees preserved content; same size |
 | Outer terminal resize | Interactive suite | Native resize signal to correctly repositioned sidebar/status and retained shell viewport; exact pane dimensions verified afterward |
 | History scroll | Accepted prior 30 trials / 600 events | Exact contiguous numbered viewport transition |
-| History search/top/bottom | Interactive suite | Off-screen matched record becomes visible, then first/last retained records |
+| History search/top/bottom | Interactive suite | Prepared search-editor query commit to off-screen matched record, then first/last retained records |
 | Copy/yank and selection | Full-history seed gate plus timed line-yank receipt | Exact captured text; clipboard receipt is a different endpoint from display; Clipboard receipt explicitly labeled separately from render latency |
 | Character/word/line/find motions, visual/block selection | Cursor-left/right and big-word-forward implemented; other motions pending | Cursor/selection-cell gates needed; distinct motion semantics must be disclosed |
 | Search repeat, pane-local jump list, character hints | Pending / partly mux-specific | tmux has search repeat, no identical mux jump-list/hint UI |
