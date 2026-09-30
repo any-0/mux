@@ -1,0 +1,59 @@
+#!/bin/sh
+# Run new behavior tests against their old implementations in an isolated
+# checkout. Compilation failures or empty test filters are not witnesses.
+set -eu
+
+repository=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repository"
+baseline=$(git rev-parse --verify --end-of-options "${1:?supply the regression baseline commit}^{commit}")
+directory=$(mktemp -d "${TMPDIR:-/tmp}/mux-witness.XXXXXX")
+cleanup() {
+    git -C "$repository" worktree remove --force "$directory" >/dev/null 2>&1 || true
+    rm -rf "$directory"
+}
+trap cleanup 0 HUP INT TERM
+git worktree add --detach "$directory" HEAD
+for path in vendor/vt100/src/row.rs vendor/vt100/src/grid.rs src/server/render.rs src/server/input.rs; do
+    git show "$baseline:$path" > "$directory/$path"
+done
+cd "$directory"
+export CARGO_TARGET_DIR="$repository/target"
+export CARGO_TERM_COLOR=never
+for name in \
+    malformed_persisted_history_is_rejected_before_render_or_reflow \
+    resizing_through_a_wide_cell_then_erasing_does_not_panic \
+    background_pty_bell_cannot_overwrite_the_mode_tile_after_narrow_resize \
+    mouse_clicks_follow_the_visible_sidebar_after_narrow_resize; do
+    log="$directory/$name.log"
+    if cargo test --locked "server::session_regression_tests::$name" -- --exact --nocapture > "$log" 2>&1; then
+        cat "$log"
+        echo "Regression witness unexpectedly passed: $name" >&2
+        exit 1
+    fi
+    cat "$log"
+    if ! grep -F 'test result: FAILED.' "$log" >/dev/null; then
+        echo "Regression witness did not reach a failing test: $name" >&2
+        exit 1
+    fi
+done
+
+
+# The first draft introduced a 64 MiB expanded-history cap. Preserve the
+# current library test when substituting that exact older implementation.
+capped=d328bd3cf503e22855818a20353964c4879bc67b
+git show "HEAD:vendor/vt100/src/row.rs" > vendor/vt100/src/row.rs
+git show "$capped:vendor/vt100/src/grid.rs" > vendor/vt100/src/grid.rs
+sed -n '/^#\[cfg(test)\]/,$p' "$repository/vendor/vt100/src/grid.rs" >> vendor/vt100/src/grid.rs
+log="$directory/large-history.log"
+if cargo test --manifest-path vendor/vt100/Cargo.toml --locked --lib \
+    grid::history_restore_tests::large_styled_history_streams_and_retains_only_the_configured_tail \
+    -- --exact --nocapture > "$log" 2>&1; then
+    cat "$log"
+    echo "Large-history compatibility witness unexpectedly passed" >&2
+    exit 1
+fi
+cat "$log"
+if ! grep -F 'test result: FAILED.' "$log" >/dev/null; then
+    echo "Large-history witness did not reach a failing test" >&2
+    exit 1
+fi
