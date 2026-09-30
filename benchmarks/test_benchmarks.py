@@ -389,6 +389,25 @@ class RecoveryControllerTests(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec('pyte'), 'pyte absent; run validation in Nix shell')
 class AttachedPTYTests(unittest.TestCase):
+    def test_private_cursor_query_receives_actual_pty_reply(self):
+        program = r'''
+import os, tty
+tty.setraw(0)
+os.write(1, b'\x1b[3;5H\x1b[?6n')
+reply = b''
+while not reply.endswith(b'R'):
+    reply += os.read(0, 1)
+os.write(1, b'\r\nQUERY_OK' if reply == b'\x1b[?3;5R' else b'QUERY_FAILED')
+os.read(0, 1)
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            terminal = Terminal([sys.executable, '-c', program], dict(os.environ), Path(tmp), 8, 100)
+            try:
+                terminal.until(lambda: terminal.contains('QUERY_OK'), timeout=3)
+                self.assertFalse(terminal.contains('QUERY_FAILED'))
+            finally:
+                terminal.close()
+
     def test_seed_command_reaches_shell_and_renders_real_colored_utf8_fixture(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = dict(os.environ, PS1='VALIDATION_PROMPT> ')

@@ -307,6 +307,13 @@ class Recovery:
             argv = ['python3', str(ROOT / 'benchmarks/recovery_workload.py'), label, '--probe']
             # Disable echo, then clear prompts before the history fixture.
             self.shell(seed_command(cwd, argv), f'REC_DONE_{label}_{BASE_ROWS}')
+            # mux samples cwd on output, at most every 250 ms without shell
+            # integration. Emit a fresh rendered barrier after that interval;
+            # polling metadata alone cannot trigger another sample. Apply the
+            # same preparation to all variants, outside measured operations.
+            self.wait_duration(0.3)
+            barrier = 'REC_CWD_' + str(time.perf_counter_ns())
+            self.shell(nonce_command(barrier), barrier)
             actual = next(p for p in self.pane_list(window) if p['index'] == pane)
             expected_rows = {(1, 1): 19, (1, 2): 20, (2, 1): 40}[(window, pane)]
             if actual['cols'] != 100 or actual['rows'] != expected_rows:
