@@ -33,6 +33,7 @@ class Interactive(Recovery):
                         'bind -T copy-mode-vi g send-keys -X history-top',
                         'bind -T copy-mode-vi G send-keys -X history-bottom',
                         'bind -T copy-mode-vi Escape send-keys -X cancel',
+                        'bind -T copy-mode-vi q send-keys -X cancel',
                         'bind -T bench - split-window -v -l 50%', 'bind -T bench | split-window -h -l 50%',
                         'bind -T bench x confirm-before -p "kill pane?" kill-pane', 'bind -T bench ! break-pane',
                         'bind -T bench > swap-window -d -t +1', 'bind -T bench < swap-window -d -t -1',
@@ -393,7 +394,9 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.measurements[-1]['clipboard_text']=copied
         r.keys(b'\x1bw');r.keys(b'gg' if variant=='mux' else b'g')
         r.action('history_bottom',b'G',lambda:r.client.contains('SCRATCH>') and not r.client.contains('SCRATCH-H00000'))
-        r.keys(b'\x1b')
+        import re
+        r.action('exit_copy_mode',b'\x1b' if variant=='mux' else b'q',
+            lambda:tuple(r.client.screen.buffer[0][1])==tile_before if variant=='mux' else not re.search(r'\[\d+/\d+\]',r.client.screen.display[0]))
         # Multi-client redraw: second attached client gets populated viewport.
         second=r.attach('second_client_attach',['SCRATCH>'],second=True)
         second.close()
