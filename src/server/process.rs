@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 #[cfg(not(target_os = "macos"))]
-use std::fs;
+use std::{fs, io::Read};
 
 #[derive(Debug)]
 pub(super) struct Process {
@@ -20,16 +20,26 @@ pub(super) fn process_cwd(pid: u32) -> Option<PathBuf> {
 
 /// Read executable identities, never terminal titles or command arguments.
 #[cfg(not(target_os = "macos"))]
-pub(super) fn processes() -> Vec<Process> {
+fn read_processes(groups: Option<&[i32]>) -> Vec<Process> {
     let Ok(entries) = fs::read_dir("/proc") else {
         return Vec::new();
     };
+    // procfs reports zero file sizes. A reusable buffer avoids the repeated
+    // tiny probe reads and allocations of fs::read_to_string for each PID.
+    let mut stat = String::with_capacity(4096);
     entries
         .flatten()
         .filter_map(|entry| {
             let pid = entry.file_name().to_str()?.parse::<i32>().ok()?;
-            let stat = fs::read_to_string(entry.path().join("stat")).ok()?;
+            stat.clear();
+            fs::File::open(entry.path().join("stat"))
+                .ok()?
+                .read_to_string(&mut stat)
+                .ok()?;
             let (parent, group) = process_stat(&stat)?;
+            if groups.is_some_and(|groups| !groups.contains(&group)) {
+                return None;
+            }
             let executable = fs::read_link(entry.path().join("exe")).ok()?;
             let program = executable.file_name()?.to_str()?.to_owned();
             Some(Process {
@@ -80,7 +90,7 @@ pub(super) fn process_cwd(pid: u32) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn processes() -> Vec<Process> {
+fn read_processes(groups: Option<&[i32]>) -> Vec<Process> {
     let Ok(output) = std::process::Command::new("ps")
         .args(["-axo", "pid=,ppid=,pgid=,stat=,comm="])
         .output()
@@ -94,6 +104,9 @@ pub(super) fn processes() -> Vec<Process> {
             let pid = fields.next()?.parse().ok()?;
             let parent = fields.next()?.parse().ok()?;
             let group = fields.next()?.parse().ok()?;
+            if groups.is_some_and(|groups| !groups.contains(&group)) {
+                return None;
+            }
             let state = fields.next()?;
             if state.starts_with(['Z', 'T', 'X']) {
                 return None;
@@ -112,6 +125,23 @@ pub(super) fn processes() -> Vec<Process> {
             })
         })
         .collect()
+}
+
+/// Only requested foreground groups need executable identities. On Linux,
+/// filter after reading stat and before readlink/allocation for every process.
+/// The process table is still sampled afresh; exited leaders, pipeline members,
+/// and Node launchers retain the same selection rules.
+pub(super) fn processes_for_groups(groups: &[i32]) -> Vec<Process> {
+    if groups.is_empty() {
+        Vec::new()
+    } else {
+        read_processes(Some(groups))
+    }
+}
+
+#[cfg(test)]
+pub(super) fn processes() -> Vec<Process> {
+    read_processes(None)
 }
 
 /// Prefer the foreground job's root to its helpers. Node launchers are the one
@@ -308,6 +338,14 @@ mod tests {
             .unwrap();
         let pid = child.id() as i32;
         let snapshot = processes();
+        let group = snapshot.iter().find(|process| process.pid == pid).unwrap().group;
+        let filtered = processes_for_groups(&[group]);
+        assert!(filtered.iter().all(|process| process.group == group));
+        assert!(filtered.iter().any(|process| {
+            process.pid == pid && process.program == expected_program
+        }));
+        assert!(processes_for_groups(&[]).is_empty());
+        assert!(processes_for_groups(&[-1]).is_empty());
         child.kill().unwrap();
         child.wait().unwrap();
         let program = &snapshot
