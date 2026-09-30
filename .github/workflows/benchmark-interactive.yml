@@ -37,7 +37,7 @@ jobs:
           manifest="benchmarks/results/hosted-ci/$run_id/manifest.json"
           if [ "$EVENT_NAME" != workflow_dispatch ] && [ -n "$run_id" ] && [ -f "$manifest" ]; then
             measured=$(python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["status"]=="completed"; print(m["branch_head"])' "$manifest")
-            if git cat-file -e "$measured^{commit}" && git diff --quiet "$measured" HEAD -- benchmarks/interactive.py benchmarks/mux_ui.py benchmarks/run.py benchmarks/recovery.py benchmarks/audit_interactive.py benchmarks/audit_mux_ui.py benchmarks/audit_hosted.py benchmarks/mux-revision .nix scripts/benchmark-nix && python3 benchmarks/retained_inputs.py "$measured"; then
+            if git cat-file -e "$measured^{commit}" && git diff --quiet "$measured" HEAD -- benchmarks/interactive.py benchmarks/mux_ui.py benchmarks/run.py benchmarks/recovery.py benchmarks/audit_interactive.py benchmarks/audit_mux_ui.py benchmarks/audit_hosted.py benchmarks/mux-revision .nix scripts/benchmark-nix ':(exclude).nix/flake.nix' && python3 benchmarks/retained_inputs.py "$measured"; then
               needed=false
             fi
           fi
