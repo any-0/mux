@@ -19,7 +19,7 @@ import subprocess
 import tarfile
 import time
 
-from run import ROOT, SOURCE_COMMIT, Terminal, command, storage
+from run import ROOT, SOURCE_COMMIT, SOURCE_ROOT, Terminal, command, storage
 from recovery_workload import record
 
 INTERVAL_SECONDS = 15 * 60
@@ -156,7 +156,7 @@ class Recovery:
                         BASH_ENV='/dev/null', ENV='/dev/null', INPUTRC='/dev/null')
         for key in ('MUX', 'MUX_PANE', 'TMUX', 'TMUX_PANE'):
             self.env.pop(key, None)
-        self.mux = str(ROOT / 'target/release/mux')
+        self.mux = str(SOURCE_ROOT / 'target/release/mux')
         self.tmux = ['tmux', '-S', str(self.runtime / 'tmux.sock')]
         self.columns = 105 if variant == 'mux' else 100
         self.config = directory / ('mux.toml' if variant == 'mux' else 'tmux.conf')
@@ -573,7 +573,9 @@ def main():
             p.error(tool + ' is missing')
         if not str(Path(path).resolve()).startswith('/nix/store/'):
             p.error(tool + ' must come from Nix')
-    if command(['git', 'diff', SOURCE_COMMIT, '--', 'src', 'vendor', 'Cargo.toml', 'Cargo.lock']):
+    if command(['git', '-C', str(SOURCE_ROOT), 'rev-parse', 'HEAD']) != SOURCE_COMMIT:
+        p.error('use scripts/benchmark-nix or supply the exact pinned source checkout')
+    if command(['git', '-C', str(SOURCE_ROOT), 'diff', SOURCE_COMMIT, '--', 'src', 'vendor', 'Cargo.toml', 'Cargo.lock']):
         p.error('runtime source differs from benchmark pin')
     if not command(['rustc', '--version']).startswith('rustc ' + os.environ['BENCH_RUST_VERSION']):
         p.error('Rust version differs from benchmark devShell pin')
@@ -587,12 +589,13 @@ def main():
                 'ages': AGES, 'trials': a.trials, 'mode': a.mode,
                 'versions': {tool: command([tool, '-V' if tool == 'tmux' else '--version'])
                              for tool in ('rustc', 'cargo', 'tmux', 'python3', 'bash')},
-                'lock': json.loads((ROOT / 'flake.lock').read_text()),
+                'lock': json.loads((ROOT / '.nix/flake.lock').read_text()),
+                'execution_context': os.environ.get('BENCH_EXECUTION_CONTEXT', 'selected-cloud'),
                 'uname': command(['uname', '-a']), 'mounts': Path('/proc/mounts').read_text(),
                 'cpuinfo': Path('/proc/cpuinfo').read_text(), 'loadavg': Path('/proc/loadavg').read_text()}
     (a.output / 'environment.json').write_text(json.dumps(manifest, indent=2))
     with (a.output / 'build.log').open('w') as log:
-        subprocess.run(['cargo', 'build', '--release', '--locked'], cwd=ROOT, stdout=log,
+        subprocess.run(['cargo', 'build', '--release', '--locked'], cwd=SOURCE_ROOT, stdout=log,
                        stderr=subprocess.STDOUT, check=True)
     samples = []
     rng = random.Random(20260930)

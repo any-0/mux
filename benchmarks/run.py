@@ -26,7 +26,8 @@ import termios
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE_COMMIT = '9c74b7029e6112175d0914c0efc12d87317efccf'
+SOURCE_COMMIT = (ROOT / 'benchmarks/mux-revision').read_text().strip()
+SOURCE_ROOT = Path(os.environ.get('BENCH_MUX_SOURCE_DIR', ROOT)).resolve()
 ROW = re.compile(r'ROW(\d{8}) x{68}')
 
 
@@ -151,7 +152,7 @@ def trial(variant, number, output, args):
                BASH_ENV='/dev/null', ENV='/dev/null', INPUTRC='/dev/null')
     for key in ('MUX', 'MUX_PANE', 'TMUX', 'TMUX_PANE'):
         env.pop(key, None)
-    mux = str(ROOT / 'target/release/mux')
+    mux = str(SOURCE_ROOT / 'target/release/mux')
     socket = str(runtime / 'tmux.sock')
     tmux = ['tmux', '-S', socket]
     # Equal 100x40 pane content. tmux gets one extra row for continuum's
@@ -282,14 +283,17 @@ def main():
         p.error('run on Linux inside nix develop .#benchmark')
     if a.trials < 20 or a.rows > 19000 or a.rows < 100 + 40 * a.scroll_samples:
         p.error('need >=20 trials and enough equal history, <=19000 rows')
-    if command(['git', 'diff', SOURCE_COMMIT, '--', 'src', 'vendor', 'Cargo.toml', 'Cargo.lock']):
+    if command(['git', '-C', str(SOURCE_ROOT), 'rev-parse', 'HEAD']) != SOURCE_COMMIT:
+        p.error('use scripts/benchmark-nix or supply the exact pinned source checkout')
+    if command(['git', '-C', str(SOURCE_ROOT), 'diff', SOURCE_COMMIT, '--', 'src', 'vendor', 'Cargo.toml', 'Cargo.lock']):
         p.error('mux runtime differs from the benchmark source pin')
     a.output = a.output.resolve()
     a.output.mkdir(parents=True, exist_ok=False)
     environment = {'source_commit': SOURCE_COMMIT, 'harness_commit': command(['git', 'rev-parse', 'HEAD']),
                    'uname': platform.uname()._asdict(), 'versions': {}, 'args': vars(a) | {'output': str(a.output)},
                    'nixpkgs': os.environ['BENCH_NIXPKGS_REV'],
-                   'flake_lock': json.loads((ROOT / 'flake.lock').read_text()),
+                   'flake_lock': json.loads((ROOT / '.nix/flake.lock').read_text()),
+                   'execution_context': os.environ.get('BENCH_EXECUTION_CONTEXT', 'selected-cloud'),
                    'cpuinfo': Path('/proc/cpuinfo').read_text(), 'meminfo': Path('/proc/meminfo').read_text(),
                    'loadavg': Path('/proc/loadavg').read_text(),
                    'cgroup': Path('/proc/self/cgroup').read_text()}
@@ -301,7 +305,7 @@ def main():
     (a.output / 'environment.json').write_text(json.dumps(environment, indent=2))
     if not environment['versions']['rustc']['version'].startswith('rustc ' + os.environ['BENCH_RUST_VERSION']):
         p.error('Rust does not match the Nix shell pin')
-    build = subprocess.run(['cargo', 'build', '--locked', '--release'], cwd=ROOT,
+    build = subprocess.run(['cargo', 'build', '--locked', '--release'], cwd=SOURCE_ROOT,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     (a.output / 'build.log').write_text(build.stdout)
     build.check_returncode()

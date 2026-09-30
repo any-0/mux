@@ -66,11 +66,11 @@ bell animation, or expiring message is due.
 ### Benchmark status
 
 The [benchmark draft](benchmarks/README.md) defines a Nix environment from this
-repository's existing lockfile and an attached-PTY comparison of mux, tmux,
+repository's `.nix` development lockfile and an attached-PTY comparison of mux, tmux,
 and tmux with resurrect + continuum. Run it with:
 
 ```sh
-nix develop .#benchmark --command python3 benchmarks/run.py \
+./scripts/benchmark-nix python3 benchmarks/run.py \
   --output /tmp/mux-benchmark-run-1 --trials 30
 ```
 

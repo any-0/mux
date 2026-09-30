@@ -7,17 +7,18 @@ the pinned Nix environment.
 
 ## Reproducible environment
 
-The benchmark devShell uses the existing `flake.lock` nixpkgs revision
-`b7c2ada94fe99c15b0dbcf4d11fd7850b957a436`. It shares `packages.mux`'s
-`pkgs.rustPlatform` toolchain; there is no rust-overlay or host Rust fallback.
+The benchmark devShell uses the existing `.nix/flake.lock` nixpkgs revision
+`2fc6539b481e1d2569f25f8799236694180c0993`. It extends the `.nix` development flake selected by `.envrc` and PR #2's
+successful Nix CI. The separate root packaging flake has a different pin and
+is not the benchmark toolchain. No rust-overlay or host Rust fallback is used.
 Evaluation of that revision on x86_64-linux produced:
 
 | Dependency | Nix-selected version / source revision |
 | --- | --- |
-| Rust / Cargo | 1.97.1 / 1.97.1 |
-| tmux | 3.7b |
-| Bash | 5.3p15 |
-| Python | 3.14.6 |
+| Rust / Cargo | 1.93.0 / 1.93.0 |
+| tmux | 3.6a |
+| Bash | 5.3p9 |
+| Python | 3.13.12 |
 | tmux-resurrect | unstable-2022-05-01, `ca6468e2deef11efadfe3a62832ae67742505432` |
 | tmux-continuum | unstable-2022-01-25, `fc2f31d79537a5b349f55b74c8ca69abaac1ddbb` |
 
@@ -29,16 +30,18 @@ also provided by that revision.
 Run directly on a quiet Linux machine with working Nix:
 
 ```sh
-nix develop .#benchmark --command python3 benchmarks/run.py \
+./scripts/benchmark-nix python3 benchmarks/run.py \
   --output /tmp/mux-benchmark-run-1 --trials 30
 ```
 
-Output must be a new directory. Do not run tests/builds concurrently. The runner
-builds mux once with `cargo build --locked --release` inside the Nix shell and
+Output must be a new directory. Do not run tests/builds concurrently. The wrapper creates a detached temporary checkout of the exact runtime pin
+without changing either PR branch; CI supplies its own separate pinned checkout.
+The runner builds mux once with `cargo build --locked --release` inside the Nix shell and
 then runs each variant sequentially. It rejects changes to runtime sources or
 Cargo inputs relative to mux commit
-`9c74b7029e6112175d0914c0efc12d87317efccf`. Benchmark documentation and harness
-changes do not change that runtime pin. If the test/fix task produces a new
+`d328bd3cf503e22855818a20353964c4879bc67b`. The source pin is tracked in `benchmarks/mux-revision`, currently PR #2
+revision `d328bd3cf503e22855818a20353964c4879bc67b`. Benchmark documentation
+and harness changes do not change that runtime pin. If the test/fix task produces a new
 runtime commit, explicitly update the pin and rerun all three variants.
 
 ## Implemented measurement path (not yet validated)
@@ -93,11 +96,11 @@ silently accepted into documentation.
 
 ```sh
 # Fastest integration check of the recovery pipeline, still with >=20 trials:
-nix develop .#benchmark --command python3 benchmarks/recovery.py \
+./scripts/benchmark-nix python3 benchmarks/recovery.py \
   --output /tmp/mux-recovery-clean-1 --mode clean --trials 30
 
 # Real default-period process-crash tests. Plan several days of exclusive compute.
-nix develop .#benchmark --command python3 benchmarks/recovery.py \
+./scripts/benchmark-nix python3 benchmarks/recovery.py \
   --output /tmp/mux-recovery-crash-1 --mode crash --trials 30
 ```
 
@@ -194,7 +197,7 @@ report a surviving subset as a passing comparison.
 Run the reproducible validation suite when Nix is available:
 
 ```sh
-nix develop .#benchmark --command python3 -m unittest discover \
+./scripts/benchmark-nix python3 -m unittest discover \
   -s benchmarks -p test_benchmarks.py -v
 ```
 
@@ -224,7 +227,11 @@ upper bound on mux's sync-window loss.
 
 ## Exact Nix setup diagnosis on the selected cloud machine
 
-All attempts used this same cloud machine. No alternate machine, proxy, mirror,
+Historical bootstrap attempts used this same cloud machine. The earlier logs
+evaluated the root packaging flake (Rust 1.97.1), which was an incorrect choice
+for the requested benchmark toolchain. They are preserved as historical setup
+evidence, not execution evidence for the corrected `.nix` development pin.
+`development-pin-evaluation.json` records the corrected local evaluation. No alternate machine, proxy, mirror,
 Docker benchmark, or substitute host toolchain was used. Raw commands and
 outputs are under `results/bootstrap/`.
 
@@ -288,3 +295,41 @@ there is no authorization to bypass the proxy denial. No move to Neo was made.
 
 **Performance samples remain 0.** No benchmark median/p95 or advantage has been
 measured, and the actual-results README requirement remains open.
+
+## Hosted CI feasibility assessment (separate context)
+
+PR #2's [successful Nix CI run](https://github.com/any-0/mux/actions/runs/36733766947)
+validated runtime `d328bd3cf503e22855818a20353964c4879bc67b` with the actual
+`.nix` Rust/Cargo 1.93.0 development pin. PR #1's `Benchmark harness validation`
+workflow follows that supported installer route, checks out exactly that runtime
+into a separate directory, and runs the Nix unit/PTY suite and serial real
+micro/clean-recovery smoke gates. It uploads raw diagnostics even on failure.
+Smoke trial zero and diagnostic timings are **not a performance comparison**;
+no median/p95 is generated. Their context is explicitly
+`hosted-ci-correctness-validation`, never selected-cloud or Julian's hardware.
+
+A controlled **hosted-CI pilot** of 30 microbenchmark/clean trials per variant
+is feasible in one dedicated job after compilation finishes, with no parallel
+matrix/services/builds on that runner. Use the same job for all variants, retain
+CPU/model, image version, kernel, filesystem, cgroup, runner/run identity and
+background-load evidence, randomize variant order and preserve paired raw
+samples. Gate all results on correctness. Running variants in separate jobs
+would confound variant and runner and does not satisfy same-runner pairing.
+
+A hosted VM does not establish stable hardware, exclusive physical compute,
+local disk durability, physical terminal latency or reproducibility on Julian's
+machine. Runner image labels and physical hosts can vary; pin software with
+Nix and record the actual image/hardware rather than implying the runner label
+pins hardware. Hosted-CI pilot data, if later requested/run, belongs in a separate
+README table and artifact directory and cannot fulfill the selected-cloud or
+user-hardware measurements by relabeling it.
+
+The full default crash suite is not feasible as one hosted runner job:
+[GitHub limits hosted jobs to six hours](https://docs.github.com/en/actions/reference/limits).
+Its approximately seven-day timer budget exceeds that limit. A single triplet
+at one age fits, but accumulating 30 trials by distributing across jobs changes
+runners; analyze per-runner triplets and runner variation rather than pooling
+those samples as one identical-machine experiment. No shortened continuum
+period, synthetic save timestamp or checkpoint handoff makes it equivalent to
+the specified real default-period crash suite. The dedicated cloud/local-machine
+run remains pending. No hosted-CI performance numbers have been accepted.
