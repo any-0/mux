@@ -44,7 +44,7 @@ def diagnose(inode):
         if attribute == 2:
             result['peer'], = struct.unpack('=I', value)
         elif attribute == 4:
-            result['receive_bytes'], result['send_bytes'] = struct.unpack('=II', value)
+            result['receive_bytes'], result['send_queue_memory'] = struct.unpack('=II', value)
         elif attribute == 5:
             mem = struct.unpack('='+('I'*(len(value)//4)), value)
             result.update(receive_memory=mem[0], receive_buffer=mem[1],
