@@ -1,0 +1,37 @@
+# Workspace /workspace/mux, 2026-09-30; sequential environment attempts.
+command -v cargo rustc tmux nix docker gh python3
+curl -I -L https://releases.nixos.org/nix/nix-2.31.2/nix-2.31.2-x86_64-linux.tar.xz
+curl -I https://cache.nixos.org/nix-cache-info
+curl -L --fail -o /tmp/nix-portable https://github.com/DavHau/nix-portable/releases/download/v012/nix-portable-x86_64
+chmod +x /tmp/nix-portable
+NP_LOCATION=/tmp/mux-nix-portable NP_RUNTIME=proot NP_GIT=/usr/local/bin/git NP_DEBUG=1 /tmp/nix-portable nix --version
+NP_LOCATION=/tmp/mux-nix-portable NP_RUNTIME=bwrap NP_DEBUG=1 /tmp/nix-portable nix --version
+# Inspect the exact existing nixpkgs pin via GitHub Git transport:
+git clone --depth 1 --branch nixos-unstable https://github.com/NixOS/nixpkgs.git /tmp/mux-nixpkgs
+git -C /tmp/mux-nixpkgs fetch --depth 1 origin b7c2ada94fe99c15b0dbcf4d11fd7850b957a436
+git -C /tmp/mux-nixpkgs checkout --detach FETCH_HEAD
+/tmp/mux-nix-portable/.nix-portable/bin/nix --extra-experimental-features 'nix-command flakes' --store /tmp/mux-nix-store eval --impure --json --expr 'let p = import /tmp/mux-nixpkgs { system = "x86_64-linux"; }; in { rust = p.rustc.version; cargo = p.cargo.version; python = p.python3.version; tmux = p.tmux.version; bash = p.bash.version; resurrect = p.tmuxPlugins.resurrect.version; continuum = p.tmuxPlugins.continuum.version; }'
+/tmp/mux-nix-portable/.nix-portable/bin/nix --extra-experimental-features 'nix-command flakes' --store /tmp/mux-nix-store build --impure --no-link --expr '(import /tmp/mux-nixpkgs { system = "x86_64-linux"; }).tmux'
+# Validate the new devShell expression against the same local Nix checkout:
+/tmp/mux-nix-portable/.nix-portable/bin/nix --extra-experimental-features 'nix-command flakes' --store /tmp/mux-nix-store eval --impure --raw --expr 'let p = /tmp/mux-nixpkgs; n = { outPath = p; lib = (import p {}).lib; rev = "b7c2ada94fe99c15b0dbcf4d11fd7850b957a436"; }; f = (import /workspace/mux/flake.nix).outputs { self = /workspace/mux; nixpkgs = n; }; in f.devShells.x86_64-linux.benchmark.drvPath'
+python3 -m py_compile benchmarks/run.py benchmarks/workload.py
+# Follow-up diagnostic commands (same selected machine; no alternative proxy/mirror).
+unshare -Ur true
+/tmp/mux-nix-portable/.nix-portable/bin/nix --extra-experimental-features 'nix-command flakes' --store /tmp/mux-nix-store show-config
+# The initial remote-store request lacked a writable XDG cache; retry with a
+# permitted cache directory resolves that local configuration problem:
+XDG_CACHE_HOME=/tmp/mux-nix-cache /tmp/mux-nix-portable/.nix-portable/bin/nix --extra-experimental-features 'nix-command flakes' --option connect-timeout 3 --option download-attempts 1 path-info --store https://cache.nixos.org /nix/store/b7jw58c7nc8ibngrvf0wn0rwsjf5ah15-tmux-3.7b.drv
+# This supported native local store avoids both namespace and ptrace requirements:
+/tmp/mux-nix-portable/.nix-portable/bin/nix --extra-experimental-features 'nix-command flakes' --option sandbox false --option build-users-group '' --store 'local?store=/tmp/mux-native-nix/store&state=/tmp/mux-native-nix/state&log=/tmp/mux-native-nix/log' build --impure --no-link --expr 'builtins.derivation { name="mux-bootstrap-probe"; builder="/bin/sh"; args=["-c" "echo supported > $out"]; system=builtins.currentSystem; }'
+# Actual required devShell realization command; fails downloading GNU Bash,
+# after the standard Nix binary-cache probe is denied by the proxy:
+XDG_CACHE_HOME=/tmp/mux-nix-cache /tmp/mux-nix-portable/.nix-portable/bin/nix --extra-experimental-features 'nix-command flakes' --option sandbox false --option build-users-group '' --option connect-timeout 3 --option download-attempts 1 --store 'local?store=/tmp/mux-native-nix/store&state=/tmp/mux-native-nix/state&log=/tmp/mux-native-nix/log' develop .#benchmark --no-write-lock-file --command true
+curl --max-time 10 -I https://ftpmirror.gnu.org/bash/bash-5.3.tar.gz
+# Corrected project development flake (2026-09-30), exit 1; output:
+# development-nix-develop.log. Native store configuration reached downloads.
+XDG_CACHE_HOME=/tmp/mux-nix-cache /tmp/mux-nix-portable/.nix-portable/bin/nix --extra-experimental-features 'nix-command flakes' --option sandbox false --option build-users-group '' --option connect-timeout 3 --option download-attempts 1 --store 'local?store=/tmp/mux-native-nix/store&state=/tmp/mux-native-nix/state&log=/tmp/mux-native-nix/log' develop ./.nix#benchmark --no-write-lock-file --command true
+# 2026-09-30 15:55 UTC access recheck (both curl commands exit 56, CONNECT 403):
+curl -I --max-time 10 https://cache.nixos.org/nix-cache-info
+curl -I --max-time 10 https://ftpmirror.gnu.org/bash/bash-5.3.tar.gz
+# Repeated corrected native develop command above: exit 1; output saved to
+# development-nix-develop-recheck.log.

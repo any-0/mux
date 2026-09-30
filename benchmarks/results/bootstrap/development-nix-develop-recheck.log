@@ -1,0 +1,17 @@
+warning: Git tree '/workspace/mux' is dirty
+warning: unable to download 'https://cache.nixos.org/nix-cache-info': Failure when receiving data from the peer (56)
+building '/tmp/mux-native-nix/store/jbxycr548kf5v29f5li1f9sf4mqxdp8s-bash-5.3.tar.gz.drv'...
+error: builder for '/tmp/mux-native-nix/store/jbxycr548kf5v29f5li1f9sf4mqxdp8s-bash-5.3.tar.gz.drv' failed with exit code 1;
+       last 4 log lines:
+       > error:
+       >        … writing file '/tmp/mux-native-nix/store/2mar7dk7p7l3a7r766v4p9x3609h7dsw-bash-5.3.tar.gz'
+       >
+       >        error: unable to download 'https://ftpmirror.gnu.org/bash/bash-5.3.tar.gz': Failure when receiving data from the peer (56)
+       For full logs, run 'nix log /tmp/mux-native-nix/store/jbxycr548kf5v29f5li1f9sf4mqxdp8s-bash-5.3.tar.gz.drv'.
+error: 1 dependencies of derivation '/tmp/mux-native-nix/store/wnxwv5cxl9jzflxrsbwxb2wypcg3r7sk-bash-5.3.drv' failed to build
+error: 1 dependencies of derivation '/tmp/mux-native-nix/store/1s8ny57bj65v1rfv4p971c9097z3dh35-bash-5.3p9.drv' failed to build
+error: 1 dependencies of derivation '/tmp/mux-native-nix/store/5plkg88bc9qbc7sl24482l1av21m2ssa-bash-5.3p9.drv' failed to build
+error: 1 dependencies of derivation '/tmp/mux-native-nix/store/f9nd6l750fg6g146gbhbg8rnx0m2w3cc-bash-5.3p9.drv' failed to build
+error: 1 dependencies of derivation '/tmp/mux-native-nix/store/jv8m20v3gijnwmbr7kc8cnwx4gz70x4m-bash-5.3p9.drv' failed to build
+error: 1 dependencies of derivation '/tmp/mux-native-nix/store/x98697cy0j6c9xpkim83bxxj81f6vxr0-bash-5.3p9.drv' failed to build
+error: 1 dependencies of derivation '/tmp/mux-native-nix/store/pf7k5zfmx90i4wpvm0l0wnr04ia2d5rf-nix-shell-env.drv' failed to build
