@@ -33,8 +33,8 @@ a separate performance metric.
 | Outer terminal resize | Interactive suite | Resize plus real shell `stty size` probe; endpoint explicitly includes probe overhead |
 | History scroll | Accepted prior 30 trials / 600 events | Exact contiguous numbered viewport transition |
 | History search/top/bottom | Interactive suite | Off-screen matched record becomes visible, then first/last retained records |
-| Copy/yank and selection | Untimed full-history seed gate currently | Exact captured text; clipboard receipt is a different endpoint from display; timed coverage pending |
-| Character/word/line/find motions, visual/block selection | Shared copy-mode families, pending timed coverage | Cursor/selection-cell gates needed; distinct motion semantics must be disclosed |
+| Copy/yank and selection | Full-history seed gate plus timed line-yank receipt | Exact captured text; clipboard receipt is a different endpoint from display; Clipboard receipt explicitly labeled separately from render latency |
+| Character/word/line/find motions, visual/block selection | Cursor-left/right and word-forward implemented; other motions pending | Cursor/selection-cell gates needed; distinct motion semantics must be disclosed |
 | Search repeat, pane-local jump list, character hints | Pending / partly mux-specific | tmux has search repeat, no identical mux jump-list/hint UI |
 | Sustained/background output | Interactive idle/busy profiles + accepted finite throughput | Equal 50 Hz in-place ANSI producer in isolated background window; finite active-pane output already measured |
 | Working directory/session root, rename | Seeded cwd / existing clean fidelity; rename UI timing pending | Session-root policy is mux-specific; don't equate arbitrary tmux working directories |
@@ -56,8 +56,8 @@ Twenty fresh isolated launches per variant/profile/scale plus one excluded warm-
 are randomized within each block on one runner. Timed operations use real keys
 written to attached PTYs; no CLI acknowledgement can terminate their latency.
 Raw frames, input timestamps, commands, process-tree resource evidence and failures
-are retained. CPU ticks miss exited helpers and are a lower bound. A failed trial
-blocks that entire variant/profile/scale aggregate; no surviving subset is reported.
+are retained. CPU ticks miss exited helpers and are a lower bound. Any unequal paired fixture or failed trial
+blocks the complete profile/scale comparison; no surviving subset is reported.
 
 Status: broad harness implemented and entering real pinned-Nix correctness CI;
 these new actions have no accepted performance values until all gates and an
