@@ -50,8 +50,13 @@ def run(binary, directory, shell):
         icon(session, VIM_ICON)
         session.input(b'\x1b:q!\r')
         icon(session, SHELL_ICONS[shell])
-        session.input(b'cat\r')
+        session.input(b'cat -vT\r')
         icon(session, '·')
+        # Fish and cat share the same icon. Require output only cat -T can
+        # produce before EOF, otherwise a stale fish icon permits EOF to
+        # overtake process startup and leaves the following Vim command in cat.
+        session.input(b'\t\r')
+        session.wait_text('^I')
         session.input(b'\x04')
         icon(session, SHELL_ICONS[shell])
         session.input(b'vim -Nu NONE -n sample.txt\r')
