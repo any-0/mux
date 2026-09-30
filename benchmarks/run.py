@@ -41,6 +41,8 @@ class Terminal:
         import pyte
 
         self.master, slave = pty.openpty()
+        self.directory = directory
+        self.input_events = []
         self.size(rows, columns)
         master = self.master
 
@@ -108,8 +110,12 @@ class Terminal:
         self.stream = AttachedStream(self.screen)
         self.decoder = codecs.getincrementaldecoder('utf-8')('replace')
         self.raw = (directory / 'client.ansi').open('wb')
+        # A real controlling terminal makes TIOCSWINSZ deliver SIGWINCH to the
+        # foreground client, as a terminal emulator does. The controller is
+        # single-threaded; preexec runs after setsid and stdio redirection.
         self.process = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave,
-                                        env=env, cwd=directory, start_new_session=True)
+                                        env=env, cwd=directory, start_new_session=True,
+                                        preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
         os.close(slave)
 
     def size(self, rows, columns):
@@ -140,6 +146,7 @@ class Terminal:
         # Timestamp immediately before writing the actual attached client input.
         start = time.perf_counter_ns()
         os.write(self.master, data)
+        self.input_events.append({'input_ns': start, 'hex': data.hex()})
         return start
 
     def rows(self):
@@ -148,8 +155,8 @@ class Terminal:
     def contains(self, text):
         return any(text in line for line in self.screen.display)
 
-    def drain(self):
-        deadline = time.monotonic() + 0.2
+    def drain(self, seconds=0.2):
+        deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             self.pump(0.01)
 
@@ -162,6 +169,7 @@ class Terminal:
             self.process.wait()
         os.close(self.master)
         self.raw.close()
+        (self.directory / 'input.json').write_text(json.dumps(self.input_events, indent=2))
 
 
 def resource_sample(roots):
@@ -185,7 +193,13 @@ def resource_sample(roots):
         if pid not in processes:
             continue
         values = {}
-        for line in Path(f'/proc/{pid}/smaps_rollup').read_text().splitlines():
+        try:
+            memory_lines = Path(f'/proc/{pid}/smaps_rollup').read_text().splitlines()
+        except (FileNotFoundError, ProcessLookupError):
+            # Short-lived plugin/workload helpers may exit between /proc reads.
+            # They are absent from this resident-memory snapshot and CPU lower bound.
+            continue
+        for line in memory_lines:
             key, _, value = line.partition(':')
             if key in ('Pss', 'Rss'):
                 values[key] = int(value.split()[0])
@@ -222,7 +236,12 @@ def trial(variant, number, output, args):
     # status-driven scheduler; mux's four-column strip gets extra width.
     if variant == 'mux':
         config = directory / 'mux.toml'
-        config.write_text('[vim]\n"PageUp" = "half-page-up"\n')
+        capture = directory / 'history.txt'
+        writer = directory / 'clipboard'
+        writer.write_text('#!' + shutil.which('bash') + '\nset -eu\ncat > ' + shlex.quote(str(capture) + '.tmp') +
+                          '\nmv ' + shlex.quote(str(capture) + '.tmp') + ' ' + shlex.quote(str(capture)) + '\n')
+        writer.chmod(0o700)
+        config.write_text('clipboard_command = ' + json.dumps([str(writer)]) + '\n[vim]\n"PageUp" = "half-page-up"\n')
         argv, rows, cols = [mux, '--config', str(config), '--session', 'bench'], 40, 105
     else:
         config = directory / 'tmux.conf'
@@ -238,7 +257,10 @@ def trial(variant, number, output, args):
                       "run-shell " + shlex.quote(os.environ['BENCH_CONTINUUM'])]
         config.write_text('\n'.join(lines) + '\n')
         argv, rows, cols = tmux + ['-f', str(config), 'new-session', '-s', 'bench'], 41, 100
-    result = {'variant': variant, 'trial': number, 'commands': [argv], 'correct': False}
+    result = {'variant': variant, 'trial': number, 'commands': [argv], 'correct': False,
+              'started_monotonic_ns': time.perf_counter_ns(),
+              'load_before': Path('/proc/loadavg').read_text(),
+              'cpu_pressure_before': Path('/proc/pressure/cpu').read_text()}
     (directory / 'commands.json').write_text(json.dumps(result['commands'], indent=2))
     start = time.perf_counter_ns()
     terminal = Terminal(argv, env, directory, rows, cols)
@@ -326,10 +348,30 @@ def trial(variant, number, output, args):
             terminal.drain()
         result['scroll_ms'] = scroll
         result['viewport_sha256'] = hashlib.sha256('\n'.join(terminal.screen.display).encode()).hexdigest()
+        # Verify all generated history after measurements, so correctness
+        # capture cannot change the measured resident-memory/scroll state.
+        if variant == 'mux':
+            terminal.input(b'\x1b')
+            terminal.drain()
+            terminal.input(b'\x1bwggVGy')
+            terminal.until(lambda: capture.exists())
+            history = capture.read_text()
+        else:
+            history = command(tmux + ['capture-pane', '-p', '-J', '-S', '-'], env)
+            (directory / 'history.txt').write_text(history)
+        found = list(ROW.finditer(history))
+        if [int(m.group(1)) for m in found] != list(range(args.rows)) or history.count('ROW') != args.rows:
+            raise RuntimeError('full history does not match the equal numbered workload')
+        expected = '\n'.join(f'ROW{i:08d} ' + 'x' * 68 for i in range(args.rows))
+        result['history_gate'] = {'rows': len(found), 'columns': 100, 'pane_rows': 40,
+                                  'sha256': hashlib.sha256('\n'.join(m.group(0) for m in found).encode()).hexdigest(),
+                                  'expected_sha256': hashlib.sha256(expected.encode()).hexdigest()}
         result['correct'] = True
     except Exception as error:
         result['error'] = str(error)
     finally:
+        result['ended_monotonic_ns'] = time.perf_counter_ns()
+        result['load_after'] = Path('/proc/loadavg').read_text()
         terminal.close()
         subprocess.run([mux, 'kill-server'] if variant == 'mux' else tmux + ['kill-server'],
                        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -364,6 +406,10 @@ def main():
                    'cpuinfo': Path('/proc/cpuinfo').read_text(), 'meminfo': Path('/proc/meminfo').read_text(),
                    'loadavg': Path('/proc/loadavg').read_text(),
                    'cgroup': Path('/proc/self/cgroup').read_text()}
+    environment['runner'] = {key: os.environ.get(key) for key in
+                             ('RUNNER_NAME', 'RUNNER_OS', 'RUNNER_ARCH', 'ImageOS', 'ImageVersion',
+                              'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')}
+    environment['mounts'] = Path('/proc/mounts').read_text()
     for tool in ('rustc', 'cargo', 'python3', 'tmux', 'bash'):
         environment['versions'][tool] = {'path': shutil.which(tool),
                                         'version': command([tool, '-V' if tool == 'tmux' else '--version'])}
@@ -381,6 +427,7 @@ def main():
     for number in range(a.trials + 1):
         variants = ['mux', 'tmux', 'tmux-persistence']
         rng.shuffle(variants)
+        print('paired block', number, variants, flush=True)
         for variant in variants:
             sample = trial(variant, number, a.output, a)
             samples.append(sample)
@@ -389,7 +436,7 @@ def main():
     summaries = {}
     for variant in ('mux', 'tmux', 'tmux-persistence'):
         selected = [s for s in samples if s['variant'] == variant and s['trial'] > 0]
-        if not all(s['correct'] for s in selected):
+        if not all(s['correct'] for s in samples if s['variant'] == variant):
             summaries[variant] = {'blocked': 'correctness gate failed', 'failed': sum(not s['correct'] for s in selected)}
             continue
         metrics = {}

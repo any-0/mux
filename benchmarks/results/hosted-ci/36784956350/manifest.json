@@ -1,0 +1,14 @@
+{
+  "status": "completed",
+  "run_id": 36784956350,
+  "job_id": 110124042644,
+  "artifact_id": 11131260203,
+  "artifact_sha256": "f9a927e3614a10591d201e0cb39a35eb84b07b1038a8866705324a518ef1cb0e",
+  "raw_file": "raw.zip",
+  "branch_head": "c47a5301237f496df696720f069cd216242deac1",
+  "harness_commit": "aec786740953afa50a7064793d9b9769bfb02143",
+  "runtime_commit": "d6dd228054231e77772bd17a412d8f0d07871835",
+  "nixpkgs": "2fc6539b481e1d2569f25f8799236694180c0993",
+  "accepted_trials": 180,
+  "warmups_excluded": 9
+}

@@ -63,31 +63,54 @@ bell animation, or expiring message is due.
 
 ## Build and run
 
-### Benchmark status
+### Hosted-CI benchmarks
 
-The [benchmark draft](benchmarks/README.md) defines a Nix environment from this
-repository's `.nix` development lockfile and an attached-PTY comparison of mux, tmux,
-and tmux with resurrect + continuum. Run it with:
+The table below covers the initial single-pane workload and clean recovery.
+The broader [supported-operation inventory and coverage matrix](benchmarks/COVERAGE.md)
+records 240 independently accepted core trials below. Additional cases and the
+corrected four-pane grid are undergoing validation; diagnostics are not performance results.
+
+Newer separate datasets: [360 paired interactive trials and 20 mux-only trials](#complete-expanded-interactive-sweep-hosted-ci-2026-09-30), and [180 cold restored-layout/fresh-provisioning startup trials](#cold-saved-layout-scale-startup-hosted-ci-2026-09-30). Their workloads/endpoints differ from the historical microbenchmark below; results are not pooled.
+
+[Run 36744338567](https://github.com/any-0/mux/actions/runs/36744338567)
+measured all three variants sequentially on one hosted Ubuntu VM using the
+project's pinned Nix development toolchain and mux main commit `d6dd228`.
+All 30 paired trials per variant passed correctness gates and an independent
+raw-data audit. Values below are **median / p95**.
+
+| Variant | Scroll viewport latency (ms) | PSS (MiB) | RSS (MiB) |
+| --- | ---: | ---: | ---: |
+| mux | 2.388 / 2.652 | 8.867 / 8.900 | 14.693 / 14.727 |
+| tmux | 2.300 / 2.834 | 13.235 / 13.239 | 19.617 / 19.621 |
+| tmux + resurrect + continuum | 2.433 / 3.507 | 13.259 / 13.298 | 19.641 / 19.680 |
+
+Each trial used the same Bash shell, 100×40 pane, 20,000-row history capacity
+and 10,000 numbered output rows. Scroll timings cover 600 actual attached-PTY
+PageUp events per variant, ending at the correct decoded viewport; they include
+harness scheduling/emulation, not physical display latency. RAM sums daemon,
+client and live descendants after output. One warm-up per variant is excluded.
+Hosted VM caches and shared physical compute limit generalization to other machines.
+
+Thirty clean recovery trials per variant also passed: mux and the plugin stack
+preserved all 600 tagged rows, sampled formatting, layout, cwd and selection,
+and confirmed fresh live shells. Median / p95 restart-to-live times were
+**253.843 / 258.021 ms** for mux and **826.810 / 834.535 ms** for the stack.
+Baseline tmux lost all 600 rows as expected. These are clean-save results;
+**default-period crash recovery remains unmeasured**.
+
+[Full results, Nix pins, methods and raw samples](benchmarks/README.md) include
+startup, output, CPU, storage and save timings with their limits. Reproduce with:
 
 ```sh
 ./scripts/benchmark-nix python3 benchmarks/run.py \
-  --output /tmp/mux-benchmark-run-1 --trials 30
+  --output /tmp/mux-benchmark-run-1 --trials 30 --rows 10000 \
+  --scroll-samples 20 --idle-seconds 3
+./scripts/benchmark-nix python3 benchmarks/recovery.py \
+  --output /tmp/mux-recovery-clean-1 --trials 30 --mode clean
 ```
 
-**Accepted performance results: none yet (0 benchmark trials).** On the selected
-cloud machine, Nix dependency realization was blocked by proxy and runtime
-restrictions; the devShell expression evaluated, but no variant executed.
-[Raw bootstrap evidence](benchmarks/results/bootstrap/) records the attempts.
-The microbenchmark and save/restart/restore/recovery-fidelity harnesses are
-implemented. Supported Nix CI has built the pinned backend and exposed harness
-issues in real smoke interactions. [Candidate Nix CI](https://github.com/any-0/mux/actions/runs/36740002774)
-passed 44 tests and six integration gates at the earlier PR #2 candidate
-`6da51cf`. The benchmark now pins its upstream main merge `d19f0dc`;
-validation and raw artifacts are linked
-in the benchmark draft. No
-median/p95 or performance advantage is claimed. The methodology, pinned
-versions, correctness gates and remaining
-work are documented in the benchmark draft.
+The selected cloud machine's dependency downloads remain policy-blocked;
+these results are explicitly hosted CI, not measurements of Julian's hardware.
 
 Build without installing anything:
 
@@ -163,6 +186,299 @@ install -m 755 target/release/mux ~/.local/bin/mux
 
 Apart from that explicit install step, no binaries or configuration files are
 installed; only the durable runtime state described below is written.
+
+
+<!-- interactive-followup:start -->
+### Complete expanded interactive sweep (hosted CI, 2026-09-30)
+
+[Run 36774371342](https://github.com/any-0/mux/actions/runs/36774371342): **360 accepted paired
+trials**, 20 per variant in each of six groups, **53 endpoints per trial**;
+18 warm-ups excluded. A separate **20-trial, 12-endpoint mux-only UI suite** also
+passed (one warm-up excluded). These are real attached-PTY measurements, not
+diagnostic smoke timings. All trials, including warm-ups, passed visible-result
+gates. Paired groups pass independent fixture/input/resource audits; mux-only UI
+passes complete input/timestamp/visible-transition/resource audits. The corrected logical pane
+mapping makes all four-pane content/geometry slots equal across variants.
+
+Measured mux: `d6dd228054231e77772bd17a412d8f0d07871835`. Executed harness:
+`a9134207e3c3130994dcdd919ffcaf18025a74a8` (branch candidate `406ae9a514ab7e16084f2e623324592c2f491f9a`).
+Project Nix pin `2fc6539b481e1d2569f25f8799236694180c0993`, Rust/Cargo 1.93.0, tmux 3.6a,
+Bash 5.3.9, Python 3.13.12. Resurrect/continuum pins and loaded-plugin checks are
+documented above. No PR #4 code is mixed into this runtime. All groups ran
+sequentially on the same hosted VM; variant order is shuffled within each block.
+Each declared group resets the documented shuffle seed. Exact runner hardware,
+image, commands, dependency versions and raw input/output are retained in each ZIP.
+The VM reported AMD EPYC 7763 64-Core Processor, 4 logical CPUs, 16373452 KiB RAM,
+runner image `20260920.314.1`.
+
+Seeded layouts are 1×1, 3×2 and 6×4 windows×panes, plus one equal background
+window; mutations use one scratch window and create a second session. Content
+area is 100×40 cells, 1,000 low-entropy ASCII tagged records per seeded pane, retained-history cap
+20,000. Outer PTYs are mux 105×40 and tmux 100×41 to compensate for the
+five-column sidebar versus one-row status line; this is a content-matched rather
+than equal-outer-rectangle experiment. Idle and busy fixtures match; busy adds the same 50 Hz, five-line ANSI
+producer. Native chrome/bootstrap command history differ. Memory includes the
+daemon, attached client, shells and producer, and is sampled before mutations.
+
+Every value is **median / nearest-rank p95**, 20 fresh process trials per cell.
+Build/filesystem caches are warm; 20 trials give a coarse tail estimate.
+Latency stops at decoded correct viewport/cursor/selection style, with metadata
+checked afterward. Populated startup means client attach to an existing daemon,
+not cold populated restart. Native editors/confirmations are prepared untimed;
+character selection times two selected cells, not an invisible selection start.
+Join measures CLI dispatch→viewport, detach process exit, and yank an atomic
+clipboard-file receipt with up to 50 ms polling. These endpoints are not equated
+with rendering. Zoom/sidebar geometry and native editor policies differ.
+
+CPU is a separate ≥3-second process-tree tick observation, percentage of one CPU,
+and misses exited helpers. PSS/RSS are resident snapshots, not peak usage.
+Observed state-directory storage is not equal durability: mux journals continuously;
+the stack has not reached its real 15-minute scheduled save in these short trials.
+Controller/decoder cost is included, pixels and exclusive physical hardware are
+not measured. Hosted VM data are not Julian's hardware and do not establish a
+universal ranking. Earlier accepted scroll/throughput/clean-recovery and core
+datasets below remain separate; do not pool across VMs or changed endpoints.
+These historical runs did not measure cold restored-layout scale startup; see the separate cold-startup follow-up. Default-period crash recovery remains unmeasured.
+
+#### Initial PSS (MiB)
+
+| Seeded layout / load | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| 1×1 idle | 10.138 / 10.187 | 9.643 / 9.643 | 9.654 / 9.682 |
+| 1×1 busy | 16.705 / 16.748 | 16.188 / 16.191 | 16.199 / 16.250 |
+| 3×2 idle | 16.663 / 16.698 | 15.870 / 15.878 | 15.890 / 15.929 |
+| 3×2 busy | 23.171 / 23.198 | 22.361 / 22.365 | 22.361 / 22.377 |
+| 6×4 idle | 37.638 / 37.740 | 37.401 / 37.409 | 37.415 / 37.421 |
+| 6×4 busy | 44.182 / 44.240 | 43.839 / 43.854 | 43.856 / 43.870 |
+
+#### Profile CPU (% of one CPU; lower bound)
+
+| Seeded layout / load | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| 1×1 idle | 2.315 / 2.319 | 0.000 / 0.000 | 0.331 / 0.662 |
+| 1×1 busy | 4.133 / 4.632 | 0.827 / 1.323 | 0.993 / 1.325 |
+| 3×2 idle | 7.607 / 7.928 | 0.000 / 0.000 | 0.331 / 0.662 |
+| 3×2 busy | 9.592 / 10.242 | 0.662 / 1.323 | 1.323 / 1.651 |
+| 6×4 idle | 28.532 / 30.920 | 0.000 / 0.330 | 0.330 / 0.661 |
+| 6×4 busy | 30.801 / 32.344 | 0.991 / 1.319 | 1.650 / 1.982 |
+
+<details>
+<summary>1×1 idle: all 53 endpoints</summary>
+
+| Operation (ms) | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| break pane | 6.488 / 6.772 | 5.681 / 6.043 | 5.881 / 6.642 |
+| cancel character selection | 0.742 / 0.849 | 1.057 / 1.195 | 1.066 / 1.214 |
+| commit session rename | 11.045 / 11.249 | 3.213 / 3.511 | 3.373 / 3.484 |
+| commit window rename | 10.959 / 11.167 | 3.302 / 3.561 | 3.420 / 3.766 |
+| copy big word forward | 1.318 / 1.549 | 1.142 / 1.296 | 1.132 / 1.262 |
+| copy cursor left | 0.736 / 0.841 | 1.093 / 1.193 | 1.031 / 1.215 |
+| copy cursor right | 0.727 / 0.869 | 1.060 / 1.166 | 1.069 / 1.180 |
+| copy find character commit | 0.811 / 0.837 | 3.627 / 3.775 | 3.757 / 5.321 |
+| create session | 11.795 / 12.299 | 8.596 / 9.280 | 8.749 / 9.298 |
+| create window | 11.644 / 12.055 | 8.449 / 8.934 | 7.685 / 8.410 |
+| delete pane horizontal | 58.365 / 60.841 | 4.021 / 4.341 | 4.035 / 4.974 |
+| delete pane vertical | 54.698 / 56.737 | 3.893 / 4.126 | 3.925 / 4.098 |
+| delete session | 57.856 / 59.948 | 3.162 / 3.431 | 3.183 / 4.425 |
+| delete window | 54.981 / 55.741 | 3.981 / 4.236 | 3.997 / 5.225 |
+| Detach (process exit) | 1.118 / 1.135 | 1.120 / 1.129 | 1.130 / 3.253 |
+| enter copy mode | 1.136 / 1.338 | 4.641 / 4.922 | 4.539 / 5.263 |
+| exit copy mode | 1.022 / 1.169 | 3.819 / 4.067 | 4.047 / 4.245 |
+| extend character selection | 0.753 / 0.863 | 0.324 / 0.365 | 0.321 / 0.372 |
+| focus horizontal | 0.539 / 9.668 | 1.071 / 1.183 | 1.067 / 1.130 |
+| focus horizontal back | 0.532 / 9.931 | 1.043 / 1.117 | 1.041 / 1.157 |
+| focus vertical | 0.556 / 9.744 | 0.958 / 1.080 | 0.952 / 2.087 |
+| focus vertical back | 0.567 / 9.645 | 0.935 / 1.062 | 0.938 / 1.077 |
+| history bottom | 3.457 / 3.786 | 3.600 / 4.210 | 4.062 / 4.341 |
+| history search backward commit | 15.212 / 17.235 | 11.359 / 11.717 | 11.364 / 11.850 |
+| history search forward commit | 14.823 / 16.497 | 9.951 / 10.185 | 10.043 / 10.706 |
+| history search next match | 2.455 / 2.756 | 2.327 / 2.806 | 2.495 / 2.935 |
+| history search previous match | 2.205 / 2.682 | 2.189 / 2.800 | 2.453 / 2.923 |
+| history top | 2.440 / 2.774 | 2.903 / 3.310 | 2.602 / 3.209 |
+| Join pane (CLI dispatch → viewport) | 7.224 / 7.565 | 7.656 / 8.520 | 7.842 / 8.596 |
+| navigate pending bell | 4.920 / 13.356 | 4.637 / 4.915 | 4.756 / 5.276 |
+| open session rename | 2.405 / 10.922 | 2.052 / 2.130 | 2.078 / 2.174 |
+| open window rename | 2.417 / 10.995 | 2.075 / 2.209 | 2.063 / 2.148 |
+| Populated client attach (existing daemon) | 17.936 / 25.672 | 16.492 / 21.367 | 16.878 / 21.245 |
+| reattach | 19.451 / 24.802 | 15.529 / 18.708 | 21.933 / 26.041 |
+| reorder window left | 0.827 / 10.232 | 2.533 / 2.644 | 2.607 / 2.678 |
+| reorder window right | 0.849 / 9.862 | 2.516 / 2.665 | 2.573 / 3.349 |
+| resize horizontal | 9.322 / 9.921 | 3.583 / 3.808 | 3.598 / 3.768 |
+| resize vertical | 2.010 / 9.456 | 2.391 / 2.575 | 2.398 / 2.532 |
+| second client attach | 18.837 / 23.185 | 16.306 / 17.800 | 16.636 / 19.120 |
+| select two characters | 0.761 / 0.860 | 1.243 / 1.289 | 1.178 / 1.370 |
+| split for break | 11.960 / 12.821 | 8.029 / 9.105 | 8.166 / 8.962 |
+| split horizontal | 15.599 / 15.955 | 8.574 / 9.413 | 8.661 / 9.075 |
+| split vertical | 11.900 / 12.292 | 8.189 / 9.231 | 8.189 / 9.723 |
+| switch session | 4.892 / 5.449 | 2.720 / 2.951 | 2.510 / 2.962 |
+| switch session back | 4.810 / 5.090 | 4.549 / 4.820 | 4.336 / 4.838 |
+| switch window | 3.806 / 4.000 | 4.049 / 4.233 | 4.001 / 5.062 |
+| switch window back | 3.841 / 4.148 | 4.070 / 4.399 | 4.054 / 5.174 |
+| terminal resize viewport | 8.680 / 14.396 | 4.843 / 4.999 | 4.760 / 5.415 |
+| unzoom horizontal | 11.261 / 12.619 | 5.679 / 6.117 | 5.724 / 5.942 |
+| unzoom vertical | 10.532 / 11.172 | 4.513 / 4.846 | 4.483 / 4.912 |
+| Yank line (clipboard receipt upper bound) | 9.401 / 9.591 | 54.451 / 54.680 | 54.439 / 54.762 |
+| zoom horizontal | 9.664 / 10.144 | 4.985 / 5.342 | 5.024 / 5.780 |
+| zoom vertical | 8.879 / 9.323 | 4.878 / 5.058 | 4.992 / 5.829 |
+
+</details>
+
+<details>
+<summary>RSS and observed state storage</summary>
+
+#### Initial RSS (MiB)
+
+| Seeded layout / load | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| 1×1 idle | 19.779 / 19.828 | 19.777 / 19.777 | 19.789 / 19.816 |
+| 1×1 busy | 31.039 / 31.082 | 31.078 / 31.082 | 31.090 / 31.141 |
+| 3×2 idle | 45.666 / 45.711 | 45.367 / 45.375 | 45.387 / 45.426 |
+| 3×2 busy | 56.930 / 56.957 | 56.668 / 56.672 | 56.668 / 56.684 |
+| 6×4 idle | 137.037 / 137.145 | 137.273 / 137.281 | 137.285 / 137.293 |
+| 6×4 busy | 148.340 / 148.398 | 148.555 / 148.570 | 148.572 / 148.586 |
+
+#### Observed state logical bytes (different durability)
+
+| Seeded layout / load | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| 1×1 idle | 62359.000 / 62684.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 1×1 busy | 120509.000 / 120992.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 3×2 idle | 205817.500 / 206415.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 3×2 busy | 264231.000 / 264640.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 6×4 idle | 722297.500 / 724339.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 6×4 busy | 781002.500 / 782644.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+
+#### Observed state allocated bytes (different durability)
+
+| Seeded layout / load | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| 1×1 idle | 77824.000 / 81920.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 1×1 busy | 135168.000 / 139264.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 3×2 idle | 227328.000 / 237568.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 3×2 busy | 286720.000 / 290816.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 6×4 idle | 763904.000 / 782336.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| 6×4 busy | 823296.000 / 835584.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+
+</details>
+
+[All six groups, 53 endpoints, RSS/storage and mux-only UI tables](benchmarks/README.md#complete-expanded-interactive-sweep-hosted-ci-2026-09-30), [raw manifest](benchmarks/results/hosted-ci/36774371342/manifest.json), and [coverage inventory](benchmarks/COVERAGE.md).
+<!-- interactive-followup:end -->
+
+<!-- interactive-results:start -->
+### Expanded interactive measurements (hosted CI, 2026-09-30)
+
+[Run 36762906986](https://github.com/any-0/mux/actions/runs/36762906986)
+completed the 360-trial sweep. Independent paired fixture/input/resource audits
+accept **240 trials**: 20 per variant in each of four groups (1×1 and 3×2,
+idle/busy), plus excluded warm-ups. Each trial covers 45 endpoints across roughly
+20 operation families. The two 6×4 groups are **rejected** because native pane
+numbering put tagged content in different grid slots; their raw samples and audit
+failures are retained. The corrected follow-up sweep above accepts all six groups.
+
+Runtime: `d6dd228054231e77772bd17a412d8f0d07871835`. Actual executed harness:
+`efc5c1551adf0fc24f55e9c15bd444658442efde` (PR merge of branch `ee916e0`).
+Project Nix pin `2fc6539b481e1d2569f25f8799236694180c0993`, Rust 1.93.0,
+tmux 3.6a and the same pinned Bash/Python/plugins documented below. The single
+hosted VM reported AMD EPYC 9V74, four logical CPUs, 16,373,444 KiB RAM, image
+`20260920.314.1`. This is a different runner from the earlier scroll/clean run;
+do not interpret differences between those datasets as workload-only effects.
+
+Variants ran sequentially in shuffled paired blocks. The layout notation counts
+seeded windows × panes per window; each has an additional identical background
+window, and mutations use a temporary scratch window. Content area is 100×40,
+retained tagged history is 1,000 records per seeded pane, cap 20,000. Native chrome
+and bootstrap command history differ. Busy adds the same 50 Hz, five-line in-place
+ANSI producer. Full tagged histories and pane dimensions are independently checked.
+The two accepted historical scales use full-width panes. Corrected wider-grid
+results are in the separate follow-up above; these original large groups remain rejected.
+
+All table entries are **median / nearest-rank p95**, 20 independent process trials
+per cell. Interaction latency stops at the decoded correct viewport/cursor/style,
+with metadata checked afterward. `populated attach` launches a client against an
+existing populated daemon; it is not cold daemon startup or restoration. Native
+rename/search editors and deletion confirmations are prepared before timing their
+commit. Join-pane is CLI dispatch→visible viewport; yank is atomic clipboard-file
+receipt; detach is process exit. These distinct endpoints are labeled separately.
+Clipboard receipt uses up to 50 ms controller polling in this dataset; it is an
+observed upper bound, not a precise clipboard-completion or rendered-copy latency.
+Zoom geometry differs because mux hides its sidebar while tmux retains its status
+line. The PTY decoder/harness is part of measured latency; no physical pixels,
+exclusive hardware, maximum throughput or universal ranking is claimed.
+
+Initial resident memory includes daemon, attached client, all shells and busy
+producer when present; it is not peak memory. RSS and every operation result are
+in the complete tables and audits below.
+
+| Seeded layout / load | mux PSS (MiB) | tmux PSS (MiB) | stack PSS (MiB) |
+| --- | ---: | ---: | ---: |
+| 1×1-idle | 10.127 / 10.194 | 9.643 / 9.643 | 9.654 / 9.662 |
+| 1×1-busy | 16.691 / 16.740 | 16.188 / 16.191 | 16.199 / 16.203 |
+| 3×2-idle | 16.669 / 16.694 | 15.874 / 15.882 | 15.888 / 15.898 |
+| 3×2-busy | 23.167 / 23.210 | 22.361 / 22.365 | 22.373 / 22.373 |
+
+New three-second profile CPU/storage fields, bell navigation, additional search/selection,
+and mux-only tree/theme/root UI cases are implemented but **not measured in these
+accepted groups**. Existing finite-output throughput/CPU/storage and clean recovery
+results above remain separate. Those groups did not measure cold restored-layout scale
+startup; see the separate follow-up below. Real default-period crash recovery remains unmeasured.
+
+<details>
+<summary>All 45 core endpoints: 1×1 idle</summary>
+
+| Operation (ms) | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| Populated attach (existing daemon) | 16.975 / 23.032 | 15.387 / 16.305 | 14.224 / 17.216 |
+| create window | 11.715 / 11.961 | 8.659 / 8.953 | 7.920 / 8.022 |
+| switch window | 3.556 / 3.675 | 3.778 / 4.031 | 3.913 / 4.764 |
+| switch window back | 3.536 / 3.695 | 3.837 / 4.147 | 3.975 / 4.176 |
+| Split top/bottom | 11.825 / 18.061 | 8.444 / 9.323 | 8.511 / 9.635 |
+| focus vertical | 9.376 / 9.423 | 0.931 / 0.976 | 0.947 / 1.064 |
+| focus vertical back | 9.366 / 9.425 | 0.877 / 0.918 | 0.867 / 0.922 |
+| resize vertical | 9.319 / 9.425 | 2.280 / 2.324 | 2.265 / 2.345 |
+| zoom vertical | 8.493 / 8.820 | 4.729 / 4.878 | 4.735 / 5.003 |
+| unzoom vertical | 10.995 / 11.337 | 4.356 / 4.543 | 4.351 / 4.616 |
+| delete pane vertical | 54.132 / 55.349 | 3.774 / 3.945 | 3.769 / 4.745 |
+| Split left/right | 15.483 / 18.121 | 8.981 / 9.191 | 8.987 / 9.268 |
+| focus horizontal | 4.970 / 9.562 | 1.033 / 1.071 | 1.044 / 1.069 |
+| focus horizontal back | 4.964 / 9.496 | 0.949 / 0.997 | 0.941 / 1.007 |
+| resize horizontal | 9.037 / 11.217 | 3.365 / 3.449 | 3.384 / 4.379 |
+| zoom horizontal | 9.134 / 9.416 | 4.763 / 4.833 | 4.763 / 5.066 |
+| unzoom horizontal | 10.803 / 11.097 | 5.370 / 5.464 | 5.318 / 5.658 |
+| delete pane horizontal | 57.910 / 59.233 | 3.809 / 3.932 | 3.832 / 3.987 |
+| split for break | 11.818 / 18.072 | 8.863 / 9.011 | 8.334 / 8.985 |
+| break pane | 6.180 / 13.439 | 5.573 / 6.603 | 5.585 / 5.962 |
+| Join pane (CLI→viewport) | 6.603 / 7.110 | 7.481 / 7.610 | 7.480 / 8.452 |
+| delete window | 54.461 / 54.672 | 3.796 / 3.988 | 3.802 / 3.995 |
+| reorder window left | 9.522 / 9.924 | 2.391 / 2.431 | 2.311 / 3.170 |
+| reorder window right | 5.395 / 9.593 | 2.370 / 2.398 | 2.368 / 2.911 |
+| open window rename | 10.527 / 10.797 | 1.958 / 2.042 | 1.966 / 2.111 |
+| commit window rename | 10.680 / 10.817 | 3.193 / 3.299 | 3.200 / 4.089 |
+| open session rename | 6.437 / 10.997 | 1.956 / 2.009 | 1.942 / 2.089 |
+| commit session rename | 10.648 / 10.958 | 3.134 / 3.213 | 3.144 / 4.273 |
+| create session | 11.600 / 11.683 | 8.668 / 9.327 | 8.782 / 9.311 |
+| switch session | 15.109 / 15.862 | 2.294 / 2.712 | 2.563 / 3.748 |
+| switch session back | 17.073 / 17.727 | 4.151 / 4.694 | 4.448 / 4.628 |
+| delete session | 59.085 / 65.047 | 2.989 / 3.140 | 3.054 / 3.159 |
+| terminal resize viewport | 7.852 / 36.010 | 4.466 / 4.663 | 4.469 / 4.795 |
+| enter copy mode | 1.052 / 1.095 | 4.312 / 4.531 | 4.152 / 5.571 |
+| history search backward commit | 14.814 / 16.943 | 10.850 / 11.145 | 10.658 / 11.193 |
+| history top | 6.296 / 10.246 | 2.625 / 2.991 | 2.537 / 3.004 |
+| copy cursor right | 0.684 / 0.719 | 0.972 / 1.044 | 0.941 / 1.062 |
+| copy cursor left | 0.694 / 0.741 | 0.941 / 1.022 | 0.934 / 1.084 |
+| copy big word forward | 1.276 / 1.309 | 1.020 / 1.075 | 0.992 / 1.109 |
+| Yank line (clipboard receipt upper bound) | 9.612 / 9.901 | 54.402 / 54.793 | 54.420 / 54.573 |
+| history bottom | 3.223 / 3.436 | 4.542 / 4.706 | 4.261 / 4.616 |
+| exit copy mode | 0.668 / 0.714 | 3.886 / 4.011 | 3.699 / 3.985 |
+| second client attach | 17.516 / 22.625 | 16.179 / 20.321 | 15.913 / 21.675 |
+| Detach (process exit) | 1.106 / 1.120 | 1.107 / 1.126 | 1.115 / 1.349 |
+| reattach | 18.382 / 22.484 | 15.301 / 22.282 | 19.403 / 21.944 |
+| Initial PSS (MiB) | 10.127 / 10.194 | 9.643 / 9.643 | 9.654 / 9.662 |
+| Initial RSS (MiB) | 19.770 / 19.836 | 19.777 / 19.777 | 19.789 / 19.797 |
+
+</details>
+
+[Manifest](benchmarks/results/hosted-ci/36762906986/manifest.json), [complete tables](benchmarks/README.md#expanded-interactive-measurements-hosted-ci-2026-09-30), and [inventory](benchmarks/COVERAGE.md) preserve exact coverage and remaining gaps.
+<!-- interactive-results:end -->
 
 ## Persistence and recovery
 
@@ -538,3 +854,32 @@ Copy it to `~/.config/mux/config.toml` to have it applied on every attach.
 - Terminal emulation covers the common VT/xterm behavior supported by the
   `vt100` parser; uncommon control sequences and exotic Vim features such as
   registers, macros, and marks are not implemented.
+
+<!-- cold-startup-results:start -->
+### Cold saved-layout scale startup (hosted CI, 2026-09-30)
+
+Actual [run 36784956350](https://github.com/any-0/mux/actions/runs/36784956350): **180 accepted process trials**, 20 per variant/scale; nine warm-ups excluded. All complete-layout, history and fresh live-shell gates passed. Runtime remains `d6dd228054231e77772bd17a412d8f0d07871835`.
+
+| Windows × panes | mux clean restored startup, ms | tmux + persistence clean restored startup, ms | plain tmux fresh provisioning, ms |
+| --- | ---: | ---: | ---: |
+| 1 × 1 | 47.638 / 52.618 | 492.343 / 500.087 | 467.926 / 470.951 |
+| 3 × 2 | 54.587 / 60.868 | 814.062 / 821.960 | 2384.134 / 2391.826 |
+| 6 × 4 | 144.959 / 151.890 | 1698.465 / 1712.741 | 9239.081 / 9263.699 |
+
+| Windows × panes | mux endpoint PSS, MiB | stack endpoint PSS, MiB | plain fresh provisioning endpoint PSS, MiB |
+| --- | ---: | ---: | ---: |
+| 1 × 1 | 8.882 / 9.050 | 8.438 / 8.488 | 8.312 / 8.316 |
+| 3 × 2 | 16.339 / 16.368 | 14.611 / 14.629 | 14.641 / 14.645 |
+| 6 × 4 | 39.053 / 39.928 | 36.322 / 36.369 | 36.193 / 36.197 |
+
+Endpoint PSS includes daemon/client/shell descendants and live helpers observed just after the timed frame. It is a snapshot, not peak RAM; transient exited helpers are absent. RSS/process records are retained.
+
+Values are median / nearest-rank p95. **Plain tmux persistence is unsupported**; fresh provisioning includes generating the matched history and controller preparation waits, and has no restore-speed ratio.
+
+Paired groups ran sequentially on one AMD EPYC 7763 64-Core Processor hosted VM (`GitHub Actions 1000002138`, image `20260920.314.1`). Executed harness `aec786740953afa50a7064793d9b9769bfb02143`, branch candidate `c47a5301237f496df696720f069cd216242deac1`. Project Nix pin/Rust/tmux/plugins match the earlier benchmark environment; filesystem caches remain warm.
+
+The endpoint is cold client/daemon launch to the first selected window’s complete retained viewport and fresh prompts. Every hidden window’s geometry/cwd/history and fresh shell response are independently verified after timing; this is not a timed tour of all windows. Clean saves are separate from crash recovery. No default-period crash claim is made. Additional motion and differing-size client-contention cases remain unmeasured.
+
+
+[Raw manifest](benchmarks/results/hosted-ci/36784956350/manifest.json), [reproducible harness](benchmarks/cold_startup.py), and [independent auditor](benchmarks/audit_cold_startup.py).
+<!-- cold-startup-results:end -->

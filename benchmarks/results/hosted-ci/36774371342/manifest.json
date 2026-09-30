@@ -1,0 +1,60 @@
+{
+  "source_run": 36774371342,
+  "status": "completed",
+  "runtime_commit": "d6dd228054231e77772bd17a412d8f0d07871835",
+  "harness_commit": "a9134207e3c3130994dcdd919ffcaf18025a74a8",
+  "branch_head": "406ae9a514ab7e16084f2e623324592c2f491f9a",
+  "nixpkgs": "2fc6539b481e1d2569f25f8799236694180c0993",
+  "artifacts": {
+    "w1-idle": {
+      "artifact_id": 11125892154,
+      "sha256": "0621b045d38b0a1c746ef9811028a9054a986091a306547775a3b01598752f7a",
+      "size_bytes": 2816827,
+      "name": "interactive-36774371342-1-w1-idle"
+    },
+    "w1-busy": {
+      "artifact_id": 11125423971,
+      "sha256": "d58207d0e980e00742722127df6f4cfbd0f32a60b4528910c8658e567a72f6a1",
+      "size_bytes": 2908683,
+      "name": "interactive-36774371342-1-w1-busy"
+    },
+    "w3-idle": {
+      "artifact_id": 11126137328,
+      "sha256": "1afb97bd1d150f99fc2f22ba08f2c65633e0cbadf7757707c9425fadbe534496",
+      "size_bytes": 4843631,
+      "name": "interactive-36774371342-1-w3-idle"
+    },
+    "w3-busy": {
+      "artifact_id": 11127306470,
+      "sha256": "762ef6325325342562c4634ee2ffc3b42b093631f28f0c6eb34a7c50580ee1a1",
+      "size_bytes": 4934689,
+      "name": "interactive-36774371342-1-w3-busy"
+    },
+    "w6-idle": {
+      "artifact_id": 11126864049,
+      "sha256": "858725906b5cae4d854e13bc3473695d35d714728a9298f10f784c9dea56895a",
+      "size_bytes": 12120227,
+      "name": "interactive-36774371342-1-w6-idle"
+    },
+    "mux-ui": {
+      "artifact_id": 11127612140,
+      "sha256": "bb676a3133a7608b79b245f68f545ecb2c4facdbb1f3bb370b4486b075392dce",
+      "size_bytes": 400610,
+      "name": "mux-ui-36774371342-1"
+    },
+    "w6-busy": {
+      "artifact_id": 11127249821,
+      "sha256": "1f93db40fa84840f23f1c66fa97e53e90b62f0175b125ec4ce58d9efaa107169",
+      "size_bytes": 12211677,
+      "name": "interactive-36774371342-1-w6-busy"
+    }
+  },
+  "accepted_paired_trials": 360,
+  "paired_operations_per_trial": 53,
+  "paired_warmups_excluded": 18,
+  "mux_ui_trials": 20,
+  "mux_ui_operations_per_trial": 12,
+  "mux_ui_warmups_excluded": 1,
+  "run_url": "https://github.com/any-0/mux/actions/runs/36774371342",
+  "independent_audit": "all seven downloaded group audits reproduced exactly; SHA-256 matched GitHub artifact digests"
+}

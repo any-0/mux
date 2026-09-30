@@ -1,0 +1,187 @@
+name: Hosted interactive operation benchmarks
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/benchmark-interactive.yml'
+      - 'benchmarks/interactive.py'
+      - 'benchmarks/audit_interactive.py'
+      - 'benchmarks/mux_ui.py'
+      - 'benchmarks/audit_mux_ui.py'
+      - 'benchmarks/run.py'
+      - 'benchmarks/recovery.py'
+      - 'benchmarks/mux-revision'
+      - '.nix/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: interactive-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  paired:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    env:
+      BENCH_MUX_SOURCE_DIR: ${{ github.workspace }}/pinned-runtime
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Require fresh measurements when benchmark inputs change
+        id: evidence
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          needed=true
+          run_id=$(cat benchmarks/interactive-results-run 2>/dev/null || true)
+          manifest="benchmarks/results/hosted-ci/$run_id/manifest.json"
+          if [ "$EVENT_NAME" != workflow_dispatch ] && [ -n "$run_id" ] && [ -f "$manifest" ]; then
+            measured=$(python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["status"]=="completed"; print(m["branch_head"])' "$manifest")
+            if git cat-file -e "$measured^{commit}" && git diff --quiet "$measured" HEAD -- benchmarks/interactive.py benchmarks/mux_ui.py benchmarks/run.py benchmarks/recovery.py benchmarks/audit_interactive.py benchmarks/audit_mux_ui.py benchmarks/audit_hosted.py benchmarks/mux-revision .nix scripts/benchmark-nix ':(exclude).nix/flake.nix' && python3 benchmarks/retained_inputs.py "$measured"; then
+              needed=false
+            fi
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+      - name: Runtime pin
+        id: pin
+        run: echo "revision=$(cat benchmarks/mux-revision)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.pin.outputs.revision }}
+          path: pinned-runtime
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+      - name: Mux-only UI diagnostic preflight
+        if: steps.evidence.outputs.needed == 'true'
+        id: ui-preflight
+        continue-on-error: true
+        run: ./scripts/benchmark-nix python3 benchmarks/mux_ui.py --output "$RUNNER_TEMP/mux-ui-smoke" --smoke
+      - name: Preserve mux-only preflight evidence
+        if: steps.evidence.outputs.needed == 'true' && (always())
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mux-ui-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mux-ui-smoke/
+          retention-days: 90
+      - name: Twenty paired blocks w1-idle
+        if: steps.evidence.outputs.needed == 'true'
+        run: |
+          ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/smoke-w1-idle" --smoke --windows 1 --load idle
+          ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/interactive-w1-idle" --trials 20 --windows 1 --load idle
+          ./scripts/benchmark-nix python3 benchmarks/audit_interactive.py "$RUNNER_TEMP/interactive-w1-idle" > "$RUNNER_TEMP/interactive-w1-idle/audit.json"
+      - name: Publish completed w1-idle evidence
+        if: steps.evidence.outputs.needed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-${{ github.run_id }}-${{ github.run_attempt }}-w1-idle
+          path: |
+            ${{ runner.temp }}/interactive-w1-idle/
+            ${{ runner.temp }}/smoke-w1-idle/
+          retention-days: 90
+      - name: Twenty paired blocks w1-busy
+        if: steps.evidence.outputs.needed == 'true'
+        run: |
+          ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/smoke-w1-busy" --smoke --windows 1 --load busy
+          ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/interactive-w1-busy" --trials 20 --windows 1 --load busy
+          ./scripts/benchmark-nix python3 benchmarks/audit_interactive.py "$RUNNER_TEMP/interactive-w1-busy" > "$RUNNER_TEMP/interactive-w1-busy/audit.json"
+      - name: Publish completed w1-busy evidence
+        if: steps.evidence.outputs.needed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-${{ github.run_id }}-${{ github.run_attempt }}-w1-busy
+          path: |
+            ${{ runner.temp }}/interactive-w1-busy/
+            ${{ runner.temp }}/smoke-w1-busy/
+          retention-days: 90
+      - name: Twenty paired blocks w3-idle
+        if: steps.evidence.outputs.needed == 'true'
+        run: |
+          ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/smoke-w3-idle" --smoke --windows 3 --load idle
+          ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/interactive-w3-idle" --trials 20 --windows 3 --load idle
+          ./scripts/benchmark-nix python3 benchmarks/audit_interactive.py "$RUNNER_TEMP/interactive-w3-idle" > "$RUNNER_TEMP/interactive-w3-idle/audit.json"
+      - name: Publish completed w3-idle evidence
+        if: steps.evidence.outputs.needed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-${{ github.run_id }}-${{ github.run_attempt }}-w3-idle
+          path: |
+            ${{ runner.temp }}/interactive-w3-idle/
+            ${{ runner.temp }}/smoke-w3-idle/
+          retention-days: 90
+      - name: Twenty paired blocks w3-busy
+        if: steps.evidence.outputs.needed == 'true'
+        run: |
+          ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/smoke-w3-busy" --smoke --windows 3 --load busy
+          ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/interactive-w3-busy" --trials 20 --windows 3 --load busy
+          ./scripts/benchmark-nix python3 benchmarks/audit_interactive.py "$RUNNER_TEMP/interactive-w3-busy" > "$RUNNER_TEMP/interactive-w3-busy/audit.json"
+      - name: Publish completed w3-busy evidence
+        if: steps.evidence.outputs.needed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-${{ github.run_id }}-${{ github.run_attempt }}-w3-busy
+          path: |
+            ${{ runner.temp }}/interactive-w3-busy/
+            ${{ runner.temp }}/smoke-w3-busy/
+          retention-days: 90
+      - name: Twenty paired blocks w6-idle
+        if: steps.evidence.outputs.needed == 'true'
+        run: |
+          ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/smoke-w6-idle" --smoke --windows 6 --load idle
+          ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/interactive-w6-idle" --trials 20 --windows 6 --load idle
+          ./scripts/benchmark-nix python3 benchmarks/audit_interactive.py "$RUNNER_TEMP/interactive-w6-idle" > "$RUNNER_TEMP/interactive-w6-idle/audit.json"
+      - name: Publish completed w6-idle evidence
+        if: steps.evidence.outputs.needed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-${{ github.run_id }}-${{ github.run_attempt }}-w6-idle
+          path: |
+            ${{ runner.temp }}/interactive-w6-idle/
+            ${{ runner.temp }}/smoke-w6-idle/
+          retention-days: 90
+      - name: Twenty paired blocks w6-busy
+        if: steps.evidence.outputs.needed == 'true'
+        run: |
+          ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/smoke-w6-busy" --smoke --windows 6 --load busy
+          ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/interactive-w6-busy" --trials 20 --windows 6 --load busy
+          ./scripts/benchmark-nix python3 benchmarks/audit_interactive.py "$RUNNER_TEMP/interactive-w6-busy" > "$RUNNER_TEMP/interactive-w6-busy/audit.json"
+      - name: Publish completed w6-busy evidence
+        if: steps.evidence.outputs.needed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-${{ github.run_id }}-${{ github.run_attempt }}-w6-busy
+          path: |
+            ${{ runner.temp }}/interactive-w6-busy/
+            ${{ runner.temp }}/smoke-w6-busy/
+          retention-days: 90
+      - name: Mux-only UI measurements
+        if: steps.evidence.outputs.needed == 'true' && (steps.ui-preflight.outcome == 'success')
+        run: |
+          ./scripts/benchmark-nix python3 benchmarks/mux_ui.py --output "$RUNNER_TEMP/mux-ui-performance"
+          ./scripts/benchmark-nix python3 benchmarks/audit_mux_ui.py "$RUNNER_TEMP/mux-ui-performance" > "$RUNNER_TEMP/mux-ui-performance/audit.json"
+      - name: Publish mux-only UI evidence
+        if: steps.evidence.outputs.needed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mux-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mux-ui-*/
+          retention-days: 90
+      - name: Keep raw evidence on success or failure
+        if: steps.evidence.outputs.needed == 'true' && (always())
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/smoke-w*/
+            ${{ runner.temp }}/interactive-w*/
+            ${{ runner.temp }}/mux-ui-*/
+          retention-days: 90
+      - name: Report blocked mux-only UI scope
+        if: steps.evidence.outputs.needed == 'true' && (always() && steps.ui-preflight.outcome == 'failure')
+        run: |
+          echo 'Mux-only UI correctness failed; its performance scope is blocked. Paired group artifacts remain independently audited.' >&2
+          exit 1
+      - name: Re-audit retained complete measurements after documentation changes
+        if: steps.evidence.outputs.needed == 'false'
+        run: |
+          run_id=$(cat benchmarks/interactive-results-run)
+          nix develop ./.nix#benchmark --command python3 benchmarks/render_interactive_results.py "benchmarks/results/hosted-ci/$run_id" --summary "$RUNNER_TEMP/mux-summary.md" --full "$RUNNER_TEMP/mux-full.md"
+          echo 'All 360 paired trials and 20 mux-only UI trials independently re-audited; runtime, workload, and toolchain inputs unchanged.'

@@ -1,0 +1,65 @@
+name: Audit and retain completed interactive measurements
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/benchmark-repack.yml'
+      - 'benchmarks/repack_interactive.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: interactive-36762906986-1
+          run-id: 36762906986
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/source-data
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+      - name: Independent complete-group audit and raw evidence sharding
+        run: nix develop ./.nix#benchmark --command python3 benchmarks/repack_interactive.py "$RUNNER_TEMP/source-data" "$RUNNER_TEMP/retained-groups"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-36762906986-manifest
+          path: ${{ runner.temp }}/retained-groups/manifest.json
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-36762906986-w1-idle
+          path: ${{ runner.temp }}/retained-groups/w1-idle/
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-36762906986-w1-busy
+          path: ${{ runner.temp }}/retained-groups/w1-busy/
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-36762906986-w3-idle
+          path: ${{ runner.temp }}/retained-groups/w3-idle/
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-36762906986-w3-busy
+          path: ${{ runner.temp }}/retained-groups/w3-busy/
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-36762906986-w6-idle
+          path: ${{ runner.temp }}/retained-groups/w6-idle/
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-36762906986-w6-busy
+          path: ${{ runner.temp }}/retained-groups/w6-busy/
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-36762906986-diagnostic-preflight
+          path: ${{ runner.temp }}/retained-groups/diagnostic-preflight/
+          retention-days: 90

@@ -1,0 +1,49 @@
+{
+  "source_run": 36769182665,
+  "run_url": "https://github.com/any-0/mux/actions/runs/36769182665",
+  "runtime_commit": "d6dd228054231e77772bd17a412d8f0d07871835",
+  "harness_commit": "688c83ad351c3aa6f349adddb510ff101fffd1d5",
+  "branch_head": "ceb014739ff1bc6b7b1af970e343bd105e4ae26d",
+  "nixpkgs": "2fc6539b481e1d2569f25f8799236694180c0993",
+  "status": "failed",
+  "artifacts": {
+    "w3-idle": {
+      "artifact_id": 11123947421,
+      "sha256": "716d2fa4d3e29aa8c71cb81383f7745c2997c0d00ae0c60c4730d6370cefe7ce",
+      "size_bytes": 4845435,
+      "name": "interactive-36769182665-1-w3-idle"
+    },
+    "w1-idle": {
+      "artifact_id": 11122524696,
+      "sha256": "fce8c8b46802397ed89a53a1c1ffc37d216fe01f5ef29cbe2eead33da7258d2d",
+      "size_bytes": 2812251,
+      "name": "interactive-36769182665-1-w1-idle"
+    },
+    "w1-busy": {
+      "artifact_id": 11122509769,
+      "sha256": "7aea73e4c9b4c116894586f63045c0998cbeeae33fb5d4ec1ffda5218ca26bb4",
+      "size_bytes": 2893293,
+      "name": "interactive-36769182665-1-w1-busy"
+    },
+    "failure-evidence": {
+      "artifact_id": 11123374373,
+      "name": "interactive-36769182665-1",
+      "sha256": "fcd0ebdef952fd5f57603734519d336134c5a19700b8530eef62fcd44ab97504",
+      "size_bytes": 15472476
+    }
+  },
+  "accepted_groups": [
+    "w1-idle",
+    "w1-busy",
+    "w3-idle"
+  ],
+  "accepted_trials": 180,
+  "blocked_groups": {
+    "w3-busy": "One mux trial failed during untimed bell preparation; full group rejected, no timing subset accepted.",
+    "mux-ui": "Tree-choice content gate required blank sidebar cells; UI preflight failed despite continue-on-error success conclusion."
+  },
+  "unmeasured_groups": [
+    "w6-idle",
+    "w6-busy"
+  ]
+}

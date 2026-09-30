@@ -1,0 +1,84 @@
+{
+  "source_run": 36762906986,
+  "groups": {
+    "w1-idle": {
+      "audit": "passed",
+      "measured_trials": 60
+    },
+    "w1-busy": {
+      "audit": "passed",
+      "measured_trials": 60
+    },
+    "w3-idle": {
+      "audit": "passed",
+      "measured_trials": 60
+    },
+    "w3-busy": {
+      "audit": "passed",
+      "measured_trials": 60
+    },
+    "w6-idle": {
+      "audit": "blocked",
+      "reason": "('unequal initial geometry/history', 6, 4, 'idle', 0, 'tmux-persistence')"
+    },
+    "w6-busy": {
+      "audit": "blocked",
+      "reason": "('unequal initial geometry/history', 6, 4, 'busy', 0, 'mux')"
+    }
+  },
+  "runtime_commit": "d6dd228054231e77772bd17a412d8f0d07871835",
+  "harness_commit": "efc5c1551adf0fc24f55e9c15bd444658442efde",
+  "branch_candidate": "ee916e030d52921126a248df7329ab978b592e43",
+  "original_artifact_reported_sha256": "caa12e3104a77e03ed5271e18b0ea5e4d0480926c90bd3e3cbb918fc63f4f79d",
+  "repack_run": 36767080733,
+  "raw_shards": [
+    {
+      "name": "interactive-36762906986-w6-busy",
+      "artifact_id": 11122980039,
+      "digest": "sha256:1576a5bcdb04b08cce7fb9f5ae21b0f259d3881338095c6fe032040445fd796b",
+      "size_bytes": 11727220
+    },
+    {
+      "name": "interactive-36762906986-w1-idle",
+      "artifact_id": 11122815060,
+      "digest": "sha256:d769f0c2a0e919a909c51b4925f722c328f00f8b8db4da8afcbc958bc5a8b1c2",
+      "size_bytes": 2504314
+    },
+    {
+      "name": "interactive-36762906986-w3-idle",
+      "artifact_id": 11122680163,
+      "digest": "sha256:18a2096e424362f589fe1eccfc0ef2bf0f39c1080203336d8ad09095afe6b991",
+      "size_bytes": 4500510
+    },
+    {
+      "name": "interactive-36762906986-w3-busy",
+      "artifact_id": 11122650151,
+      "digest": "sha256:aa9766bab6240c6578eb6aeaa56653132456871705609a71513f59ee0a27c804",
+      "size_bytes": 4556563
+    },
+    {
+      "name": "interactive-36762906986-diagnostic-preflight",
+      "artifact_id": 11122390194,
+      "digest": "sha256:eedea8c4cee709a428ce01edb84fed2886f6ab86b963a5dc3bdfcea9b2d92ccb",
+      "size_bytes": 860316
+    },
+    {
+      "name": "interactive-36762906986-w1-busy",
+      "artifact_id": 11122375189,
+      "digest": "sha256:27f558600da2e09ca27708c5473adcee4e5a1f3f3bec8433baf5b6bceed7b936",
+      "size_bytes": 2559528
+    },
+    {
+      "name": "interactive-36762906986-w6-idle",
+      "artifact_id": 11120927176,
+      "digest": "sha256:3dcbccd6011b8dae4261d232cc1a3b44c7d82cecc15b96a420ab156918c0f19a",
+      "size_bytes": 11683523
+    },
+    {
+      "name": "interactive-36762906986-manifest",
+      "artifact_id": 11120912242,
+      "digest": "sha256:01331381995e1f4455fce65923e64f520d71d37123df6d1758b52e0d4b1f3f89",
+      "size_bytes": 342
+    }
+  ]
+}
