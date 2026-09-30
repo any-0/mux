@@ -42,6 +42,9 @@ class Interactive(Recovery):
                         'bind -T bench C-Left resize-pane -L 1',
                         'bind -T bench C-Up resize-pane -U 1',
                         'bind -T bench C-Down resize-pane -D 1']
+            pipe='cat > '+shlex.quote(str(self.capture))
+            bindings += ['bind -T copy-mode-vi V send-keys -X select-line',
+                         'bind -T copy-mode-vi y send-keys -X copy-pipe-and-cancel '+shlex.quote(pipe)]
             bindings += [f'bind -n M-{i} select-window -t :{i}' for i in range(1, 10)]
             with self.config.open('a') as f:
                 f.write('\n' + '\n'.join(bindings) + '\n')
@@ -77,7 +80,8 @@ class Interactive(Recovery):
         # Each retained row is 30 cells, fitting the smallest seeded pane.
         script = "stty -echo; PS1='" + label + "> '; printf '\\033[2J\\033[H'; python3 -c " + shlex.quote(
             f"print('\\n'.join('{label}-H%05d '%i+'x'*12 for i in range({rows})))")
-        self.shell(script, label + '>')
+        self.shell(script, f'{label}-H{rows-1:05d} '+ 'x'*12)
+        self.client.until(lambda:self.client.contains(label+'>'))
 
     def keys(self, data):
         if self.variant == 'mux' and data == b'\x1bs':
@@ -123,6 +127,15 @@ class Interactive(Recovery):
         if not second:
             self.client = t
         return t
+
+    def bar(self):
+        screen=self.client.screen
+        cells=((y,x) for y in range(screen.lines) for x in range(min(5,screen.columns))) if self.variant=='mux' else ((screen.lines-1,x) for x in range(screen.columns))
+        return [tuple(screen.buffer[y][x]) for y,x in cells]
+
+    def selected_window(self):
+        window=next(w for w in self.windows() if w['active'])
+        return window.get('id',window.get('index'))
 
     def count_gate(self, expected):
         panes = self.panes()
@@ -234,10 +247,16 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.action('delete_window',kill,lambda:not r.client.contains('MOVED>'),lambda:r.windows())
         r.window(scratch)
         # Swap into previous slot; visible sidebar/status index is checked post endpoint.
-        before=list(r.client.screen.display)
-        r.action('reorder_window_left',b'\x1ba<',lambda: ([line[:5] for line in r.client.screen.display] if variant=='mux' else r.client.screen.display[-1:]) != ([line[:5] for line in before] if variant=='mux' else before[-1:]),lambda:r.windows())
-        before=list(r.client.screen.display)
-        r.action('reorder_window_right',b'\x1ba>',lambda: ([line[:5] for line in r.client.screen.display] if variant=='mux' else r.client.screen.display[-1:]) != ([line[:5] for line in before] if variant=='mux' else before[-1:]),lambda:r.windows())
+        before=r.bar();old_index=r.selected_window()
+        def moved_left():
+            assert r.selected_window()==old_index-1
+            return r.windows()
+        r.action('reorder_window_left',b'\x1ba<',lambda:r.bar()!=before,moved_left)
+        before=r.bar()
+        def moved_right():
+            assert r.selected_window()==old_index
+            return r.windows()
+        r.action('reorder_window_right',b'\x1ba>',lambda:r.bar()!=before,moved_right)
         # New session lifecycle and previous-session switching.
         r.action('create_session',b'\x1bT',lambda:r.client.contains('BENCH_READY>'))
         r.shell_marker('SECOND_SESSION',history_rows)
@@ -264,6 +283,18 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.action('history_search_backward',b'?SCRATCH-H00010\r',lambda:r.client.contains('SCRATCH-H00010'))
         before=list(r.client.screen.display)
         r.action('history_top',b'gg' if variant=='mux' else b'g',lambda:r.client.contains('SCRATCH-H00000'))
+        x=r.client.screen.cursor.x;y=r.client.screen.cursor.y
+        r.action('copy_cursor_right',b'l',lambda:r.client.screen.cursor.x==x+1 and r.client.screen.cursor.y==y)
+        r.action('copy_cursor_left',b'h',lambda:r.client.screen.cursor.x==x and r.client.screen.cursor.y==y)
+        before=(r.client.screen.cursor.x,r.client.screen.cursor.y)
+        r.action('copy_word_forward',b'w',lambda:(r.client.screen.cursor.x,r.client.screen.cursor.y)!=before)
+        # Selection and receipt have explicit distinct endpoint labels.
+        r.keys(b'0');r.keys(b'V')
+        if r.capture.exists():r.capture.unlink()
+        r.action('yank_line_clipboard_receipt',b'y',lambda:r.capture.exists())
+        copied=r.capture.read_text();assert 'SCRATCH-H00000' in copied and copied.count('SCRATCH-H')==1,copied
+        r.measurements[-1]['clipboard_text']=copied
+        if variant!='mux':r.keys(b'\x1bw');r.keys(b'g')
         r.action('history_bottom',b'G',lambda:r.client.contains('SCRATCH>') and not r.client.contains('SCRATCH-H00000'))
         r.keys(b'\x1b')
         # Multi-client redraw: second attached client gets populated viewport.
@@ -311,6 +342,8 @@ def main():
                 for v in variants:
                     s=exercise(v,n,w,panes,load,a.output,200 if a.smoke else 1000);samples.append(s)
                     print(w,panes,load,n,v,'PASS' if s['correct'] else s.get('error'),flush=True)
+                    if a.smoke and not s['correct']:
+                        raise SystemExit('Correctness preflight failed; inspect retained sample.json')
     summary={}
     for w,panes in scales:
         for load in ('idle','busy'):
