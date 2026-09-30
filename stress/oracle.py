@@ -134,7 +134,7 @@ class Terminal:
                     break
                 raw, intermediate, final = match.groups()
                 seq = match.group(0)
-                if final == 'm' and not intermediate:
+                if final == 'm' and not intermediate and not raw.startswith(('?', '>', '<', '=')):
                     self.screen.sgr(raw)
                 elif raw == '?1049' and final in 'hl':
                     self.screen.alternate(final == 'h')
@@ -172,6 +172,14 @@ class Terminal:
                 # pyte normalizes combining marks to NFC; compare consistently.
                 import unicodedata
                 values[0] = unicodedata.normalize('NFC', values[0])
+                # SGR 36 and SGR 38;5;6 name the same indexed color. pyte
+                # represents the first as 'cyan' and the latter as RGB hex.
+                palette = {name: graphics.FG_BG_256[index]
+                           for index, name in enumerate(graphics.FG_ANSI.values())}
+                palette.update({name: graphics.FG_BG_256[index + 8]
+                                for index, name in enumerate(graphics.FG_AIXTERM.values())})
+                for color_index in (1, 2, 8):
+                    values[color_index] = palette.get(values[color_index], values[color_index])
                 row.append(values)
             cells.append(row)
         return {'cells': cells, 'cursor': [screen.cursor.y, min(screen.cursor.x, screen.columns - 1) - left],

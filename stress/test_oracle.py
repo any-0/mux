@@ -27,6 +27,13 @@ class OracleVectors(unittest.TestCase):
         self.assertEqual([c[0] for c in terminal.snapshot()['cells'][0][:3]], ['界', '', 'é'])
         self.assertEqual(terminal.snapshot()['cursor'], [0, 3])
 
+    def test_equivalent_indexed_color_encodings_and_private_sgr(self):
+        terminal = Terminal(2, 20)
+        terminal.feed(b'\x1b[36mX\x1b[38;5;6mX\x1b[>4;2mY')
+        cells = terminal.snapshot()['cells'][0]
+        self.assertEqual(cells[0], cells[1])
+        self.assertEqual(cells[2][0], 'Y')
+
     def test_all_underline_styles_reset_and_color(self):
         terminal = Terminal(3, 20)
         for style in range(6):
