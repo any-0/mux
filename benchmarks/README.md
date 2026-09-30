@@ -148,20 +148,25 @@ the separate project Tests and benchmark correctness workflows also passed.
 | Default-period process-crash recovery | No accepted samples | Same-runner duration exceeds hosted job limit |
 
 The crash harness retains continuum's real 900-second scheduler and never
-manually saves in its crash path. Each isolated variant waits one interval and
+manually saves in its crash path. mux and baseline tmux wait one full interval; the plugin variant waits for
+an actual scheduler-produced snapshot, whose first-save timing may differ. Each
 then crashes at age fractions 0, .25, .5, .75 and .99 while recording equal
 post-snapshot output. It rejects a second save before the requested crash age.
 No clean result above has been relabeled as crash evidence.
 
 The configured 30 trials plus a warm-up, three variants and five ages require
 `31 × 3 × 900 × (5 + 0 + .25 + .5 + .75 + .99)` = **626,913 seconds / 174.14
-hours / 7.26 days**, before startup, fidelity checks and restoration. Even the
-minimum supported 20 trials plus warm-up at only age zero would require
-`21 × 3 × 900` = **15.75 hours**, exceeding GitHub's six-hour hosted-job limit.
+hours / 7.26 days** with a 900-second priming allowance for each variant, before
+startup, fidelity checks and restoration. This is a planned budget; the plugin's
+first scheduled save can occur sooner. Even giving that variant zero priming
+time, the minimum supported 20 trials plus warm-up at only age zero requires
+`21 × 2 × 900` = **10.5 hours** for mux and baseline alone, exceeding GitHub's
+six-hour hosted-job limit.
 These are timer-budget calculations, not measured execution times.
 
-One three-variant triplet would take at least 45 minutes at age zero or about
-67.5 minutes at age .5, plus overhead. That can provide a diagnostic but cannot
+One three-variant triplet budgets 45 minutes at age zero or 67.5 minutes at
+age .5, plus overhead; an earlier first scheduled snapshot can reduce that
+budget to 30 or 52.5 minutes, respectively. That can provide a diagnostic but cannot
 supply repeated median/p95 evidence. Splitting repeated trials across fresh CI
 jobs changes the runner; checkpointing state between jobs also changes the
 crash experiment. Neither closes the controlled single-runner gap. No additional
