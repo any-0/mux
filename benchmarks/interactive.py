@@ -33,7 +33,7 @@ class Interactive(Recovery):
                         'bind -T copy-mode-vi g send-keys -X history-top',
                         'bind -T copy-mode-vi G send-keys -X history-bottom',
                         'bind -T bench - split-window -v -l 50%', 'bind -T bench | split-window -h -l 50%',
-                        'bind -T bench x kill-pane', 'bind -T bench ! break-pane',
+                        'bind -T bench x confirm-before -p "kill pane?" kill-pane', 'bind -T bench ! break-pane',
                         'bind -T bench > swap-window -d -t +1 \\; select-window -t +1', 'bind -T bench < swap-window -d -t -1 \\; select-window -t -1',
                         'bind -T bench d detach-client',
                         'bind -T bench , command-prompt -p "rename window:" "rename-window %%"',
@@ -86,9 +86,6 @@ class Interactive(Recovery):
         self.client.until(lambda:self.client.contains(label+'>'))
 
     def keys(self, data):
-        if self.variant == 'mux' and data == b'\x1bs':
-            # Double tree hotkey goes to previous session (code input.rs).
-            data += b'\x1bs'
         self.client.input(data)
         self.client.drain()
 
@@ -232,7 +229,12 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
             r.action('focus_'+orientation,b'\x1ba'+direction,
                      lambda:r.client.screen.cursor.y==parent_row and r.client.screen.cursor.x==parent_x,
                      focus_gate)
-            r.choose(child)
+            child_row=next(y for y,line in enumerate(r.client.screen.display) if 'CHILD>' in line)
+            child_x=next(line.index('CHILD>') for line in r.client.screen.display if 'CHILD>' in line)+len('CHILD> ')
+            opposite=b'\x1b[B' if orientation=='vertical' else b'\x1b[C'
+            def child_focus_gate():
+                active=r.active();assert active['id']==child['id'];return active
+            r.action('focus_'+orientation+'_back',b'\x1ba'+opposite,lambda:r.client.screen.cursor.y==child_row and r.client.screen.cursor.x==child_x,child_focus_gate)
             old=list(r.client.screen.display)
             resize=b'\x1b[1;5A' if orientation=='vertical' else b'\x1b[1;5D'
             old_dims=[(p['cols'],p['rows']) for p in r.panes()]
@@ -248,12 +250,10 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
             r.action('resize_'+orientation,b'\x1ba'+resize,visibly_resized,resized)
             # mux retains leader after resize. Cancel equally outside timing.
             if variant=='mux':r.keys(b'\x1b')
-            r.action('zoom',b'\x1bf',lambda:not r.client.contains('SCRATCH>') and r.client.contains('CHILD>'))
-            r.action('unzoom',b'\x1bf',lambda:r.client.contains('SCRATCH>') and r.client.contains('CHILD>'))
-            if variant=='mux':
-                r.keys(b'\x1bax') # confirmation dialog outside kill-commit timing
-                kill=b'y'
-            else:kill=b'\x1bax'
+            r.action('zoom_'+orientation,b'\x1bf',lambda:not r.client.contains('SCRATCH>') and r.client.contains('CHILD>'))
+            r.action('unzoom_'+orientation,b'\x1bf',lambda:r.client.contains('SCRATCH>') and r.client.contains('CHILD>'))
+            r.keys(b'\x1bax') # confirmation dialog, identical prepared commit unit
+            kill=b'y'
             r.action('delete_pane_'+orientation,kill,lambda:not r.client.contains('CHILD>') and r.client.contains('SCRATCH>'),lambda:r.count_gate(1))
         # Window reordering and break-pane movement: markers verify the actual object.
         r.action('split_for_break',b'\x1ba-',lambda:r.client.contains('BENCH_READY>'),lambda:r.count_gate(2))
@@ -261,9 +261,8 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.action('break_pane',b'\x1ba!',lambda:r.client.contains('MOVED>') and not r.client.contains('SCRATCH>'),lambda:r.count_gate(1))
         moved=len(r.windows())
         # Delete the moved pane's single-pane window using the same lifecycle key.
-        if variant=='mux':r.keys(b'\x1bax');kill=b'y'
-        else:kill=b'\x1bax'
-        r.action('delete_window',kill,lambda:not r.client.contains('MOVED>'),lambda:r.windows())
+        r.keys(b'\x1bax');kill=b'y'
+        r.action('delete_window',kill,lambda:not r.client.contains('MOVED>') and r.client.contains('SCRATCH>'),lambda:r.windows())
         r.window(scratch)
         # Swap into previous slot; visible sidebar/status index is checked post endpoint.
         before=r.bar();old_index=r.selected_window()
@@ -302,10 +301,11 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.action('switch_session',switch,lambda:r.client.contains('SCRATCH>'))
         r.action('switch_session_back',switch,lambda:r.client.contains('SECOND_SESSION>'))
         if variant=='mux':
-            r.keys(b'\x1bs');r.keys(b'x');kill=b'y'
+            r.keys(b'\x1bs');r.keys(b'x');kill=b'y\x1b'
         else:
             # tmux native command prompt is an attached-key interaction.
-            kill=b'\x02:kill-session\r'
+            r.keys(b'\x02:kill-session')
+            kill=b'\r'
         r.action('delete_session',kill,lambda:r.client.contains('SCRATCH>'))
         # Physical client resize: endpoint is a shell's real SIGWINCH redraw.
         r.client.input(b"PS1='SIZE>'; stty echo\n");r.client.drain()
