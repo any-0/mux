@@ -338,7 +338,7 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.action('yank_line_clipboard_receipt',b'y',lambda:r.capture.exists())
         copied=r.capture.read_text();assert copied.rstrip()=='SCRATCH-H00000 '+'x'*12,copied
         r.measurements[-1]['clipboard_text']=copied
-        if variant!='mux':r.keys(b'\x1bw');r.keys(b'g')
+        r.keys(b'\x1bw');r.keys(b'gg' if variant=='mux' else b'g')
         r.action('history_bottom',b'G',lambda:r.client.contains('SCRATCH>') and not r.client.contains('SCRATCH-H00000'))
         r.keys(b'\x1b')
         # Multi-client redraw: second attached client gets populated viewport.
