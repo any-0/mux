@@ -78,9 +78,10 @@ nix develop .#benchmark --command python3 benchmarks/run.py \
 cloud machine, Nix dependency realization was blocked by proxy and runtime
 restrictions; the devShell expression evaluated, but no variant executed.
 [Raw bootstrap evidence](benchmarks/results/bootstrap/) records the attempts.
-The harness remains unvalidated, and save/restart/restore and recovery-fidelity
-benchmarks remain to be implemented. No median/p95 or performance advantage is
-claimed. The methodology, pinned versions, correctness gates and remaining
+The microbenchmark and save/restart/restore/recovery-fidelity harnesses are
+implemented but remain unvalidated against the real Nix-built backends. No
+median/p95 or performance advantage is claimed. The methodology, pinned
+versions, correctness gates and remaining
 work are documented in the benchmark draft.
 
 Build without installing anything:

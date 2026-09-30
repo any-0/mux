@@ -1,0 +1,7 @@
+build-users-group = 
+connect-timeout = 0
+download-attempts = 5
+experimental-features = fetch-tree flakes nix-command
+sandbox = true
+store = /tmp/mux-nix-store
+substituters = https://cache.nixos.org/

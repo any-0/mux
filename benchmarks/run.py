@@ -25,8 +25,6 @@ import subprocess
 import termios
 import time
 
-import pyte
-
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_COMMIT = '9c74b7029e6112175d0914c0efc12d87317efccf'
 ROW = re.compile(r'ROW(\d{8}) x{68}')
@@ -38,6 +36,8 @@ def command(argv, env=None):
 
 class Terminal:
     def __init__(self, argv, env, directory, rows, columns):
+        import pyte
+
         self.master, slave = pty.openpty()
         self.size(rows, columns)
         self.screen = pyte.Screen(columns, rows)
@@ -147,7 +147,8 @@ def trial(variant, number, output, args):
     state.mkdir(mode=0o700)
     env = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), XDG_STATE_HOME=str(state),
                XDG_CONFIG_HOME=str(directory / 'config'), SHELL=os.environ['BENCH_SHELL'],
-               TERM='xterm-256color', COLORTERM='truecolor', LC_ALL='C.UTF-8')
+               TERM='xterm-256color', COLORTERM='truecolor', LC_ALL='C.UTF-8',
+               BASH_ENV='/dev/null', ENV='/dev/null', INPUTRC='/dev/null')
     for key in ('MUX', 'MUX_PANE', 'TMUX', 'TMUX_PANE'):
         env.pop(key, None)
     mux = str(ROOT / 'target/release/mux')
