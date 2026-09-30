@@ -110,8 +110,12 @@ class Terminal:
         self.stream = AttachedStream(self.screen)
         self.decoder = codecs.getincrementaldecoder('utf-8')('replace')
         self.raw = (directory / 'client.ansi').open('wb')
+        # A real controlling terminal makes TIOCSWINSZ deliver SIGWINCH to the
+        # foreground client, as a terminal emulator does. The controller is
+        # single-threaded; preexec runs after setsid and stdio redirection.
         self.process = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave,
-                                        env=env, cwd=directory, start_new_session=True)
+                                        env=env, cwd=directory, start_new_session=True,
+                                        preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
         os.close(slave)
 
     def size(self, rows, columns):
