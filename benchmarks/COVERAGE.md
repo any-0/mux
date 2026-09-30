@@ -59,9 +59,12 @@ Raw frames, input timestamps, commands, process-tree resource evidence and failu
 are retained. CPU ticks miss exited helpers and are a lower bound. Any unequal paired fixture or failed trial
 blocks the complete profile/scale comparison; no surviving subset is reported.
 
-Status: broad harness implemented and entering real pinned-Nix correctness CI;
-these new actions have no accepted performance values until all gates and an
-independent paired fixture audit pass. Prior measured micro/clean data remain valid.
+Status: the core suite has 240 independently accepted trials at 1×1 and 3×2,
+idle/busy, with 45 endpoints. Both 6×4 groups from the first sweep are blocked by
+the native pane-order mismatch; full raw samples are preserved. The logical-slot
+fix and additional bell/search/selection/mux-only UI cases are in Nix validation.
+Their new timings remain unaccepted until all gates and independent audits pass.
+Prior measured micro/clean data remain valid.
 
 Completed groups are independently publishable only after all three variants pass
 their diagnostic preflight and every measured trial plus excluded warm-up passes

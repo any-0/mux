@@ -67,8 +67,8 @@ bell animation, or expiring message is due.
 
 The table below covers the initial single-pane workload and clean recovery.
 The broader [supported-operation inventory and coverage matrix](benchmarks/COVERAGE.md)
-tracks the expanded scale/load suite, which is undergoing correctness validation;
-its diagnostic timings are not included as performance results.
+records 240 independently accepted core trials below. Additional cases and the
+corrected four-pane grid are undergoing validation; diagnostics are not performance results.
 
 [Run 36744338567](https://github.com/any-0/mux/actions/runs/36744338567)
 measured all three variants sequentially on one hosted Ubuntu VM using the

@@ -35,6 +35,17 @@ jobs:
           ref: ${{ steps.pin.outputs.revision }}
           path: pinned-runtime
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+      - name: Mux-only UI diagnostic preflight
+        id: ui-preflight
+        continue-on-error: true
+        run: ./scripts/benchmark-nix python3 benchmarks/mux_ui.py --output "$RUNNER_TEMP/mux-ui-smoke" --smoke
+      - name: Preserve mux-only preflight evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mux-ui-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mux-ui-smoke/
+          retention-days: 90
       - name: Twenty paired blocks w1-idle
         run: |
           ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/smoke-w1-idle" --smoke --windows 1 --load idle
@@ -113,9 +124,8 @@ jobs:
             ${{ runner.temp }}/interactive-w6-busy/
             ${{ runner.temp }}/smoke-w6-busy/
           retention-days: 90
-      - name: Mux-only UI correctness
-        run: ./scripts/benchmark-nix python3 benchmarks/mux_ui.py --output "$RUNNER_TEMP/mux-ui-smoke" --smoke
       - name: Mux-only UI measurements
+        if: steps.ui-preflight.outcome == 'success'
         run: |
           ./scripts/benchmark-nix python3 benchmarks/mux_ui.py --output "$RUNNER_TEMP/mux-ui-performance"
           ./scripts/benchmark-nix python3 benchmarks/audit_mux_ui.py "$RUNNER_TEMP/mux-ui-performance" > "$RUNNER_TEMP/mux-ui-performance/audit.json"
@@ -135,3 +145,8 @@ jobs:
             ${{ runner.temp }}/interactive-w*/
             ${{ runner.temp }}/mux-ui-*/
           retention-days: 90
+      - name: Report blocked mux-only UI scope
+        if: always() && steps.ui-preflight.outcome == 'failure'
+        run: |
+          echo 'Mux-only UI correctness failed; its performance scope is blocked. Paired group artifacts remain independently audited.' >&2
+          exit 1
