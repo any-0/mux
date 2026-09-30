@@ -825,7 +825,8 @@ fn supported_style_transitions_and_active_attributes_survive_journal_compaction(
         assert_eq!(cell.underline_style(), style);
     }
     let dim = screen.cell(0, 3).unwrap();
-    assert!(dim.dim() && !dim.bold() && !dim.italic() && !dim.inverse());
+    // SGR 2 adds faint without clearing bold; only SGR 22 clears both.
+    assert!(dim.dim() && dim.bold() && !dim.italic() && !dim.inverse());
     let plain = screen.cell(0, 4).unwrap();
     assert_eq!(plain.underline_style(), vt100::UnderlineStyle::None);
     assert_eq!(plain.fgcolor(), vt100::Color::Default);
