@@ -389,6 +389,28 @@ class RecoveryControllerTests(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec('pyte'), 'pyte absent; run validation in Nix shell')
 class AttachedPTYTests(unittest.TestCase):
+    def test_scroll_commands_preserve_cursor_and_rows_outside_margins(self):
+        program = r'''
+import os, tty
+tty.setraw(0)
+os.write(1, b'AA\r\nBB\r\nCC\r\nDD\r\nEE\x1b[2;4r\x1b[3;2H\x1b[S\x1b]2;UP\x07')
+os.read(0, 1)
+os.write(1, b'\x1b[T\x1b]2;DOWN\x07')
+os.read(0, 1)
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            terminal = Terminal([sys.executable, '-c', program], dict(os.environ), Path(tmp), 8, 100)
+            try:
+                terminal.until(lambda: terminal.screen.title == 'UP', timeout=3)
+                self.assertEqual([x[:2] for x in terminal.screen.display[:5]], ['AA', 'CC', 'DD', '  ', 'EE'])
+                self.assertEqual((terminal.screen.cursor.x, terminal.screen.cursor.y), (1, 2))
+                terminal.input(b'X')
+                terminal.until(lambda: terminal.screen.title == 'DOWN', timeout=3)
+                self.assertEqual([x[:2] for x in terminal.screen.display[:5]], ['AA', '  ', 'CC', 'DD', 'EE'])
+                self.assertEqual((terminal.screen.cursor.x, terminal.screen.cursor.y), (1, 2))
+            finally:
+                terminal.close()
+
     def test_secondary_identity_query_cannot_inject_primary_reply_into_shell(self):
         program = r'''
 import os, tty
