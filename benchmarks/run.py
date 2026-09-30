@@ -45,6 +45,13 @@ class Terminal:
         master = self.master
 
         class AttachedScreen(pyte.Screen):
+            def report_device_attributes(self, mode=0, **kwargs):
+                # pyte collapses secondary DA (CSI > c) into primary DA.
+                # Its default VT102 reply is therefore incorrect and may be
+                # forwarded into the pane shell. This renderer advertises no
+                # identity extensions; tmux uses its terminal fallback.
+                pass
+
             @property
             def display(self):
                 from wcwidth import wcwidth
