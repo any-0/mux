@@ -79,7 +79,9 @@ cloud machine, Nix dependency realization was blocked by proxy and runtime
 restrictions; the devShell expression evaluated, but no variant executed.
 [Raw bootstrap evidence](benchmarks/results/bootstrap/) records the attempts.
 The microbenchmark and save/restart/restore/recovery-fidelity harnesses are
-implemented but remain unvalidated against the real Nix-built backends. No
+implemented. Supported Nix CI has built the pinned backend and exposed harness
+issues in real smoke interactions; validation and failure artifacts are linked
+in the benchmark draft. No
 median/p95 or performance advantage is claimed. The methodology, pinned
 versions, correctness gates and remaining
 work are documented in the benchmark draft.

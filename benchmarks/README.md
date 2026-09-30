@@ -265,7 +265,7 @@ outputs are under `results/bootstrap/`.
    built a small shell probe. It needs neither ptrace nor user namespaces.
    That probe used host `/bin/sh` solely to test Nix store operation, never to
    benchmark mux. See `native-local-store-probe.log`.
-6. The **actual benchmark devShell realization** command using that supported
+6. The **corrected development benchmark devShell realization** command using that supported
    configuration reached dependency building and failed:
 
 ```sh
@@ -274,10 +274,11 @@ XDG_CACHE_HOME=/tmp/mux-nix-cache /tmp/mux-nix-portable/.nix-portable/bin/nix \
   --option sandbox false --option build-users-group '' \
   --option connect-timeout 3 --option download-attempts 1 \
   --store 'local?store=/tmp/mux-native-nix/store&state=/tmp/mux-native-nix/state&log=/tmp/mux-native-nix/log' \
-  develop .#benchmark --no-write-lock-file --command true
+  develop ./.nix#benchmark --no-write-lock-file --command true
 ```
 
-`native-nix-develop.log` identifies the failed Bash 5.3 source URL above and the
+`development-nix-develop.log` records this corrected `.nix` invocation and identifies
+the same failed Bash 5.3 source URL (needed for Bash 5.3p9) and the
 resulting `nix-shell-env.drv` dependency failure. The new devShell expression
 itself evaluates successfully; missing dependency access is the current blocker.
 A nonstandard logical store also cannot use ordinary `/nix/store` substitutes
@@ -333,3 +334,21 @@ those samples as one identical-machine experiment. No shortened continuum
 period, synthetic save timestamp or checkpoint handoff makes it equivalent to
 the specified real default-period crash suite. The dedicated cloud/local-machine
 run remains pending. No hosted-CI performance numbers have been accepted.
+
+
+## CI correctness evidence
+
+The initial supported Nix run [36735486799](https://github.com/any-0/mux/actions/runs/36735486799)
+passed 39 tests and built runtime `d328bd3cf503e22855818a20353964c4879bc67b`,
+but real interaction exposed a pyte private cursor-query error and a cwd
+sampling barrier omission. The second run
+[36736567725](https://github.com/any-0/mux/actions/runs/36736567725) passed 40
+tests, mux micro/clean recovery and persistence-tmux micro gates. Other gates
+failed on an intermediate viewport and an orphan-wide-cell pyte display error.
+Both complete uploaded ZIPs are retained in `results/ci-validation/`, including
+commands, raw PTY bytes, environment and rejected diagnostic samples. These
+are deliberately **not performance results**. Fixes reply to actual PTY queries,
+wait for the complete final viewport and render an orphan empty wide-cell stub
+as a blank. The latter retains text/style fidelity gates; it does not replace
+missing tagged characters. A later run explicitly pins PR #2's new runtime
+`af93924bad3553806f3d5bb3d732714dba91f02e` rather than pooling these revisions.

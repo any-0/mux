@@ -186,8 +186,13 @@ class Recovery:
     def cli(self, *args):
         argv = ([self.mux] if self.variant == 'mux' else self.tmux) + list(args)
         start = time.perf_counter_ns()
-        output = command(argv, self.env)
-        self.events.append({'command': argv, 'start_ns': start, 'end_ns': time.perf_counter_ns(), 'output': output})
+        event = {'command': argv, 'start_ns': start}
+        self.events.append(event)
+        try:
+            output = command(argv, self.env)
+            event['output'] = output
+        finally:
+            event['end_ns'] = time.perf_counter_ns()
         return output
 
     def wait(self, predicate, timeout=30, attached=True):

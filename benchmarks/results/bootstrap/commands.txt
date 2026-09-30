@@ -27,3 +27,6 @@ XDG_CACHE_HOME=/tmp/mux-nix-cache /tmp/mux-nix-portable/.nix-portable/bin/nix --
 # after the standard Nix binary-cache probe is denied by the proxy:
 XDG_CACHE_HOME=/tmp/mux-nix-cache /tmp/mux-nix-portable/.nix-portable/bin/nix --extra-experimental-features 'nix-command flakes' --option sandbox false --option build-users-group '' --option connect-timeout 3 --option download-attempts 1 --store 'local?store=/tmp/mux-native-nix/store&state=/tmp/mux-native-nix/state&log=/tmp/mux-native-nix/log' develop .#benchmark --no-write-lock-file --command true
 curl --max-time 10 -I https://ftpmirror.gnu.org/bash/bash-5.3.tar.gz
+# Corrected project development flake (2026-09-30), exit 1; output:
+# development-nix-develop.log. Native store configuration reached downloads.
+XDG_CACHE_HOME=/tmp/mux-nix-cache /tmp/mux-nix-portable/.nix-portable/bin/nix --extra-experimental-features 'nix-command flakes' --option sandbox false --option build-users-group '' --option connect-timeout 3 --option download-attempts 1 --store 'local?store=/tmp/mux-native-nix/store&state=/tmp/mux-native-nix/state&log=/tmp/mux-native-nix/log' develop ./.nix#benchmark --no-write-lock-file --command true
