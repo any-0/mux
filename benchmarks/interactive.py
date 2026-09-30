@@ -124,7 +124,7 @@ class Interactive(Recovery):
         end = t.until(lambda: all(t.contains(x) for x in expected))
         self.measurements.append({'name': name, 'launch': argv, 'input_ns': start, 'decoded_ns': end,
                                   'latency_ms': (end-start)/1e6, 'correct': True,
-                                  'after': list(t.screen.display), 'post_resource': resource_sample([self.server,t.process.pid])})
+                                  'after': list(t.screen.display), 'post_resource': resource_sample([self.server,t.process.pid]+([self.client.process.pid] if second else []))})
         if not second:
             self.client = t
         return t
@@ -318,19 +318,19 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         # Search a retained record far outside the live viewport.
         before=list(r.client.screen.display)
         r.action('enter_copy_mode',b'\x1bw',lambda:r.client.screen.display!=before)
-        r.action('history_search_backward',b'?SCRATCH-H00010\r',lambda:r.client.contains('SCRATCH-H00010 '+'x'*12))
+        r.action('history_search_backward',b'?SCRATCH-H00100\r',lambda:r.client.contains('SCRATCH-H00100 '+'x'*12))
         before=list(r.client.screen.display)
         r.action('history_top',b'gg' if variant=='mux' else b'g',lambda:r.client.contains('SCRATCH-H00000'))
         x=r.client.screen.cursor.x;y=r.client.screen.cursor.y
         r.action('copy_cursor_right',b'l',lambda:r.client.screen.cursor.x==x+1 and r.client.screen.cursor.y==y)
         r.action('copy_cursor_left',b'h',lambda:r.client.screen.cursor.x==x and r.client.screen.cursor.y==y)
         before=(r.client.screen.cursor.x,r.client.screen.cursor.y)
-        r.action('copy_word_forward',b'w',lambda:(r.client.screen.cursor.x,r.client.screen.cursor.y)!=before)
+        r.action('copy_big_word_forward',b'W',lambda:r.client.screen.cursor.x==x+15 and r.client.screen.cursor.y==y)
         # Selection and receipt have explicit distinct endpoint labels.
         r.keys(b'0');r.keys(b'V')
         if r.capture.exists():r.capture.unlink()
         r.action('yank_line_clipboard_receipt',b'y',lambda:r.capture.exists())
-        copied=r.capture.read_text();assert 'SCRATCH-H00000' in copied and copied.count('SCRATCH-H')==1,copied
+        copied=r.capture.read_text();assert copied.rstrip()=='SCRATCH-H00000 '+'x'*12,copied
         r.measurements[-1]['clipboard_text']=copied
         if variant!='mux':r.keys(b'\x1bw');r.keys(b'g')
         r.action('history_bottom',b'G',lambda:r.client.contains('SCRATCH>') and not r.client.contains('SCRATCH-H00000'))
@@ -341,7 +341,7 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         # Detach endpoint is process exit, distinct from rendered viewport.
         start=r.client.input(b'\x1bad')
         r.client.process.wait(timeout=10);end=time.perf_counter_ns()
-        r.measurements.append({'name':'detach_client_exit','input_ns':start,'decoded_ns':end,'latency_ms':(end-start)/1e6,'correct':True})
+        r.measurements.append({'name':'detach_client_exit','input_hex':b'\x1bad'.hex(),'input_ns':start,'decoded_ns':end,'latency_ms':(end-start)/1e6,'correct':True})
         r.client.close();r.client=None
         r.attach('reattach',['SCRATCH>'])
         result['correct']=True
