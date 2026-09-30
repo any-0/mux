@@ -363,7 +363,7 @@ impl Row {
             let mode = span[16];
             if start < last_end || start >= end || end > cells
                 || [span[4], span[8], span[12]].iter().any(|tag| *tag > 2)
-                || mode & 3 == 3 || mode >> 5 > 5
+                || mode >> 5 > 5
             {
                 return None;
             }

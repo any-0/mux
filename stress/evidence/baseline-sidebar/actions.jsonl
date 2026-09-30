@@ -1,0 +1,10 @@
+{"index": 0, "kind": "attach", "name": "client", "rows": 24, "cols": 85}
+{"index": 1, "kind": "mux-command", "argv": ["new-window"]}
+{"index": 2, "kind": "mux-command", "argv": ["new-window"]}
+{"index": 3, "kind": "mux-command", "argv": ["new-window"]}
+{"index": 4, "kind": "mux-command", "argv": ["new-window"]}
+{"index": 5, "kind": "mux-command", "argv": ["new-window"]}
+{"index": 6, "kind": "mux-command", "argv": ["new-window"]}
+{"index": 7, "kind": "mux-command", "argv": ["new-window"]}
+{"index": 8, "kind": "mux-command", "argv": ["new-window"]}
+{"index": 9, "kind": "mux-command", "argv": ["new-window"]}

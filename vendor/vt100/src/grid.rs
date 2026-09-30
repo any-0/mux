@@ -64,6 +64,22 @@ impl Grid {
     }
 
     pub fn set_size(&mut self, size: Size) {
+        // A shrinking normal screen keeps its live cursor's row in view. Move
+        // the rows above it to bounded history before clipping the viewport.
+        // Grids without history (including the alternate screen) keep their
+        // existing clipping behavior.
+        if self.scrollback_len > 0 && self.pos.row >= size.rows {
+            let shift = self.pos.row - (size.rows - 1);
+            for _ in 0..shift {
+                let removed = self.rows.remove(0);
+                self.push_history(removed);
+            }
+            self.pos.row -= shift;
+            self.saved_pos.row = self.saved_pos.row.saturating_sub(shift);
+            self.scroll_top = self.scroll_top.saturating_sub(shift);
+            self.scroll_bottom = self.scroll_bottom.saturating_sub(shift);
+        }
+
         if size.cols != self.size.cols {
             self.reflow_scrollback(size.cols);
             for row in &mut self.rows {
@@ -758,18 +774,21 @@ impl Grid {
         for _ in 0..(count.min(self.size.rows - self.scroll_top)) {
             self.rows
                 .insert(usize::from(self.scroll_bottom) + 1, self.new_row());
-            let mut removed = self.rows.remove(usize::from(self.scroll_top));
+            let removed = self.rows.remove(usize::from(self.scroll_top));
             if self.scrollback_len > 0 && self.scroll_top == 0 {
-                removed.compact();
-                if self.scrollback.len() == self.scrollback_len {
-                    self.scrollback.pop_front();
-                }
-                self.scrollback.push_back(removed);
-                if self.scrollback_offset > 0 {
-                    self.scrollback_offset =
-                        self.scrollback.len().min(self.scrollback_offset + 1);
-                }
+                self.push_history(removed);
             }
+        }
+    }
+
+    fn push_history(&mut self, mut row: crate::row::Row) {
+        row.compact();
+        if self.scrollback.len() == self.scrollback_len {
+            self.scrollback.pop_front();
+        }
+        self.scrollback.push_back(row);
+        if self.scrollback_offset > 0 {
+            self.scrollback_offset = self.scrollback.len().min(self.scrollback_offset + 1);
         }
     }
 
@@ -943,7 +962,116 @@ pub struct Pos {
 
 #[cfg(test)]
 mod history_restore_tests {
-    use super::{Grid, Size};
+    use super::{Grid, Pos, Size};
+
+    fn labeled_grid(limit: usize) -> Grid {
+        let mut grid = Grid::new(Size { rows: 6, cols: 8 }, limit);
+        grid.allocate_rows();
+        for (index, row) in grid.rows.iter_mut().enumerate() {
+            row.get_mut(0)
+                .unwrap()
+                .set(char::from(b'A' + index as u8), crate::attrs::Attrs::default());
+        }
+        grid
+    }
+
+    fn labels(grid: &Grid) -> Vec<String> {
+        grid.all_rows()
+            .map(|row| row.get(0).unwrap().contents().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn shrink_only_moves_rows_when_the_live_cursor_overflows() {
+        let mut grid = labeled_grid(100);
+        grid.pos = Pos { row: 1, col: 2 };
+        grid.saved_pos = Pos { row: 5, col: 7 };
+        grid.set_size(Size { rows: 2, cols: 8 });
+        assert_eq!(labels(&grid), ["A", "B"]);
+        assert_eq!(grid.pos, Pos { row: 1, col: 2 });
+        assert_eq!(grid.saved_pos, Pos { row: 1, col: 7 });
+        assert_eq!(grid.scrollback.len(), 0);
+    }
+
+    #[test]
+    fn shrink_projects_saved_cursor_margins_and_history_offset() {
+        let mut grid = labeled_grid(100);
+        grid.pos = Pos { row: 5, col: 7 };
+        grid.saved_pos = Pos { row: 4, col: 3 };
+        grid.scroll_top = 2;
+        grid.scroll_bottom = 4;
+        grid.set_size(Size { rows: 2, cols: 8 });
+        assert_eq!(labels(&grid), ["A", "B", "C", "D", "E", "F"]);
+        assert_eq!(grid.pos, Pos { row: 1, col: 7 });
+        assert_eq!(grid.saved_pos, Pos { row: 0, col: 3 });
+        assert_eq!((grid.scroll_top, grid.scroll_bottom), (0, 0));
+        grid.set_scrollback(2);
+        grid.set_size(Size { rows: 1, cols: 8 });
+        assert_eq!(labels(&grid), ["A", "B", "C", "D", "E", "F"]);
+        assert_eq!(grid.scrollback(), 3);
+        assert_eq!(grid.visible_row(0).unwrap().get(0).unwrap().contents(), "C");
+        assert_eq!(grid.pos, Pos { row: 0, col: 7 });
+    }
+
+    #[test]
+    fn shrink_honors_history_capacity_and_disabled_history() {
+        let mut bounded = labeled_grid(2);
+        bounded.pos = Pos { row: 5, col: 0 };
+        bounded.set_size(Size { rows: 1, cols: 8 });
+        assert_eq!(labels(&bounded), ["D", "E", "F"]);
+        assert_eq!(bounded.scrollback.len(), 2);
+        let mut disabled = labeled_grid(0);
+        disabled.pos = Pos { row: 5, col: 0 };
+        disabled.set_size(Size { rows: 1, cols: 8 });
+        assert_eq!(labels(&disabled), ["A"]);
+        assert_eq!(disabled.scrollback.len(), 0);
+        assert_eq!(disabled.pos, Pos { row: 0, col: 0 });
+    }
+
+    #[test]
+    fn simultaneous_shrink_reflows_promoted_history_before_clipping_columns() {
+        let mut parser = crate::Parser::new(3, 8, 100);
+        parser.process(b"\x1b[1;2;4:3;38;2;1;2;3mABCDEFG\r\nHIJKLMN\r\nO");
+        parser.screen_mut().set_size(1, 4);
+        let rows: Vec<_> = parser.screen().all_rows().collect();
+        let text: Vec<_> = rows
+            .iter()
+            .map(|row| {
+                (0..4)
+                    .map(|x| row.get(x).unwrap().contents().to_string())
+                    .collect::<String>()
+            })
+            .collect();
+        assert_eq!(text, ["ABCD", "EFG", "HIJK", "LMN", "O"]);
+        for row in rows {
+            let first = row.get(0).unwrap();
+            assert!(first.bold() && first.dim());
+            assert_eq!(first.underline_style(), crate::UnderlineStyle::Curly);
+            assert_eq!(first.fgcolor(), crate::Color::Rgb(1, 2, 3));
+        }
+        parser.process(b"\x1b[?1049hALT");
+        parser.screen_mut().set_size(1, 2);
+        assert_eq!(parser.screen().all_rows().count(), 1);
+        parser.process(b"\x1b[?1049l");
+        assert!(parser.screen().all_rows().count() > 1);
+    }
+
+    #[test]
+    fn alternate_screen_shrink_clips_without_polluting_primary_history() {
+        let mut parser = crate::Parser::new(6, 8, 100);
+        parser.process(b"A\r\nB\r\nC\r\nD\r\nE\r\nF\x1b[?1049ha\r\nb\r\nc\r\nd\r\ne\r\nf");
+        parser.screen_mut().set_size(2, 8);
+        assert_eq!(parser.screen().contents(), "a\nb");
+        assert_eq!(parser.screen().cursor_position(), (1, 1));
+        assert_eq!(parser.screen().all_rows().count(), 2);
+        parser.process(b"\x1b[?1049l");
+        let first_cells: Vec<_> = parser
+            .screen()
+            .all_rows()
+            .map(|row| row.get(0).unwrap().contents().to_string())
+            .collect();
+        assert_eq!(first_cells, ["A", "B", "C", "D", "E", "F"]);
+    }
 
     #[test]
     fn large_styled_history_streams_and_retains_only_the_configured_tail() {

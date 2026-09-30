@@ -109,6 +109,7 @@ pub enum Intensity {
     Normal,
     Bold,
     Dim,
+    BoldDim,
 }
 
 #[derive(Default, Debug)]
@@ -262,8 +263,19 @@ impl BufWrite for Attrs {
         if let Some(intensity) = self.intensity {
             match intensity {
                 Intensity::Normal => write_param!(22),
-                Intensity::Bold => write_param!(1),
-                Intensity::Dim => write_param!(2),
+                Intensity::Bold => {
+                    write_param!(22);
+                    write_param!(1);
+                }
+                Intensity::Dim => {
+                    write_param!(22);
+                    write_param!(2);
+                }
+                Intensity::BoldDim => {
+                    write_param!(22);
+                    write_param!(1);
+                    write_param!(2);
+                }
             }
         }
 
