@@ -27,7 +27,7 @@ a separate performance metric.
 | Zoom/fullscreen and return | Interactive suite | Only active pane visible, then both visible; mux hides sidebar too, unlike tmux |
 | Window reordering | Interactive suite | Changed bar/status with same pane content, metadata retained |
 | Move pane into own window | Interactive suite (`break-pane`) | Moved pane visible alone; queried one-pane window |
-| Join pane into another window | CLI-only mux control; expanded coverage pending | Needs separately labeled command-dispatch-to-render path; no standard mux attached-key action |
+| Join pane into another window | Interactive suite, separately labeled CLI dispatch | Command dispatch to both moved and survivor markers; no standard mux attached-key action |
 | Detach/reattach | Interactive suite | Actual attached process exits; fresh attached process displays preserved viewport |
 | Multiple clients | Interactive suite | Second actual attached PTY sees preserved content; same size |
 | Outer terminal resize | Interactive suite | Native resize signal to correctly repositioned sidebar/status and retained shell viewport; exact pane dimensions verified afterward |

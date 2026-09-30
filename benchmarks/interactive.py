@@ -123,6 +123,28 @@ class Interactive(Recovery):
             print(self.directory.name, name, 'visible and semantic gate PASS', flush=True)
         return evidence
 
+    def command_action(self, name, args, predicate, check):
+        """CLI-only control: dispatch to rendered state, explicitly distinct unit."""
+        self.client.drain(.02)
+        assert not predicate(), name + ': gate already satisfied'
+        argv = ([self.mux] if self.variant == 'mux' else self.tmux) + list(args)
+        before = list(self.client.screen.display)
+        start = time.perf_counter_ns()
+        process = subprocess.Popen(argv, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            end = self.client.until(predicate, timeout=10)
+            stdout, stderr = process.communicate(timeout=10)
+            assert process.returncode == 0, stderr.decode()
+            metadata = check()
+        finally:
+            if process.poll() is None:
+                process.kill(); process.wait()
+        self.measurements.append({'name':name, 'command_dispatch':argv,
+            'input_ns':start, 'decoded_ns':end, 'latency_ms':(end-start)/1e6,
+            'before':before, 'after':list(self.client.screen.display),
+            'command_stdout':stdout.decode(), 'metadata':metadata, 'correct':True,
+            'post_resource':resource_sample([self.server,self.client.process.pid])})
+
     def attach(self, name, expected, second=False):
         directory = self.directory / f'attach-{self.attach_number}'
         directory.mkdir(); self.attach_number += 1
@@ -268,6 +290,16 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.action('split_for_break',b'\x1ba-',lambda:r.client.contains('BENCH_READY>'),lambda:r.count_gate(2))
         r.shell_marker('MOVED',history_rows)
         r.action('break_pane',b'\x1ba!',lambda:r.client.contains('MOVED>') and not r.client.contains('SCRATCH>'),lambda:r.count_gate(1))
+        # mux exposes join only through CLI. Match dispatch-to-visible semantics
+        # in both tools and retain it separately from attached-key intervals.
+        join=(['join-pane','-v','-t',str(scratch)] if variant=='mux' else
+              ['join-pane','-v','-s',r.active()['id'],'-t',f':{scratch}','-l','50%'])
+        r.command_action('join_pane_command_to_viewport',join,
+            lambda:r.client.contains('MOVED>') and r.client.contains('SCRATCH>'),lambda:r.count_gate(2))
+        # Prepare another break outside timing so window deletion remains a
+        # single-pane-window deletion with the same visible survivor.
+        r.keys(b'\x1ba!')
+        r.client.until(lambda:r.client.contains('MOVED>') and not r.client.contains('SCRATCH>'))
         moved=len(r.windows())
         # Delete the moved pane's single-pane window using the same lifecycle key.
         r.keys(b'\x1bax');kill=b'y'
@@ -341,6 +373,13 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.action('history_search_backward_commit',b'SCRATCH-H00100\r',lambda:r.client.contains('SCRATCH-H00100 '+'x'*12))
         before=list(r.client.screen.display)
         r.action('history_top',b'gg' if variant=='mux' else b'g',lambda:r.client.contains('SCRATCH-H00000'))
+        # Native history-top may include earlier shell command lines. Position
+        # both copy cursors on the same first tagged record before motion trials.
+        r.keys(b'?')
+        r.client.until(lambda:r.client.contains('?') if variant=='mux' else r.client.contains('(search up)'))
+        r.keys(b'SCRATCH-H00000\r')
+        r.client.until(lambda:'SCRATCH-H00000 '+ 'x'*12 in r.client.screen.display[r.client.screen.cursor.y])
+        r.keys(b'0')
         x=r.client.screen.cursor.x;y=r.client.screen.cursor.y
         r.action('copy_cursor_right',b'l',lambda:r.client.screen.cursor.x==x+1 and r.client.screen.cursor.y==y)
         r.action('copy_cursor_left',b'h',lambda:r.client.screen.cursor.x==x and r.client.screen.cursor.y==y)
