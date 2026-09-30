@@ -45,6 +45,10 @@ jobs:
           nix develop ./.nix#benchmark --command python3 -m unittest discover -s benchmarks -p test_benchmarks.py -v 2>&1 | tee ci-validation/tests.log
       - name: Validate real mux and tmux integrations sequentially
         run: ./scripts/benchmark-nix python3 benchmarks/ci_validate.py --output "$RUNNER_TEMP/mux-ci-validation"
+      - name: Independently audit the retained performance dataset
+        run: |
+          nix develop ./.nix#benchmark --command python3 -m zipfile -e benchmarks/results/hosted-ci/36744338567/raw.zip "$RUNNER_TEMP/retained-performance"
+          nix develop ./.nix#benchmark --command python3 benchmarks/audit_hosted.py "$RUNNER_TEMP/retained-performance" | tee ci-validation/performance-audit.json
       - name: Keep complete diagnostics even when a correctness gate fails
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
