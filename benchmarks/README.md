@@ -44,7 +44,7 @@ revision `af93924bad3553806f3d5bb3d732714dba91f02e`. Benchmark documentation
 and harness changes do not change that runtime pin. If the test/fix task produces a new
 runtime commit, explicitly update the pin and rerun all three variants.
 
-## Implemented measurement path (not yet validated)
+## Implemented measurement path
 
 - Three independent variants: mux, tmux baseline, and tmux with resurrect and
   continuum. Explicit plugin `run-shell` commands come from Nix package paths;
@@ -92,7 +92,7 @@ CPU/memory/kernel/load/cgroup information, build log and summary. Inspect these
 before transferring a run into `benchmarks/results/`. No generated result is
 silently accepted into documentation.
 
-## Implemented recovery run path (integration validation still blocked)
+## Implemented recovery run path
 
 ```sh
 # Fastest integration check of the recovery pipeline, still with >=20 trials:
@@ -201,19 +201,21 @@ Run the reproducible validation suite when Nix is available:
   -s benchmarks -p test_benchmarks.py -v
 ```
 
-On this selected cloud machine, **39 correctness tests passed** using host
+On this selected cloud machine, **43 correctness tests passed** using host
 Python 3.12.14 and the same pyte 0.8.2 source version selected by nixpkgs.
-Four tests exercise real attached PTYs: dimensions reach the child process,
+Eight tests exercise real attached PTYs, including terminal identity/status queries,
+scroll-region/cursor preservation, wide-cell overwrite, and: dimensions reach the child process,
 erased raw output cannot satisfy a rendered-cell gate, a live-shell nonce
 cannot pass from command echo, and the actual seed command renders its
 UTF-8/red fixture correctly. Tests also cover the save/crash controller, real-save
 hook versus incomplete archive, corruption/truncation/duplicates, Unicode/wraps,
 metadata and color losses, recycled-PID signal protection, p95, baseline
 unsupported recovery, and failed-trial suppression. The stdlib-only run passes
-35 tests and skips those four pyte tests.
+35 tests and skips those eight pyte tests.
 
 These are logic/PTY validation results, **not benchmark samples** or a claim
-that mux/tmux restore integration passed. Controller fixtures use synthetic
+that full mux/tmux performance/recovery trials passed. Real Nix integration
+evidence is recorded separately below. Controller fixtures use synthetic
 state only inside temporary test directories. Their values never enter a
 benchmark result. Exact commands, host/dependency versions and test output are
 retained in `results/validation/`.
@@ -352,3 +354,13 @@ wait for the complete final viewport and render an orphan empty wide-cell stub
 as a blank. The latter retains text/style fidelity gates; it does not replace
 missing tagged characters. A later run explicitly pins PR #2's new runtime
 `af93924bad3553806f3d5bb3d732714dba91f02e` rather than pooling these revisions.
+
+The renderer also decodes tmux's CSI S/T scroll optimizations with cursor and
+margin preservation, verified by an attached-PTY regression. Replaying the raw
+failed tmux streams then yields the expected contiguous final workload rows.
+Pyte collapses secondary device-identity queries into primary ones; the harness
+suppresses its incorrect identity reply and lets tmux use its terminal fallback.
+Cursor-status queries receive actual PTY responses. This terminal model has no
+identity extensions and is shared by all variants; startup includes the
+backend's negotiation behavior. These are decoded-viewport measurements, not
+physical display latency.

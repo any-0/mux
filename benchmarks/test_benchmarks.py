@@ -53,6 +53,14 @@ def snapshot(path, omit=None, corrupt=None):
             archive.addfile(item, io.BytesIO(content))
 
 
+class NixShellTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get('BENCH_SHELL'), 'requires actual Nix benchmark shell')
+    def test_shell_executes_resurrect_style_command_instead_of_ignoring_it(self):
+        text = subprocess.check_output([os.environ['BENCH_SHELL'], '-c', "printf WRAPPER_COMMAND_OK"],
+                                       stdin=subprocess.DEVNULL, timeout=3, text=True)
+        self.assertEqual(text, 'WRAPPER_COMMAND_OK')
+
+
 class FidelityTests(unittest.TestCase):
     def test_full_utf8_digest(self):
         gate = history_fidelity(fixture('w1p1'), 'w1p1', BASE_ROWS)
