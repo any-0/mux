@@ -45,6 +45,22 @@ class Terminal:
         master = self.master
 
         class AttachedScreen(pyte.Screen):
+            def scroll_up(self, count=1):
+                saved = self.cursor.y
+                top, bottom = self.margins or (0, self.lines - 1)
+                self.cursor.y = bottom
+                for _ in range(min(count or 1, bottom - top + 1)):
+                    self.index()
+                self.cursor.y = saved
+
+            def scroll_down(self, count=1):
+                saved = self.cursor.y
+                top, bottom = self.margins or (0, self.lines - 1)
+                self.cursor.y = top
+                for _ in range(min(count or 1, bottom - top + 1)):
+                    self.reverse_index()
+                self.cursor.y = saved
+
             def report_device_attributes(self, mode=0, **kwargs):
                 # pyte collapses secondary DA (CSI > c) into primary DA.
                 # Its default VT102 reply is therefore incorrect and may be
@@ -84,7 +100,12 @@ class Terminal:
                     super().report_device_status(mode)
 
         self.screen = AttachedScreen(columns, rows)
-        self.stream = pyte.Stream(self.screen)
+        class AttachedStream(pyte.Stream):
+            # tmux uses SU/SD optimizations that pyte 0.8.2 omits.
+            csi = pyte.Stream.csi | {'S': 'scroll_up', 'T': 'scroll_down'}
+            events = pyte.Stream.events | {'scroll_up', 'scroll_down'}
+
+        self.stream = AttachedStream(self.screen)
         self.decoder = codecs.getincrementaldecoder('utf-8')('replace')
         self.raw = (directory / 'client.ansi').open('wb')
         self.process = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave,
