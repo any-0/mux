@@ -36,10 +36,10 @@ These are corruption and crash-recovery tests, not simulated user actions.
 colors on externally restored history. Partial row framing could panic in a
 restore worker; structurally invalid shapes could reach cell iteration later.
 Persisted rows now undergo structural and UTF-8 validation before entering the
-trusted internal decoder. Restore streams rows using per-cell format bounds before allocating, limits
-zstd frame windows to 128 MiB (the level-1 writer uses a much smaller window),
-retains at most the configured history limit,
-and installs the new history only after every row validates. The daemon's
+trusted internal decoder. Restore streams rows using per-cell format bounds
+before allocating and limits zstd frame windows to 128 MiB (the level-1 writer
+uses a much smaller window). It retains at most the configured history limit
+in compressed blocks and installs the new history only after every row validates. The daemon's
 existing unreadable-pane recovery can then preserve sibling panes and layout.
 
 A screen shrink used `Vec::resize` to drop a wide character's continuation but
@@ -80,7 +80,10 @@ This creates an isolated checkout of the current test harness, replaces only
 the row/grid/bar/input implementations with that baseline, and requires the four
 behavior tests to fail. A compilation failure or empty test filter does not
 count as a regression witness. The primary checkout remains untouched. CI also
-runs this check after the fixed implementation passes its full checks.
+runs this check after the fixed implementation passes its full checks. The same
+script also verifies the large-history compatibility test fails against the
+first draft's capped restore implementation at
+`d328bd3cf503e22855818a20353964c4879bc67b`.
 
 ## Remaining investigation
 
