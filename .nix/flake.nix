@@ -26,7 +26,8 @@
             export PS1='BENCH_READY> '
             export HISTFILE=/dev/null INPUTRC=/dev/null
             unset PROMPT_COMMAND
-            exec ${pkgs.bash}/bin/bash --noprofile --norc -i
+            if [ "$#" -eq 0 ]; then set -- -i; fi
+            exec ${pkgs.bash}/bin/bash --noprofile --norc "$@"
           ''}";
           BENCH_RESURRECT = "${pkgs.tmuxPlugins.resurrect.rtp}";
           BENCH_CONTINUUM = "${pkgs.tmuxPlugins.continuum.rtp}";
