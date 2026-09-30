@@ -33,7 +33,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y strace linux-tools-generic
-          echo "PERF_BINARY=$(find /usr/lib/linux-tools -type f -name perf | sort | tail -1)" >> "$GITHUB_ENV"
+          echo "PERF_BINARY=$(find /usr/lib -type f -name perf | sort | tail -1)" >> "$GITHUB_ENV"
       - name: Build baseline with symbols using the pinned Nix toolchain
         env:
           CARGO_PROFILE_RELEASE_DEBUG: 1
@@ -45,8 +45,12 @@ jobs:
           mkdir -p evidence
           for group in '1 idle' '3 busy'; do
             read -r windows load <<< "$group"
-            nix develop ./.nix#benchmark --command python3 scripts/performance/profile.py --harness harness --output "evidence/w${windows}-${load}" --windows "$windows" --load "$load"
-            sudo "$PERF_BINARY" report -i "evidence/w${windows}-${load}/perf.data" --stdio --no-children --percent-limit .2 > "evidence/w${windows}-${load}/perf-report.txt"
+            for mode in perf strace; do
+              nix develop ./.nix#benchmark --command python3 scripts/performance/profile.py --harness harness --output "evidence/w${windows}-${load}-${mode}" --windows "$windows" --load "$load" --mode "$mode"
+              if [ "$mode" = perf ]; then
+                sudo "$PERF_BINARY" report -i "evidence/w${windows}-${load}-${mode}/perf.data" --stdio --no-children --percent-limit .2 > "evidence/w${windows}-${load}-${mode}/perf-report.txt"
+              fi
+            done
           done
       - name: Retain raw profile and workload correctness evidence
         if: always()
