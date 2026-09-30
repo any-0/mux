@@ -43,6 +43,10 @@ jobs:
         run: ./scripts/stress-nix python3 stress/sidebar_sessions.py --binary target/debug/mux --output "$RUNNER_TEMP/sidebar-stress" --shell ${{ matrix.shell }}
       - name: Independent edited input and multiline bracketed-paste effects
         run: ./scripts/stress-nix python3 stress/input_sessions.py --binary target/debug/mux --output "$RUNNER_TEMP/input-stress" --shell ${{ matrix.shell }}
+      - name: Async editing, suspended client, and copy-mode resize interactions
+        run: |
+          ./scripts/stress-nix python3 stress/interaction_sessions.py --binary target/debug/mux --output "$RUNNER_TEMP/interaction-stress" --shell ${{ matrix.shell }}
+          ./scripts/stress-nix python3 stress/replay.py "$RUNNER_TEMP/interaction-stress"
       - name: Short state-boundary reproduction before the soak
         run: ./scripts/stress-nix python3 stress/run.py --binary target/debug/mux --output "$RUNNER_TEMP/boundary-stress" --cycles 0 --shells ${{ matrix.shell }}
       - name: 240-cycle adversarial soak (30-minute profile budget)
@@ -59,5 +63,6 @@ jobs:
             ${{ runner.temp }}/terminal-witnesses/
             ${{ runner.temp }}/sidebar-stress/
             ${{ runner.temp }}/input-stress/
+            ${{ runner.temp }}/interaction-stress/
             ${{ runner.temp }}/boundary-stress/
           retention-days: 30

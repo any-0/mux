@@ -26,7 +26,7 @@ def write_json(path, value):
 
 
 class Session:
-    def __init__(self, binary, directory, shell, proxied=True):
+    def __init__(self, binary, directory, shell, proxied=True, extra_config=''):
         self.root = directory
         self.binary = str(binary)
         self.shell = shell
@@ -45,7 +45,7 @@ class Session:
         self.profile()
         theme = directory / 'theme.toml'
         theme.write_text('variant = "dark"\n[palette]\nbackground = "#010203"\nsecondary = "#113355"\nsurface_raised = "#223344"\nsurface = "#334455"\nmuted = "#778899"\naccent = "#446688"\n')
-        (directory / 'config.toml').write_text(f'mouse = true\ndefault_cursor_shape = "underline"\ntheme = "{theme}"\n')
+        (directory / 'config.toml').write_text(f'mouse = true\ndefault_cursor_shape = "underline"\ntheme = "{theme}"\n' + extra_config)
         self.stderr = (directory / 'daemon.stderr').open('wb')
         self.daemon = subprocess.Popen([self.binary, '__server', str(directory / 'runtime/mux.sock')],
                                        env=self.env, cwd=directory / 'work', stderr=self.stderr)
@@ -106,7 +106,7 @@ class Session:
         return client
 
     def pump(self, wait=.02):
-        ready, _, _ = select.select([c['fd'] for c in self.clients], [], [], wait)
+        ready, _, _ = select.select([c['fd'] for c in self.clients if not c.get('paused')], [], [], wait)
         for client in self.clients:
             if client['fd'] not in ready:
                 continue
@@ -203,9 +203,11 @@ class Session:
         expected = self.expected.snapshot()
         self.action('checkpoint', name=name, capture_file=self.capture_path.name,
                     capture_offset=self.capture_offset, bar=self.bar, rows=self.rows, cols=self.cols,
-                    clients=[{'name': c['name'], 'offset': c['offset'], 'rows': c['rows'], 'cols': c['cols']} for c in self.clients])
+                    clients=[{'name': c['name'], 'offset': c['offset'], 'rows': c['rows'], 'cols': c['cols']} for c in self.clients if not c.get('paused')])
         errors = []
         for index, client in enumerate(self.clients):
+            if client.get('paused'):
+                continue
             actual = client['terminal'].snapshot(self.bar, client['cols'] - self.bar)
             wanted_view = viewport(expected, client['rows'], client['cols'] - self.bar)
             if actual != wanted_view:
