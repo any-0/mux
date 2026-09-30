@@ -37,6 +37,7 @@ class Interactive(Recovery):
                         'bind -T bench x confirm-before -p "kill pane?" kill-pane', 'bind -T bench ! break-pane',
                         'bind -T bench > swap-window -d -t +1', 'bind -T bench < swap-window -d -t -1',
                         'bind -T bench d detach-client',
+                        'bind -T bench K confirm-before -p "kill session?" kill-session',
                         'bind -T bench , command-prompt -p "rename window:" "rename-window %%"',
                         'bind -T bench $ command-prompt -p "rename session:" "rename-session %%"',
                         'bind -T bench Left select-pane -L', 'bind -T bench Right select-pane -R',
@@ -311,9 +312,9 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         if variant=='mux':
             r.keys(b'\x1bs');r.keys(b'x');kill=b'y\x1b'
         else:
-            # tmux native command prompt is an attached-key interaction.
-            r.keys(b'\x02:kill-session')
-            kill=b'\r'
+            # Match a prepared native confirmation dialog for both backends.
+            r.keys(b'\x1baK')
+            kill=b'y'
         offset=r.columns-100 if variant=='mux' else 0
         r.action('delete_session',kill,lambda:any('SCRATCH>' in line and line.index('SCRATCH>')==offset for line in r.client.screen.display))
         # Native TIOCSWINSZ + SIGWINCH: stop at the new visible geometry,
