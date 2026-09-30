@@ -281,6 +281,10 @@ impl Server {
             } else {
                 format!(" {icon} ")
             };
+            // Window numbers widen the tile at 10, 100, ... windows. Paint
+            // the process line across that same width, including its blanks;
+            // otherwise its right edge loses the active/inactive background.
+            let icon_label = format!("{icon_label:label_width$}");
             let icon_row = row + 1;
             if let Some(visual) = bell {
                 render_bell_label(
