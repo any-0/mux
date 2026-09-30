@@ -174,10 +174,10 @@ class Terminal:
                 values[0] = unicodedata.normalize('NFC', values[0])
                 # SGR 36 and SGR 38;5;6 name the same indexed color. pyte
                 # represents the first as 'cyan' and the latter as RGB hex.
-                palette = {name: graphics.FG_BG_256[index]
-                           for index, name in enumerate(graphics.FG_ANSI.values())}
-                palette.update({name: graphics.FG_BG_256[index + 8]
-                                for index, name in enumerate(graphics.FG_AIXTERM.values())})
+                palette = {name: graphics.FG_BG_256[code - 30]
+                           for code, name in graphics.FG_ANSI.items() if 30 <= code <= 37}
+                palette.update({name: graphics.FG_BG_256[code - 90 + 8]
+                                for code, name in graphics.FG_AIXTERM.items() if 90 <= code <= 97})
                 for color_index in (1, 2, 8):
                     values[color_index] = palette.get(values[color_index], values[color_index])
                 row.append(values)
