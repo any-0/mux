@@ -36,6 +36,8 @@ class Interactive(Recovery):
                         'bind -T bench x kill-pane', 'bind -T bench ! break-pane',
                         'bind -T bench > swap-window -d -t +1 \\; select-window -t +1', 'bind -T bench < swap-window -d -t -1 \\; select-window -t -1',
                         'bind -T bench d detach-client',
+                        'bind -T bench , command-prompt -p "rename window:" "rename-window %%"',
+                        'bind -T bench $ command-prompt -p "rename session:" "rename-session %%"',
                         'bind -T bench Left select-pane -L', 'bind -T bench Right select-pane -R',
                         'bind -T bench Up select-pane -U', 'bind -T bench Down select-pane -D',
                         'bind -T bench C-Right resize-pane -R 2',
@@ -141,8 +143,8 @@ class Interactive(Recovery):
 
     def visible_selected_window(self, number, count, name):
         if self.variant=='mux':
-            row=(38-count*3)//2+(number-1)*3+2
-            return self.client.screen.buffer[row][2].data=='•'
+            row=(38-count*3)//2+(number-1)*3+1
+            return self.client.screen.buffer[row][1].data=='•'
         return f'{number}:{name}*' in self.client.screen.display[-1]
 
     def count_gate(self, expected):
@@ -276,6 +278,23 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
             assert r.selected_window()==old_index
             return r.windows()
         r.action('reorder_window_right',b'\x1ba>',lambda:r.visible_selected_window(old_index,count,name),moved_right)
+        # Rename editors are real UI operations. Editor disappearance alone
+        # is supplemented by exact accepted names, never an acknowledgement.
+        r.action('open_window_rename',b'\x1ba,',lambda:r.client.contains('rename window:'))
+        def renamed_window():
+            current=next(w for w in r.windows() if w['active'])
+            assert current['name']=='BENCH_RENAMED';return current
+        r.action('commit_window_rename',b'\x15BENCH_RENAMED\r',lambda:not r.client.contains('rename window:') and r.client.contains('SCRATCH>'),renamed_window)
+        r.action('open_session_rename',b'\x1ba$',lambda:r.client.contains('rename session:'))
+        def renamed_session():
+            if variant=='mux':
+                sessions=json.loads(r.cli('list-sessions','--json'))
+                assert any(s['current'] and s['name']=='BENCH_RENAMED_SESSION' for s in sessions)
+                return sessions
+            name=r.cli('display-message','-p','#{session_name}')
+            assert name=='BENCH_RENAMED_SESSION';return name
+        r.action('commit_session_rename',b'\x15BENCH_RENAMED_SESSION\r',lambda:not r.client.contains('rename session:') and r.client.contains('SCRATCH>'),renamed_session)
+        r.cli('rename-session','bench')
         # New session lifecycle and previous-session switching.
         r.action('create_session',b'\x1bT',lambda:r.client.contains('BENCH_READY>'))
         r.shell_marker('SECOND_SESSION',history_rows)
