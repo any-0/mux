@@ -321,6 +321,35 @@
         0,
         7
       ]
+    },
+    {
+      "name": "libvterm-wide-character-at-final-column",
+      "rows": 3,
+      "cols": 80,
+      "sequence": "\u001b[1;80H\u754c",
+      "cells": [
+        {
+          "row": 0,
+          "col": 79,
+          "text": " "
+        },
+        {
+          "row": 1,
+          "col": 0,
+          "text": "\u754c"
+        },
+        {
+          "row": 1,
+          "col": 1,
+          "text": ""
+        }
+      ],
+      "cursor": [
+        1,
+        2
+      ],
+      "source": "https://github.com/neovim/libvterm/blob/934bc2fbf21800ac3458a499df8820ca5fb45fd3/t/61screen_unicode.test",
+      "derivation": "Upstream fixture: CUP 1;80 then CJK width-two glyph -> row 2 columns 1/2, not partial glyph at column 80. Glyph changed to U+754C, same width."
     }
   ]
 }
