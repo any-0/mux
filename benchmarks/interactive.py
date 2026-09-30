@@ -32,9 +32,9 @@ class Interactive(Recovery):
                         'bind -n M-w copy-mode',
                         'bind -T copy-mode-vi g send-keys -X history-top',
                         'bind -T copy-mode-vi G send-keys -X history-bottom',
-                        'bind -T bench - split-window -v', 'bind -T bench | split-window -h',
+                        'bind -T bench - split-window -v -l 50%', 'bind -T bench | split-window -h -l 50%',
                         'bind -T bench x kill-pane', 'bind -T bench ! break-pane',
-                        'bind -T bench > swap-window -t +1', 'bind -T bench < swap-window -t -1',
+                        'bind -T bench > swap-window -d -t +1 \\; select-window -t +1', 'bind -T bench < swap-window -d -t -1 \\; select-window -t -1',
                         'bind -T bench d detach-client',
                         'bind -T bench Left select-pane -L', 'bind -T bench Right select-pane -R',
                         'bind -T bench Up select-pane -U', 'bind -T bench Down select-pane -D',
@@ -67,7 +67,7 @@ class Interactive(Recovery):
 
     def choose(self, pane):
         if self.variant == 'mux':
-            self.cli('--pane', str(pane['id']), 'rename-window', 'fixture')
+            self.cli('rename-window', 'fixture', '--pane', str(pane['id']))
         else:
             self.cli('select-pane', '-t', pane['id'])
         self.client.drain()
@@ -159,11 +159,11 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
             if w>1:
                 r.cli('new-window')
             if pane_count>=2:
-                r.cli('split-window','-v')
+                r.cli('split-window','-v') if variant=='mux' else r.cli('split-window','-v','-l','50%')
             if pane_count==4:
-                r.cli('split-window','-h')
+                r.cli('split-window','-h') if variant=='mux' else r.cli('split-window','-h','-l','50%')
                 r.cli('select-pane','-U')
-                r.cli('split-window','-h')
+                r.cli('split-window','-h') if variant=='mux' else r.cli('split-window','-h','-l','50%')
             panes=r.panes()
             assert len(panes)==pane_count
             for p in panes:
