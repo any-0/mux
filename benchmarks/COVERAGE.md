@@ -73,8 +73,9 @@ both rejected 6×4 groups. Intermediate run 36769182665 retains three accepted
 run 36773777142 has zero performance trials. Their raw data, failures and distinct
 scope remain preserved; none is pooled with the complete replacement sweep.
 Prior measured micro/clean data remain valid. Cold restored-layout startup across
-this scale matrix, remaining Vim line/block motions, pane-local jump-list/hints,
-different-size client contention and default-period crash recovery remain open.
+this scale matrix is measured separately in run 36784956350 (180 accepted trials).
+Further Vim line/block motions, pane-local jump-list/hints, differing-size client
+contention and default-period crash recovery remain unmeasured.
 This completes the declared sweep, not every possible feature combination.
 
 Completed groups are independently publishable only after all three variants pass
@@ -106,3 +107,5 @@ the complete tables and raw artifact manifest are linked from the benchmark READ
 
 See [optimization handoff](OPTIMIZATION_HANDOFF.md) for exact pinned invocation,
 raw profile-counter evidence and input/render correctness pitfalls.
+
+Cold-startup follow-up: all 1×1/3×2/6×4 scales accepted 20 trials per variant, after one warm-up each. Actual cold process restart uses clean saved layouts for mux and the loaded persistence stack, warm filesystem caches, and decoded complete selected-window viewport; all hidden-window metadata/history/fresh-shell gates are independent. Plain tmux persistence is unsupported; its fresh matched provisioning is separately labeled, includes generation/controller waits, and receives no restore ratio. See the cold-startup README section and raw run 36784956350. This leaves optional additional motion/client-contention combinations and default-period crash recovery explicitly unmeasured.

@@ -119,7 +119,7 @@ Controller/decoder cost is included, pixels and exclusive physical hardware are
 not measured. Hosted VM data are not Julian's hardware and do not establish a
 universal ranking. Earlier accepted scroll/throughput/clean-recovery and core
 datasets below remain separate; do not pool across VMs or changed endpoints.
-Restored-layout scale coverage and default-period crash recovery remain unmeasured.
+These historical runs did not measure cold restored-layout scale startup; see the separate cold-startup follow-up. Default-period crash recovery remains unmeasured.
 '''
     resources = []
     for metric, title, divisor in [('pss_kib', 'Initial PSS (MiB)', 1024),

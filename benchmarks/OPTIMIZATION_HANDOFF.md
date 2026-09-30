@@ -92,3 +92,7 @@ CPU/storage against an unsaved periodic stack.
 - Clean recovery remains distinct from process-crash recovery at continuum's
   real 15-minute interval. The default-period crash suite is unmeasured and is
   not a prerequisite for these interactive measurements.
+
+## Cold saved-layout startup follow-up
+
+`results/hosted-ci/36784956350/raw.zip` contains 180 accepted cold-startup trials at all three scales, nine excluded warm-ups, and separate correctness preflight. Executed harness aec786740953afa50a7064793d9b9769bfb02143; baseline runtime remains d6dd228. Reproduce with `./scripts/benchmark-nix python3 benchmarks/cold_startup.py --output /tmp/mux-cold-w6 --windows 6 --trials 20`. First complete selected viewport is timed; all hidden-window history/cwd/layout/live-shell gates follow untimed. State/executable caches are warm. Plain tmux fresh provisioning includes history generation and preparation waits and is not a restore ratio. Endpoint PSS is a snapshot, not a peak.

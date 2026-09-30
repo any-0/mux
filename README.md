@@ -70,6 +70,8 @@ The broader [supported-operation inventory and coverage matrix](benchmarks/COVER
 records 240 independently accepted core trials below. Additional cases and the
 corrected four-pane grid are undergoing validation; diagnostics are not performance results.
 
+Newer separate datasets: [360 paired interactive trials and 20 mux-only trials](#complete-expanded-interactive-sweep-hosted-ci-2026-09-30), and [180 cold restored-layout/fresh-provisioning startup trials](#cold-saved-layout-scale-startup-hosted-ci-2026-09-30). Their workloads/endpoints differ from the historical microbenchmark below; results are not pooled.
+
 [Run 36744338567](https://github.com/any-0/mux/actions/runs/36744338567)
 measured all three variants sequentially on one hosted Ubuntu VM using the
 project's pinned Nix development toolchain and mux main commit `d6dd228`.
@@ -236,7 +238,7 @@ Controller/decoder cost is included, pixels and exclusive physical hardware are
 not measured. Hosted VM data are not Julian's hardware and do not establish a
 universal ranking. Earlier accepted scroll/throughput/clean-recovery and core
 datasets below remain separate; do not pool across VMs or changed endpoints.
-Restored-layout scale coverage and default-period crash recovery remain unmeasured.
+These historical runs did not measure cold restored-layout scale startup; see the separate cold-startup follow-up. Default-period crash recovery remains unmeasured.
 
 #### Initial PSS (MiB)
 
@@ -417,8 +419,8 @@ in the complete tables and audits below.
 New three-second profile CPU/storage fields, bell navigation, additional search/selection,
 and mux-only tree/theme/root UI cases are implemented but **not measured in these
 accepted groups**. Existing finite-output throughput/CPU/storage and clean recovery
-results above remain separate. Restored-layout scale coverage and real default-period
-crash recovery remain unmeasured.
+results above remain separate. Those groups did not measure cold restored-layout scale
+startup; see the separate follow-up below. Real default-period crash recovery remains unmeasured.
 
 <details>
 <summary>All 45 core endpoints: 1×1 idle</summary>
@@ -852,3 +854,32 @@ Copy it to `~/.config/mux/config.toml` to have it applied on every attach.
 - Terminal emulation covers the common VT/xterm behavior supported by the
   `vt100` parser; uncommon control sequences and exotic Vim features such as
   registers, macros, and marks are not implemented.
+
+<!-- cold-startup-results:start -->
+### Cold saved-layout scale startup (hosted CI, 2026-09-30)
+
+Actual [run 36784956350](https://github.com/any-0/mux/actions/runs/36784956350): **180 accepted process trials**, 20 per variant/scale; nine warm-ups excluded. All complete-layout, history and fresh live-shell gates passed. Runtime remains `d6dd228054231e77772bd17a412d8f0d07871835`.
+
+| Windows × panes | mux clean restored startup, ms | tmux + persistence clean restored startup, ms | plain tmux fresh provisioning, ms |
+| --- | ---: | ---: | ---: |
+| 1 × 1 | 47.638 / 52.618 | 492.343 / 500.087 | 467.926 / 470.951 |
+| 3 × 2 | 54.587 / 60.868 | 814.062 / 821.960 | 2384.134 / 2391.826 |
+| 6 × 4 | 144.959 / 151.890 | 1698.465 / 1712.741 | 9239.081 / 9263.699 |
+
+| Windows × panes | mux endpoint PSS, MiB | stack endpoint PSS, MiB | plain fresh provisioning endpoint PSS, MiB |
+| --- | ---: | ---: | ---: |
+| 1 × 1 | 8.882 / 9.050 | 8.438 / 8.488 | 8.312 / 8.316 |
+| 3 × 2 | 16.339 / 16.368 | 14.611 / 14.629 | 14.641 / 14.645 |
+| 6 × 4 | 39.053 / 39.928 | 36.322 / 36.369 | 36.193 / 36.197 |
+
+Endpoint PSS includes daemon/client/shell descendants and live helpers observed just after the timed frame. It is a snapshot, not peak RAM; transient exited helpers are absent. RSS/process records are retained.
+
+Values are median / nearest-rank p95. **Plain tmux persistence is unsupported**; fresh provisioning includes generating the matched history and controller preparation waits, and has no restore-speed ratio.
+
+Paired groups ran sequentially on one AMD EPYC 7763 64-Core Processor hosted VM (`GitHub Actions 1000002138`, image `20260920.314.1`). Executed harness `aec786740953afa50a7064793d9b9769bfb02143`, branch candidate `c47a5301237f496df696720f069cd216242deac1`. Project Nix pin/Rust/tmux/plugins match the earlier benchmark environment; filesystem caches remain warm.
+
+The endpoint is cold client/daemon launch to the first selected window’s complete retained viewport and fresh prompts. Every hidden window’s geometry/cwd/history and fresh shell response are independently verified after timing; this is not a timed tour of all windows. Clean saves are separate from crash recovery. No default-period crash claim is made. Additional motion and differing-size client-contention cases remain unmeasured.
+
+
+[Raw manifest](benchmarks/results/hosted-ci/36784956350/manifest.json), [reproducible harness](benchmarks/cold_startup.py), and [independent auditor](benchmarks/audit_cold_startup.py).
+<!-- cold-startup-results:end -->
