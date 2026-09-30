@@ -178,6 +178,12 @@ with open(control) as commands:
             session.action('copy-style-invariant', checked_cells=len(styled), expected_attributes=wanted)
             session.input(b'0yy')
             file_equals(session, clipboard, (target+'\n').encode())
+            # The external clipboard file can be written before the daemon
+            # processes its asynchronous completion and presents the documented
+            # yank notification. Observe that action-owned notification before
+            # dismissing it, rather than racing it with the redraw key.
+            session.wait_text(f'yanked {len((target+chr(10)).encode())} bytes')
+            session.action('yank-notification', expected_bytes=len((target+'\n').encode()))
             session.action('copy-reflow-effect', expected_hex=(target+'\n').encode().hex(), rows=rows, cols=cols)
             session.input(b'\x0c')
             session.checkpoint(f'after-copy-reflow-{n}')
