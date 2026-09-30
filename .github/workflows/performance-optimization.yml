@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ceb014739ff1bc6b7b1af970e343bd105e4ae26d
+          ref: 406ae9a514ab7e16084f2e623324592c2f491f9a
           path: harness
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
