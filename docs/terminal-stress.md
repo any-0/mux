@@ -188,7 +188,7 @@ listed SGR properties, not every terminal extension (for example sixel,
 hyperlinks, blinking/strikethrough, runtime OSC palette changes or kitty input).
 The PTY proxy changes process ancestry, which is why process icons are tested
 separately. Unequal-size clients are tested after repaint against the documented
-last-resize-wins policy; reader suspension is exercised by the separate interaction workload; server queue saturation is not measured.
+last-resize-wins policy; reader suspension is exercised by the separate interaction workload; transport saturation is measured in the separate workload described below; internal writer-channel occupancy is not measured.
 
 Terminal resize/reflow behavior is not specified by ECMA-48. The cell oracle
 compares **after explicit shell/Vim repaint** at the new geometry, rather than
@@ -202,7 +202,7 @@ recorded shell output is composed over the independent pre-stop screen.
 It checks completed durable output after a 1.5-second checkpoint allowance,
 not an arbitrary crash-window loss budget, recovery of live OS jobs, or idle
 multiline-prompt deduplication without shell integration. Dynamic cwd and command-count prompts are covered; wall-clock/git prompts
-and asynchronous prompt plugins are not yet covered. Output quiescence
+and arbitrary asynchronous prompt plugins are not exhaustively covered; the pinned Git worker profile below covers one real integration. Output quiescence
 is a bounded synchronization mechanism, not proof that an arbitrarily delayed
 plugin has finished. These limitations are deliberate and must not be presented
 as full terminal compatibility or exhaustive persistence coverage.
@@ -215,7 +215,7 @@ as full terminal compatibility or exhaustive persistence coverage.
 | Multiline shell prompts and redraw | Real bash/zsh/fish, changing cwd/counter, wrapped edits, SIGWINCH, Ctrl-L | Arbitrary async prompt plugins |
 | Input delivery | `input_sessions.py`: edited command writes exact action-derived file bytes; multiline bracketed paste must await Enter | Every keyboard protocol/mouse gesture |
 | Vim alternate screen | Actual Vim edit, resize, redraw and exit; source cell/style/cursor oracle | Exhaustive Vim interaction |
-| Multiple clients | Three retained terminal streams, competing sizes and cursor clipping | Sustained backpressure |
+| Multiple clients | Three retained terminal streams, competing sizes and cursor clipping | Internal writer-channel occupancy |
 | Windows, sessions, panes and modes | Script-owned names/counts/selection, split/kill, tree, focus, leader/Vim mode and foreground jobs | Every nested split topology and UI editing path |
 | Persistence | Graceful/SIGKILL restore of completed styled screen | Idle prompt deduplication and arbitrary crash loss window |
 | Reproduction/minimization | Seeded action log, linear offline replay, retained raw bytes and minimized witnesses | General automatic action delta debugging |
@@ -245,11 +245,11 @@ then submits a command whose exact file bytes are owned by the scenario.
 
 A second real client is SIGSTOP'd while a bounded sequence of changing styled
 screens is emitted. The active client must continue to match the source oracle;
-after SIGCONT both clients must converge. This proves reader suspension and
-continued progress, but does not prove that kernel buffers and the daemon's
-bounded writer queue reached saturation. A faithful saturation test still
-needs a transport-level occupancy/backpressure observable; output count alone
-is insufficient. Arbitrary delayed async prompt plugins also remain uncovered.
+after SIGCONT both clients must converge. The current version also asserts transport-level saturation and a receive-queue
+plateau using independent Linux diagnostics, as described below; internal writer
+channel occupancy is not measured. Output count alone is never its saturation
+oracle. Arbitrary delayed async prompt integrations remain uncovered beyond the
+pinned Git worker profile below.
 
 Copy mode searches and yanks a script-owned unique Unicode line surrounded by
 long wrapped logical lines. Resizing while in copy mode must retain the exact
@@ -262,4 +262,56 @@ full independent styled copy-viewport/reflow emulation remains a gap.
 ./scripts/stress-nix python3 stress/interaction_sessions.py \
   --binary target/debug/mux --output /tmp/mux-interactions --shell bash
 ./scripts/stress-nix python3 stress/replay.py /tmp/mux-interactions
+```
+
+
+## Measured saturation and pinned asynchronous prompt
+
+The Linux interaction workload now uses the read-only `UNIX_DIAG` UAPI to
+identify the stopped client's connection by endpoint process ownership. It
+records receiver queued bytes and sender allocated socket memory/buffer limit.
+Changing full-screen frames continue until allocated sender memory reaches the
+send-buffer limit. With the reader still SIGSTOP'd, eight further frames and an
+exact action-owned command/file effect must progress on the active client while
+the receive byte count stays at its full plateau. The active terminal must match
+the independent source oracle; after SIGCONT both clients must converge.
+Timeouts bound execution; elapsed time is never the saturation oracle. Internal
+Rust writer-channel occupancy is not measured. Unsupported diagnostic kernels
+fail setup rather than silently weakening this assertion.
+
+`test_transport.py` independently validates the observer against a plain UNIX
+socketpair filled until nonblocking send returns EAGAIN, checks the receiver byte
+count against independently counted sent bytes, then drains it and checks zero
+queues. This test uses no mux process or protocol. The selected local execution
+kernel does not implement this diagnostic query; native Ubuntu Nix CI executes
+this validation and the actual workload. The interpretation follows Linux's
+[UNIX diagnostic implementation](https://github.com/torvalds/linux/blob/v6.8/net/unix/diag.c)
+and `linux/sock_diag.h` socket-memory fields.
+
+The pinned stress shell includes nixpkgs' Pure 1.27.0, which bundles zsh-async
+1.8.6. `async_prompt.py` exercises that actual worker/callback library with a
+custom multiline Git prompt following its documented integration pattern. Jobs
+wait on an externally released FIFO, then query a real isolated Git repository.
+Scripted branch and tracked-file edits determine expected generation/branch/dirty
+state. Callback completion publishes an atomic file after `zle reset-prompt`;
+no sleep or wall-clock delay substitutes for completion. The user edits a
+wrapped Unicode command while the async result changes prompt width, and exact
+file effects verify delivered input. Recorded source/client streams compare
+cells, attributes and cursor through the plugin redraw itself.
+
+Copy mode additionally checks explicit SGR invariants of visible, unselected
+fixture anchors and long wrapped runs after each resize: RGB foreground and
+background, bold plus faint, italic, curly underline and underline color. These
+attribute constants come from fixture actions, not mux snapshots. Glyph-run
+locations are observed to select cells for the invariant, so this is **not** a
+full independent geometric model of the copy viewport. Exact search/yank bytes
+remain action-owned. Full styled viewport coordinates, scroll anchoring,
+selection overlays and arbitrary reflow history remain unsupported; ECMA-48
+does not define those mux-specific copy-mode policies.
+
+```sh
+./scripts/stress-nix python3 -m unittest discover -s stress -p test_transport.py -v
+./scripts/stress-nix python3 stress/async_prompt.py \
+  --binary target/debug/mux --output /tmp/mux-async-prompt
+./scripts/stress-nix python3 stress/replay.py /tmp/mux-async-prompt
 ```
