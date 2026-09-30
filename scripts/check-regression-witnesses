@@ -36,3 +36,24 @@ for name in \
         exit 1
     fi
 done
+
+
+# The first draft introduced a 64 MiB expanded-history cap. Preserve the
+# current library test when substituting that exact older implementation.
+capped=d328bd3cf503e22855818a20353964c4879bc67b
+git show "HEAD:vendor/vt100/src/row.rs" > vendor/vt100/src/row.rs
+git show "$capped:vendor/vt100/src/grid.rs" > vendor/vt100/src/grid.rs
+sed -n '/^#\[cfg(test)\]/,$p' "$repository/vendor/vt100/src/grid.rs" >> vendor/vt100/src/grid.rs
+log="$directory/large-history.log"
+if cargo test --manifest-path vendor/vt100/Cargo.toml --locked --lib \
+    grid::history_restore_tests::large_styled_history_streams_and_retains_only_the_configured_tail \
+    -- --exact --nocapture > "$log" 2>&1; then
+    cat "$log"
+    echo "Large-history compatibility witness unexpectedly passed" >&2
+    exit 1
+fi
+cat "$log"
+if ! grep -F 'test result: FAILED.' "$log" >/dev/null; then
+    echo "Large-history witness did not reach a failing test" >&2
+    exit 1
+fi

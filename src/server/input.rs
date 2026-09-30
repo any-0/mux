@@ -459,9 +459,7 @@ impl Server {
         let (_, rows) = self.client_size(id);
         let (first_window, first_row, visible) =
             centered_bar_layout(windows, current_window, rows.saturating_sub(2) as usize);
-        let offset = (row as usize)
-            .checked_sub(first_row + 1)
-            .map(|row| row / 3);
+        let offset = (row as usize).checked_sub(first_row + 1).map(|row| row / 3);
         let Some(offset) = offset.filter(|offset| *offset < visible) else {
             return Ok(());
         };
