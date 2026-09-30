@@ -53,9 +53,12 @@ def diagnose(inode):
     return result
 
 
-def client_transport(pid):
-    sockets = [diagnose(inode) for inode in socket_inodes(pid)]
-    connected = [s for s in sockets if s.get('peer')]
+def client_transport(pid, server_pid):
+    server_inodes = set(socket_inodes(server_pid))
+    sockets = [diagnose(inode) for inode in set(socket_inodes(pid))]
+    # A client can duplicate its connection and own unrelated local wakeup
+    # socketpairs. Match endpoints by process ownership, not mux fd numbers.
+    connected = [s for s in sockets if s.get('peer') in server_inodes]
     assert len(connected) == 1, f'expected one client transport, found {connected}'
     receiver = connected[0]
     sender = diagnose(receiver['peer'])
