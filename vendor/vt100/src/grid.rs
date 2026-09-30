@@ -213,35 +213,74 @@ impl Grid {
             return false;
         }
         let rows = u32::from_le_bytes(packed[..4].try_into().unwrap());
-        let uncompressed_len =
-            usize::try_from(u64::from_le_bytes(packed[4..12].try_into().unwrap())).unwrap();
-        let compressed = packed[12] != 0;
+        use std::io::Read as _;
+
+        let uncompressed_len = u64::from_le_bytes(packed[4..12].try_into().unwrap());
+        if packed[12] > 1 || u64::from(rows) > uncompressed_len / 15 {
+            return false;
+        }
+        // Decode one bounded row at a time. A large valid history must not be
+        // rejected merely because its total expanded size exceeds a fixed cap,
+        // nor may an untrusted size header cause a matching allocation.
         let body = &packed[13..];
-        let raw = if compressed {
-            match zstd::bulk::decompress(body, uncompressed_len) {
-                Ok(raw) => raw,
+        let mut reader: Box<dyn std::io::Read + '_> = if packed[12] == 1 {
+            match zstd::stream::read::Decoder::new(body) {
+                Ok(mut decoder) => {
+                    // Our encoder uses level 1's small window. Bound malicious
+                    // frame windows independently of total decompressed size.
+                    if decoder.window_log_max(27).is_err() {
+                        return false;
+                    }
+                    Box::new(decoder)
+                }
                 Err(_) => return false,
             }
         } else {
-            body.to_vec()
+            Box::new(body)
         };
-        if raw.len() != uncompressed_len {
-            return false;
-        }
-        let mut input = raw.as_slice();
-        let mut restored = Vec::with_capacity(rows as usize);
+        let mut remaining = uncompressed_len;
+        let mut restored = crate::scrollback::Scrollback::default();
         for _ in 0..rows {
-            // A row that ran out of bytes would decode as rubbish, and the
-            // caller can still replay what follows onto an empty scrollback.
-            if input.is_empty() {
+            let mut header = [0; 15];
+            if remaining < 15 || reader.read_exact(&mut header).is_err() {
                 return false;
             }
-            restored.push(crate::row::Row::decode(&mut input));
+            let cells = usize::from(u16::from_le_bytes(header[7..9].try_into().unwrap()));
+            let data_len = u32::from_le_bytes(header[9..13].try_into().unwrap()) as usize;
+            let attrs_len = usize::from(u16::from_le_bytes(header[13..15].try_into().unwrap()));
+            // Every cell has at most a two-byte shape entry and 22 text bytes,
+            // and at most one 17-byte attribute span. These format bounds make
+            // the allocation independent of a forged total-length declaration.
+            if data_len > cells * 24 || attrs_len > cells {
+                return false;
+            }
+            let length = 15 + data_len + attrs_len * 17;
+            if length as u64 > remaining {
+                return false;
+            }
+            let mut record = Vec::with_capacity(length);
+            record.extend_from_slice(&header);
+            record.resize(length, 0);
+            if reader.read_exact(&mut record[15..]).is_err() {
+                return false;
+            }
+            let Some(row) = crate::row::Row::decode_checked(&mut record.as_slice()) else {
+                return false;
+            };
+            remaining -= length as u64;
+            if self.scrollback_len > 0 {
+                if restored.len() == self.scrollback_len {
+                    restored.pop_front();
+                }
+                restored.push_back(row);
+            }
         }
-        if !input.is_empty() {
+        // Require exact framing, including decoder errors at the frame tail.
+        if remaining != 0 || !matches!(reader.read(&mut [0]), Ok(0)) {
             return false;
         }
-        self.scrollback = restored.into_iter().collect();
+        self.scrollback = restored;
+        self.scrollback_offset = self.scrollback_offset.min(self.scrollback.len());
         true
     }
 
@@ -900,4 +939,70 @@ pub struct Size {
 pub struct Pos {
     pub row: u16,
     pub col: u16,
+}
+
+#[cfg(test)]
+mod history_restore_tests {
+    use super::{Grid, Size};
+
+    #[test]
+    fn large_styled_history_streams_and_retains_only_the_configured_tail() {
+        // A supported wide terminal with a different RGB style on every cell
+        // produces a large expanded history even though zstd packs it tightly.
+        let mut terminal = crate::Parser::new(2, 4096, 0);
+        let mut input = Vec::new();
+        for col in 0..4096 {
+            input.extend_from_slice(
+                format!("\x1b[3;4:5;38;2;{};2;3;58;2;4;5;6mA", col % 2).as_bytes(),
+            );
+        }
+        terminal.process(&input);
+        let template = terminal.screen().all_rows().next().unwrap().clone();
+        let mut source = Grid::new(Size { rows: 2, cols: 4096 }, 960);
+        for index in 0..960 {
+            let mut row = template.clone();
+            let character = match index {
+                957 => 'X',
+                958 => 'Y',
+                959 => 'Z',
+                _ => 'A',
+            };
+            row.get_mut(0).unwrap().set(character, crate::attrs::Attrs::default());
+            source.scrollback.push_back(row);
+        }
+        let packed = source.encode_history();
+        let expanded = u64::from_le_bytes(packed[4..12].try_into().unwrap());
+        assert!(expanded > 64 * 1024 * 1024);
+        assert_eq!(packed[12], 1);
+        assert!(packed.len() < 16 * 1024 * 1024, "fits a pane journal record");
+        let mut restored = Grid::new(Size { rows: 2, cols: 4096 }, 3);
+        assert!(restored.restore_history(&packed));
+        let check_tail = |grid: &Grid| {
+            let rows: Vec<_> = grid.scrollback.iter().collect();
+            assert_eq!(rows.len(), 3);
+            for (row, expected) in rows.iter().zip(["X", "Y", "Z"]) {
+                assert_eq!(row.get(0).unwrap().contents(), expected);
+                let styled = row.get(1).unwrap();
+                assert!(styled.italic());
+                assert_eq!(styled.underline_style(), crate::UnderlineStyle::Dashed);
+                assert_eq!(styled.fgcolor(), crate::Color::Rgb(1, 2, 3));
+                assert_eq!(styled.underline_color(), crate::Color::Rgb(4, 5, 6));
+            }
+        };
+        check_tail(&restored);
+        // A late truncated frame must not install the successfully decoded prefix.
+        assert!(!restored.restore_history(&packed[..packed.len() - 1]));
+        check_tail(&restored);
+        let mut forged = packed.clone();
+        forged[4..12].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(!restored.restore_history(&forged));
+        check_tail(&restored);
+
+        let raw = zstd::bulk::decompress(&packed[13..], expanded as usize).unwrap();
+        let mut uncompressed = packed[..13].to_vec();
+        uncompressed[12] = 0;
+        uncompressed.extend_from_slice(&raw);
+        assert!(restored.restore_history(&uncompressed));
+        check_tail(&restored);
+    }
 }
