@@ -10,7 +10,7 @@ use std::{
 use super::*;
 use crate::{
     frame::ColorDepth,
-    protocol::{ClientMessage, MuxCommand, ServerMessage, read_message},
+    protocol::{ClientMessage, Hello, Mouse, MouseButton, MouseKind, MuxCommand, ServerMessage, read_message},
 };
 
 struct Session {
@@ -77,6 +77,10 @@ impl Session {
         fs::write(&path, bytes).unwrap();
         let command = format!("stty -echo; cat '{}'\r", path.display());
         self.pane().writer.send(command.as_bytes()).unwrap();
+        self.wait_output(marker);
+    }
+
+    fn wait_output(&mut self, marker: &str) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !self.pane().parser.screen().contents().contains(marker) {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -102,25 +106,7 @@ impl Session {
     /// terminal contents so missed incremental clears are observable.
     fn capture(&mut self) -> &vt100::Screen {
         self.server.render_all();
-        loop {
-            match read_message::<ServerMessage>(&mut self.client) {
-                Ok(Some(ServerMessage::Render(bytes))) => self.terminal.process(&bytes),
-                Ok(Some(ServerMessage::Error(error))) => panic!("render failed: {error}"),
-                Ok(Some(_)) => {}
-                Ok(None) => panic!("client disconnected"),
-                Err(error)
-                    if error.downcast_ref::<std::io::Error>().is_some_and(|error| {
-                        matches!(
-                            error.kind(),
-                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                        )
-                    }) =>
-                {
-                    break;
-                }
-                Err(error) => panic!("read client frame: {error:#}"),
-            }
-        }
+        read_render(&mut self.client, &mut self.terminal);
         self.terminal.screen()
     }
 
@@ -142,6 +128,56 @@ impl Session {
         }
     }
 }
+
+struct Peer {
+    client: UnixStream,
+    terminal: vt100::Parser,
+}
+
+impl Peer {
+    fn attach(session: &mut Session, rows: u16, cols: u16) -> Self {
+        let (writer, client) = UnixStream::pair().unwrap();
+        session.server.handle_event(Event::Connected(2, writer)).unwrap();
+        let settings = crate::config::Settings::default();
+        session.server.handle_event(Event::Client(2, ClientMessage::Hello(Box::new(Hello {
+            rows, cols, cwd: session.directory.clone(), session: Some("before".into()),
+            bindings: settings.bindings, clipboard_command: settings.clipboard_command,
+            terminal_clipboard: false, theme: settings.theme, theme_command: settings.theme_command,
+            theme_directory: settings.theme_directory, mouse: true, bell_style: settings.bell_style,
+            truecolor: true, default_cursor_shape: settings.default_cursor_shape,
+        })))).unwrap();
+        client.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+        Self { client, terminal: vt100::Parser::new(rows, cols, 0) }
+    }
+
+    fn capture(&mut self, server: &mut Server) -> &vt100::Screen {
+        server.render_all();
+        read_render(&mut self.client, &mut self.terminal);
+        self.terminal.screen()
+    }
+}
+
+fn read_render(client: &mut UnixStream, terminal: &mut vt100::Parser) {
+        loop {
+            match read_message::<ServerMessage>(client) {
+                Ok(Some(ServerMessage::Render(bytes))) => terminal.process(&bytes),
+                Ok(Some(ServerMessage::Error(error))) => panic!("render failed: {error}"),
+                Ok(Some(_)) => {}
+                Ok(None) => panic!("client disconnected"),
+                Err(error)
+                    if error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                        matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        )
+                    }) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("read client frame: {error:#}"),
+            }
+        }
+ }
 
 impl Drop for Session {
     fn drop(&mut self) {
@@ -490,4 +526,142 @@ fn tree_selection_survives_exit(expanded: bool) {
     );
     let row = if expanded { 4 } else { 1 };
     assert_eq!(screen.cell(row, 0).unwrap().bgcolor(), selected_background);
+}
+
+#[test]
+fn mouse_clicks_follow_the_visible_sidebar_after_narrow_resize() {
+    let mut session = Session::new();
+    session.server.clients.get_mut(&1).unwrap().mouse = true;
+    session.output(b"\x1bcFIRST", "FIRST");
+    session.command(MuxCommand::NewWindow);
+    session.output(b"\x1bcSECOND", "SECOND");
+    session.command(MuxCommand::NewWindow);
+    session.output(b"\x1bcTHIRD", "THIRD");
+    session.server.handle_event(Event::Client(1, ClientMessage::Resize { rows: 7, cols: 40 })).unwrap();
+    session.terminal.screen_mut().set_size(7, 40);
+    assert_eq!(session.capture().cell(2, 1).unwrap().contents(), "•");
+    session.server.handle_event(Event::Client(1, ClientMessage::Mouse(Mouse {
+        kind: MouseKind::Down, button: MouseButton::Left, row: 2, col: 1, modifiers: 0,
+    }))).unwrap();
+    assert!(session.capture().contents().contains("THIRD"), "clicking the displayed current window must keep its PTY");
+    // The mode tile owns its row and must not select an offscreen window.
+    session.server.handle_event(Event::Client(1, ClientMessage::Mouse(Mouse {
+        kind: MouseKind::Down, button: MouseButton::Left, row: 0, col: 1, modifiers: 0,
+    }))).unwrap();
+    assert!(session.capture().contents().contains("THIRD"));
+}
+
+#[test]
+fn two_clients_observe_shared_windows_but_keep_independent_history_viewports() {
+    let mut session = Session::new();
+    let mut peer = Peer::attach(&mut session, 8, 20);
+    session.server.clients.get_mut(&1).unwrap().mouse = true;
+    let mut lines = b"\x1bc".to_vec();
+    for line in 0..30 {
+        lines.extend_from_slice(format!("LINE-{line:02}\r\n").as_bytes());
+    }
+    lines.extend_from_slice(b"LIVE-END");
+    session.output(&lines, "LIVE-END");
+    assert!(session.capture().contents().contains("LIVE-END"));
+    assert!(peer.capture(&mut session.server).contents().contains("LIVE-END"));
+    // Confirm the actual PTY geometry, rather than just the parser's geometry.
+    let size = session.directory.join("pty-size");
+    let marker = session.directory.join("size-ready");
+    fs::write(&marker, b"SIZE-READY").unwrap();
+    session.pane().writer.send(format!("stty size > '{}'; cat '{}'\r", size.display(), marker.display()).as_bytes()).unwrap();
+    session.wait_output("SIZE-READY");
+    assert_eq!(fs::read_to_string(&size).unwrap().trim(), "8 17");
+    session.server.handle_event(Event::Client(1, ClientMessage::Mouse(Mouse {
+        kind: MouseKind::ScrollUp, button: MouseButton::Left, row: 3, col: 8, modifiers: 0,
+    }))).unwrap();
+    assert!(!session.capture().contents().contains("LIVE-END"));
+    assert!(peer.capture(&mut session.server).contents().contains("LIVE-END"));
+    session.server.handle_event(Event::Client(2, ClientMessage::Resize { rows: 6, cols: 18 })).unwrap();
+    peer.terminal.screen_mut().set_size(6, 18);
+    // A peer's resize must not force this client's private history view live.
+    assert!(!session.capture().contents().contains("LIVE-END"));
+    for _ in 0..20 {
+        session.server.handle_event(Event::Client(1, ClientMessage::Mouse(Mouse {
+            kind: MouseKind::ScrollDown, button: MouseButton::Left, row: 3, col: 8, modifiers: 0,
+        }))).unwrap();
+    }
+    assert!(session.capture().contents().contains("LIVE-END"));
+    session.command(MuxCommand::NewWindow);
+    session.output(b"\x1bcSHARED-SECOND", "SHARED-SECOND");
+    assert!(session.capture().contents().contains("SHARED-SECOND"));
+    assert!(peer.capture(&mut session.server).contents().contains("SHARED-SECOND"));
+    session.server.handle_event(Event::Client(2, ClientMessage::Command {
+        pane_id: None, command: MuxCommand::SelectWindow(1),
+    })).unwrap();
+    assert!(session.capture().contents().contains("LIVE-END"));
+    assert!(peer.capture(&mut session.server).contents().contains("LIVE-END"));
+    assert_eq!(session.capture().cell(3, 1).unwrap().contents(), "•");
+    assert_eq!(peer.capture(&mut session.server).cell(1, 1).unwrap().contents(), "•");
+}
+
+#[test]
+fn real_pty_mouse_reports_are_local_to_the_clicked_split_and_popups_consume_clicks() {
+    let mut session = Session::new();
+    session.server.clients.get_mut(&1).unwrap().mouse = true;
+    session.output(b"\x1bcLEFT-PANE", "LEFT-PANE");
+    session.command(MuxCommand::SplitVertical);
+    session.pane().writer.send(b"exec /bin/sh\r").unwrap();
+    session.output(b"\x1bcRIGHT-PANE", "RIGHT-PANE");
+    // At 40 columns: a 3-column bar, 18 left cells, one divider, 18 right cells.
+    assert!(session.capture().contents().contains("LEFT-PANE"));
+    assert!(session.capture().contents().contains("RIGHT-PANE"));
+    let setup = session.directory.join("mouse-setup");
+    let done = session.directory.join("mouse-done");
+    let captured = session.directory.join("mouse-input");
+    fs::write(&setup, b"\x1b[?1002h\x1b[?1006h\r\nMOUSE-READY").unwrap();
+    fs::write(&done, b"\x1b[?1002l\x1b[?1006l\r\nMOUSE-DONE").unwrap();
+    let expected = b"\x1b[<0;3;4M\x1b[<32;4;5M\x1b[<0;4;5m\x1b[<64;3;4M";
+    session.pane().writer.send(format!("stty raw -echo; cat '{}'; dd bs=1 count={} of='{}' 2>/dev/null; stty -raw -echo; cat '{}'\r", setup.display(), expected.len(), captured.display(), done.display()).as_bytes()).unwrap();
+    session.wait_output("MOUSE-READY");
+    let click = Mouse { kind: MouseKind::Down, button: MouseButton::Left, row: 3, col: 24, modifiers: 0 };
+    session.command(MuxCommand::ChooseTree);
+    session.server.handle_event(Event::Client(1, ClientMessage::Mouse(click))).unwrap();
+    session.server.handle_key(1, crate::protocol::parse_for_test("Escape")).unwrap();
+    for event in [click, Mouse { kind: MouseKind::Drag, row: 4, col: 25, ..click }, Mouse { kind: MouseKind::Up, row: 4, col: 25, ..click }, Mouse { kind: MouseKind::ScrollUp, ..click }] {
+        session.server.handle_event(Event::Client(1, ClientMessage::Mouse(event))).unwrap();
+    }
+    session.wait_output("MOUSE-DONE");
+    assert_eq!(fs::read(&captured).unwrap(), expected);
+    assert!(session.capture().contents().contains("LEFT-PANE"));
+    // With reporting disabled, a click selects the other pane; it doesn't
+    // send an escape sequence to the shell or alter the right pane's bytes.
+    session.server.handle_event(Event::Client(1, ClientMessage::Mouse(Mouse { col: 5, row: 1, ..click }))).unwrap();
+    assert_eq!(session.pane().parser.screen().rows(0, 9).next().unwrap(), "LEFT-PANE");
+    assert!(session.capture().contents().contains("MOUSE-DONE"));
+}
+
+#[test]
+fn supported_style_transitions_and_active_attributes_survive_journal_compaction() {
+    let mut parser = new_parser(4, 24);
+    parser.process(b"\x1b[1;3;7;38;2;12;34;56;48;2;65;43;21;58;2;9;8;7m\x1b[4:2mD\x1b[4:4mO\x1b[4:5mS\x1b[2;23;27mI\x1b[0mP\x1b[3;4:4;58;2;1;2;3m");
+    let records = compacted_journal_records(parser.screen_mut()).unwrap();
+    let mut restored = new_parser(4, 24);
+    replay_pane_journal(&mut restored, &mut Vec::new(), records.as_slice()).unwrap();
+    let screen = restored.screen();
+    for (col, style) in [(0, vt100::UnderlineStyle::Double), (1, vt100::UnderlineStyle::Dotted), (2, vt100::UnderlineStyle::Dashed)] {
+        let cell = screen.cell(0, col).unwrap();
+        assert!(cell.bold() && cell.italic() && cell.inverse());
+        assert_eq!(cell.fgcolor(), vt100::Color::Rgb(12, 34, 56));
+        assert_eq!(cell.bgcolor(), vt100::Color::Rgb(65, 43, 21));
+        assert_eq!(cell.underline_color(), vt100::Color::Rgb(9, 8, 7));
+        assert_eq!(cell.underline_style(), style);
+    }
+    let dim = screen.cell(0, 3).unwrap();
+    assert!(dim.dim() && !dim.bold() && !dim.italic() && !dim.inverse());
+    let plain = screen.cell(0, 4).unwrap();
+    assert_eq!(plain.underline_style(), vt100::UnderlineStyle::None);
+    assert_eq!(plain.fgcolor(), vt100::Color::Default);
+    restored.process(b"N\x1b[0mZ");
+    let next = restored.screen().cell(0, 5).unwrap();
+    assert_eq!(next.contents(), "N");
+    assert!(next.italic());
+    assert_eq!(next.underline_style(), vt100::UnderlineStyle::Dotted);
+    assert_eq!(next.underline_color(), vt100::Color::Rgb(1, 2, 3));
+    assert_eq!(restored.screen().cell(0, 6).unwrap().contents(), "Z");
+    assert_eq!(restored.screen().cell(0, 6).unwrap().underline_style(), vt100::UnderlineStyle::None);
 }

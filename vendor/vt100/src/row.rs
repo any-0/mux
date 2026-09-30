@@ -332,7 +332,9 @@ impl Row {
         let mut previous_wide = false;
         for run in shape.chunks_exact(2) {
             let length = usize::from(run[1] & crate::cell::LEN_BITS);
-            if run[0] == 0 || length > 22 || run[1] & 0x20 != 0 {
+            if run[0] == 0 || length > 22 || run[1] & 0x20 != 0
+                || count + usize::from(run[0]) > usize::from(cells)
+            {
                 return None;
             }
             for _ in 0..run[0] {
