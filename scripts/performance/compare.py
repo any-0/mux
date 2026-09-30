@@ -31,7 +31,10 @@ a.output.mkdir(parents=True, exist_ok=False)
 roles = {'baseline': a.baseline.resolve(), 'candidate': a.candidate.resolve()}
 revisions = {role: subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
              for role, source in roles.items()}
-manifest = {'revisions': revisions, 'harness_revision': subprocess.check_output(
+binary_sha256 = {role: hashlib.sha256((source / 'target/release/mux').read_bytes()).hexdigest()
+                 for role, source in roles.items()}
+assert binary_sha256['baseline'] != binary_sha256['candidate'], 'Identical binaries cannot measure this runtime change'
+manifest = {'revisions': revisions, 'binary_sha256': binary_sha256, 'harness_revision': subprocess.check_output(
     ['git', '-C', str(a.harness), 'rev-parse', 'HEAD'], text=True).strip(),
     'nixpkgs': os.environ['BENCH_NIXPKGS_REV'], 'seed': 20260930,
     'warmup': 0, 'history_rows_per_pane': 1000 if a.kind == 'interactive' else 10000,

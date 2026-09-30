@@ -22,6 +22,7 @@ assert manifest['nixpkgs'] == '2fc6539b481e1d2569f25f8799236694180c0993'
 assert manifest['harness_revision'] == '406ae9a514ab7e16084f2e623324592c2f491f9a'
 assert manifest['revisions']['baseline'] == 'd6dd228054231e77772bd17a412d8f0d07871835'
 assert manifest['arguments']['kind'] == 'interactive'
+assert manifest['binary_sha256']['baseline'] != manifest['binary_sha256']['candidate']
 trials = manifest['arguments']['trials']
 assert trials >= 20
 raw = list(root.glob('*/*/sample.json'))
@@ -42,6 +43,7 @@ for n in range(trials + 1):
         directory = root / f'{n:03d}-{role}'
         runtime = json.loads((directory / 'runtime.json').read_text())
         assert runtime['revision'] == manifest['revisions'][role]
+        assert runtime['binary_sha256'] == manifest['binary_sha256'][role]
         binaries.setdefault(role, runtime['binary_sha256'])
         assert binaries[role] == runtime['binary_sha256']
         paths = list(directory.glob('*/sample.json'))
