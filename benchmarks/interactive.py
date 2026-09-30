@@ -130,12 +130,18 @@ class Interactive(Recovery):
 
     def bar(self):
         screen=self.client.screen
-        cells=((y,x) for y in range(screen.lines) for x in range(min(5,screen.columns))) if self.variant=='mux' else ((screen.lines-1,x) for x in range(screen.columns))
+        cells=((y,x) for y in range(2,screen.lines) for x in range(min(5,screen.columns))) if self.variant=='mux' else ((screen.lines-1,x) for x in range(screen.columns))
         return [tuple(screen.buffer[y][x]) for y,x in cells]
 
     def selected_window(self):
         window=next(w for w in self.windows() if w['active'])
         return window.get('id',window.get('index'))
+
+    def visible_selected_window(self, number, count, name):
+        if self.variant=='mux':
+            row=(38-count*3)//2+(number-1)*3+2
+            return self.client.screen.buffer[row][2].data=='•'
+        return f'{number}:{name}*' in self.client.screen.display[-1]
 
     def count_gate(self, expected):
         panes = self.panes()
@@ -146,7 +152,7 @@ class Interactive(Recovery):
 def exercise(variant, trial, windows, pane_count, load, output, history_rows):
     r=Interactive(variant, output / f'w{windows}-p{pane_count}-{load}-{trial:03d}-{variant}')
     result={'variant': variant, 'trial': trial, 'windows': windows, 'panes_per_window':pane_count,
-            'load':load, 'correct':False, 'history_rows_per_pane':history_rows}
+            'load':load, 'correct':False, 'started_ns':time.perf_counter_ns(), 'history_rows_per_pane':history_rows}
     try:
         r.launch()
         first=r.panes()[0]
@@ -257,15 +263,17 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.window(scratch)
         # Swap into previous slot; visible sidebar/status index is checked post endpoint.
         before=r.bar();old_index=r.selected_window()
+        count=len(r.windows());selected=next(w for w in r.windows() if w['active'])
+        name=selected.get('name',selected.get('label','fixture'))
         def moved_left():
             assert r.selected_window()==old_index-1
             return r.windows()
-        r.action('reorder_window_left',b'\x1ba<',lambda:r.bar()!=before,moved_left)
+        r.action('reorder_window_left',b'\x1ba<',lambda:r.visible_selected_window(old_index-1,count,name),moved_left)
         before=r.bar()
         def moved_right():
             assert r.selected_window()==old_index
             return r.windows()
-        r.action('reorder_window_right',b'\x1ba>',lambda:r.bar()!=before,moved_right)
+        r.action('reorder_window_right',b'\x1ba>',lambda:r.visible_selected_window(old_index,count,name),moved_right)
         # New session lifecycle and previous-session switching.
         r.action('create_session',b'\x1bT',lambda:r.client.contains('BENCH_READY>'))
         r.shell_marker('SECOND_SESSION',history_rows)
@@ -289,7 +297,7 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         # Search a retained record far outside the live viewport.
         before=list(r.client.screen.display)
         r.action('enter_copy_mode',b'\x1bw',lambda:r.client.screen.display!=before)
-        r.action('history_search_backward',b'?SCRATCH-H00010\r',lambda:r.client.contains('SCRATCH-H00010'))
+        r.action('history_search_backward',b'?SCRATCH-H00010\r',lambda:r.client.contains('SCRATCH-H00010 '+'x'*12))
         before=list(r.client.screen.display)
         r.action('history_top',b'gg' if variant=='mux' else b'g',lambda:r.client.contains('SCRATCH-H00000'))
         x=r.client.screen.cursor.x;y=r.client.screen.cursor.y
@@ -322,6 +330,7 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         result['measurements']=r.measurements
         try:r.cleanup()
         except Exception as error:result['cleanup_error']=str(error);result['correct']=False
+        result['ended_ns']=time.perf_counter_ns()
         (r.directory/'sample.json').write_text(json.dumps(result,indent=2))
     return result
 
