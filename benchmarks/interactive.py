@@ -11,7 +11,7 @@ import subprocess
 import time
 import traceback
 
-from run import Terminal, ROOT, SOURCE_ROOT, SOURCE_COMMIT, command, resource_sample
+from run import Terminal, ROOT, SOURCE_ROOT, SOURCE_COMMIT, command, resource_sample, storage
 from recovery import Recovery
 from audit_hosted import stats
 
@@ -24,6 +24,8 @@ class Interactive(Recovery):
         super().__init__(variant, directory)
         self.measurements = []
         self.attach_number = 0
+        if variant == 'mux':
+            with self.config.open('a') as f:f.write('bell_style = \"steady\"\n')
         if variant != 'mux':
             bindings = ['set -g detach-on-destroy off', 'bind -n M-a switch-client -T bench',
                         'bind -n M-t new-window', 'bind -n M-T new-session',
@@ -34,10 +36,12 @@ class Interactive(Recovery):
                         'bind -T copy-mode-vi G send-keys -X history-bottom',
                         'bind -T copy-mode-vi Escape send-keys -X cancel',
                         'bind -T copy-mode-vi q send-keys -X cancel',
+                        'bind -T copy-mode-vi C-g send-keys -X clear-selection',
                         'bind -T bench - split-window -v -l 50%', 'bind -T bench | split-window -h -l 50%',
                         'bind -T bench x confirm-before -p "kill pane?" kill-pane', 'bind -T bench ! break-pane',
                         'bind -T bench > swap-window -d -t +1', 'bind -T bench < swap-window -d -t -1',
                         'bind -T bench d detach-client',
+                        'bind -T bench b next-window -a',
                         'bind -T bench K confirm-before -p "kill session?" kill-session',
                         'bind -T bench , command-prompt -p "rename window:" "rename-window %%"',
                         'bind -T bench $ command-prompt -p "rename session:" "rename-session %%"',
@@ -99,10 +103,11 @@ class Interactive(Recovery):
         # A lone Escape requires the input decoder's disambiguation window.
         self.client.drain(0.06 if data==b'\x1b' else 0.02)
 
-    def action(self, name, data, predicate, check=None, terminal=None):
+    def action(self, name, data, predicate, check=None, terminal=None, style_probe=None):
         t = terminal or self.client
         t.drain(0.02)
         before = list(t.screen.display)
+        style_before=style_probe() if style_probe else None
         # Reject a pre-satisfied gate: the endpoint must observe a transition.
         if predicate():
             raise RuntimeError(name + ': visible gate already true before input')
@@ -113,6 +118,8 @@ class Interactive(Recovery):
                     'latency_ms': (end-start)/1e6, 'input_hex': data.hex(),
                     'before': before, 'after': list(t.screen.display),
                     'cursor_after': [t.screen.cursor.x, t.screen.cursor.y]}
+        if style_probe:
+            evidence['style_before']=style_before;evidence['style_after']=style_probe()
         cpu_after = resource_sample([self.server, self.client.process.pid])
         evidence['cpu_ticks_delta_lower_bound'] = cpu_after['cpu_ticks']-cpu_before['cpu_ticks']
         evidence['post_resource'] = cpu_after
@@ -206,8 +213,18 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
             panes=r.panes()
             assert len(panes)==pane_count
             for p in panes:
-                r.choose(p);label=f'W{w:02d}P{p["index"]:02d}'
+                # mux appends created panes; tmux reindexes layout order.
+                # Normalize the declared split grid by visible logical slot.
+                p['benchmark_index']=({1:1,4:2,2:3,3:4}[p['index']] if variant=='mux' and pane_count==4 else p['index'])
+                r.choose(p);label=f'W{w:02d}P{p["benchmark_index"]:02d}'
                 r.shell_marker(label,history_rows)
+                offset=r.columns-100 if variant=='mux' else 0
+                positions=[(y,line.index(label+'>')-offset) for y,line in enumerate(r.client.screen.display) if label+'>' in line]
+                assert len(positions)==1,(label,positions)
+                slot=p['benchmark_index']
+                expected=((18 if slot<=2 else 39),(0 if slot%2 else 50)) if pane_count==4 else ((18 if slot==1 else 39),0) if pane_count==2 else (39,0)
+                assert positions[0]==expected,(label,positions,expected)
+                p['visible_prompt_position']=positions[0]
                 # Full seed history is an untimed equivalence gate.
                 if variant=='mux':
                     if r.capture.exists():r.capture.unlink()
@@ -228,11 +245,19 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
             script="import sys,time; i=0\nwhile True:\n sys.stdout.write('\\033[H'+('LOAD%08d'%i+'x'*60+'\\n')*5);sys.stdout.flush();i+=1;time.sleep(.02)"
             r.client.input(('python3 -u -c '+shlex.quote(script)+'\n').encode());r.client.drain(0.02)
         r.window(1);panes=r.panes();r.choose(panes[0])
-        labels=[f'W01P{p["index"]:02d}>' for p in panes]
+        labels=[f'W01P{i:02d}>' for i in range(1,pane_count+1)]
         r.client.until(lambda:all(r.client.contains(x) for x in labels))
         result['fixture']=fixture
         result['outer_columns']=r.columns
         result['resource_before']=resource_sample([r.server,r.client.process.pid])
+        cpu_start=time.perf_counter_ns();cpu_before=resource_sample([r.server,r.client.process.pid])
+        r.client.drain(3)
+        cpu_after=resource_sample([r.server,r.client.process.pid]);cpu_end=time.perf_counter_ns()
+        result['profile_cpu']={'window_seconds':(cpu_end-cpu_start)/1e9,
+            'ticks_before':cpu_before['cpu_ticks'],'ticks_after':cpu_after['cpu_ticks'],
+            'clock_ticks_per_second':os.sysconf('SC_CLK_TCK'),
+            'percent_one_cpu_lower_bound':100*(cpu_after['cpu_ticks']-cpu_before['cpu_ticks'])/os.sysconf('SC_CLK_TCK')/((cpu_end-cpu_start)/1e9)}
+        result['state_storage_after_profile']=storage(r.state)
         # Startup with retained, populated, matched window/pane layout = attach.
         r.client.close();r.client=None
         r.attach('populated_attach_startup',labels)
@@ -241,6 +266,20 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         scratch=len(r.windows());r.shell_marker('SCRATCH',history_rows)
         r.action('switch_window',b'\x1b1',lambda:all(r.client.contains(x) for x in labels))
         r.action('switch_window_back',f'\x1b{scratch}'.encode(),lambda:r.client.contains('SCRATCH>'))
+        # Exactly one actual pending bell in a matched background shell.
+        # Preparation is untimed; only navigation input to that shell is timed.
+        r.cli('new-window');bell_window=len(r.windows());r.shell_marker('BELL',history_rows)
+        r.client.input(('python3 -c '+shlex.quote("import time;time.sleep(.2);print(chr(7))")+'\n').encode())
+        r.window(scratch);r.client.until(lambda:r.client.contains('SCRATCH>'))
+        bar_before=r.bar()
+        if variant=='mux':
+            r.client.until(lambda:r.bar()!=bar_before)
+        else:
+            r.wait(lambda:r.cli('display-message','-p','-t',f':{bell_window}','#{window_bell_flag}')=='1')
+        r.action('navigate_pending_bell',b'\x1bab',lambda:r.client.contains('BELL>') and not r.client.contains('SCRATCH>'),lambda:r.windows())
+        assert r.selected_window()==bell_window
+        r.keys(b'\x1bax');r.keys(b'y')
+        r.client.until(lambda:r.client.contains('SCRATCH>') and not r.client.contains('BELL>'))
         # Two split orientations, full lifecycle, directional focus and zoom.
         for orientation,key in [('vertical',b'-'),('horizontal',b'|')]:
             r.action('split_'+orientation,b'\x1ba'+key,lambda:r.client.contains('BENCH_READY>'),lambda:r.count_gate(2))
@@ -386,6 +425,21 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.action('copy_cursor_left',b'h',lambda:r.client.screen.cursor.x==x and r.client.screen.cursor.y==y)
         before=(r.client.screen.cursor.x,r.client.screen.cursor.y)
         r.action('copy_big_word_forward',b'W',lambda:r.client.screen.cursor.x==x+15 and r.client.screen.cursor.y==y)
+        # Same target character, distinct prepared native find-key states.
+        r.keys(b'0');r.keys(b'f')
+        r.action('copy_find_character_commit',b'x',lambda:r.client.screen.cursor.x==x+15 and r.client.screen.cursor.y==y)
+        r.keys(b'0')
+        selected_x=r.client.screen.cursor.x;selected_y=r.client.screen.cursor.y
+        original=tuple(r.client.screen.buffer[selected_y][selected_x])
+        following=tuple(r.client.screen.buffer[selected_y][selected_x+1])
+        probe=lambda:tuple(r.client.screen.buffer[selected_y][selected_x])
+        r.action('begin_character_selection',b'v' if variant=='mux' else b' ',
+            lambda:probe()!=original,style_probe=probe)
+        next_probe=lambda:tuple(r.client.screen.buffer[selected_y][selected_x+1])
+        r.action('extend_character_selection',b'l',
+            lambda:r.client.screen.cursor.x==selected_x+1 and next_probe()!=following,style_probe=next_probe)
+        r.action('cancel_character_selection',b'\x1b' if variant=='mux' else b'\x07',
+            lambda:probe()==original and next_probe()==following,style_probe=probe)
         # Selection and receipt have explicit distinct endpoint labels.
         r.keys(b'0');r.keys(b'V')
         if r.capture.exists():r.capture.unlink()
@@ -393,6 +447,15 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         copied=r.capture.read_text();assert copied.rstrip()=='SCRATCH-H00000 '+'x'*12,copied
         r.measurements[-1]['clipboard_text']=copied
         r.keys(b'\x1bw');r.keys(b'gg' if variant=='mux' else b'g')
+        # A ten-record query has deterministic next/previous matches, even
+        # when native setup command history differs outside tagged payload.
+        r.keys(b'/')
+        r.client.until(lambda:r.client.contains('/') if variant=='mux' else r.client.contains('(search down)'))
+        def cursor_record(record):
+            return f'SCRATCH-H{record:05d} '+ 'x'*12 in r.client.screen.display[r.client.screen.cursor.y]
+        r.action('history_search_forward_commit',b'SCRATCH-H0010\r',lambda:cursor_record(100))
+        r.action('history_search_next_match',b'n',lambda:cursor_record(101))
+        r.action('history_search_previous_match',b'N',lambda:cursor_record(100))
         r.action('history_bottom',b'G',lambda:r.client.contains('SCRATCH>') and not r.client.contains('SCRATCH-H00000'))
         import re
         r.action('exit_copy_mode',b'\x1b' if variant=='mux' else b'q',
@@ -421,6 +484,8 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--output',type=Path,required=True)
     p.add_argument('--trials',type=int,default=20);p.add_argument('--smoke',action='store_true')
+    p.add_argument('--windows',type=int,choices=(1,3,6))
+    p.add_argument('--load',choices=('idle','busy'))
     a=p.parse_args()
     assert os.environ.get('BENCH_NIXPKGS_REV') and command(['git','-C',str(SOURCE_ROOT),'rev-parse','HEAD'])==SOURCE_COMMIT
     assert a.smoke or a.trials>=20
@@ -436,9 +501,10 @@ def main():
     (a.output/'environment.json').write_text(json.dumps(env,indent=2))
     with (a.output/'build.log').open('w') as log:subprocess.run(['cargo','build','--locked','--release'],cwd=SOURCE_ROOT,stdout=log,stderr=subprocess.STDOUT,check=True)
     samples=[];rng=random.Random(20260930)
-    scales=SCALES
+    scales=tuple(scale for scale in SCALES if a.windows is None or scale[0]==a.windows)
+    loads=(a.load,) if a.load else ('idle','busy')
     for w,panes in scales:
-        for load in ('idle','busy'):
+        for load in loads:
             for n in range(1 if a.smoke else a.trials+1):
                 variants=list(VARIANTS);rng.shuffle(variants)
                 for v in variants:
@@ -446,9 +512,16 @@ def main():
                     print(w,panes,load,n,v,'PASS' if s['correct'] else s.get('error'),flush=True)
                     if a.smoke and not s['correct']:
                         raise SystemExit('Correctness preflight failed; inspect retained sample.json')
+    for w,panes in scales:
+        for load in loads:
+            fixture=None
+            for sample in [s for s in samples if s['windows']==w and s['load']==load]:
+                normalized=[sorted((p.get('benchmark_index',p['index']),p['cols'],p['rows'],p['history_sha256']) for p in window['panes']) for window in sample['fixture']]
+                if fixture is None:fixture=normalized
+                assert fixture==normalized,('Unequal paired fixture',w,panes,load,sample['variant'])
     summary={}
     for w,panes in scales:
-        for load in ('idle','busy'):
+        for load in loads:
             for v in VARIANTS:
                 selected=[s for s in samples if s['windows']==w and s['load']==load and s['variant']==v]
                 key=f'w{w}-p{panes}/{load}/{v}'
