@@ -1,0 +1,901 @@
+{
+  "audit": "passed",
+  "scope": {
+    "scales": [
+      [
+        3,
+        2
+      ]
+    ],
+    "loads": [
+      "idle"
+    ]
+  },
+  "measured_trials": 60,
+  "warmups_excluded": 3,
+  "operations_per_trial": 53,
+  "comparisons": {
+    "w3-p2/idle/mux": {
+      "operations": {
+        "break_pane": {
+          "n": 20,
+          "median": 13.7522175,
+          "p95": 13.867775
+        },
+        "cancel_character_selection": {
+          "n": 20,
+          "median": 0.6516445,
+          "p95": 0.764273
+        },
+        "commit_session_rename": {
+          "n": 20,
+          "median": 10.788447000000001,
+          "p95": 11.120052
+        },
+        "commit_window_rename": {
+          "n": 20,
+          "median": 10.719664,
+          "p95": 10.86255
+        },
+        "copy_big_word_forward": {
+          "n": 20,
+          "median": 1.287229,
+          "p95": 1.472213
+        },
+        "copy_cursor_left": {
+          "n": 20,
+          "median": 0.6816395,
+          "p95": 0.799438
+        },
+        "copy_cursor_right": {
+          "n": 20,
+          "median": 0.7060065,
+          "p95": 0.783113
+        },
+        "copy_find_character_commit": {
+          "n": 20,
+          "median": 0.7236834999999999,
+          "p95": 0.79443
+        },
+        "create_session": {
+          "n": 20,
+          "median": 12.0575425,
+          "p95": 12.269753
+        },
+        "create_window": {
+          "n": 20,
+          "median": 12.155362,
+          "p95": 20.149659
+        },
+        "delete_pane_horizontal": {
+          "n": 20,
+          "median": 57.914862,
+          "p95": 58.306065
+        },
+        "delete_pane_vertical": {
+          "n": 20,
+          "median": 54.313541,
+          "p95": 55.551723
+        },
+        "delete_session": {
+          "n": 20,
+          "median": 63.1735485,
+          "p95": 66.436321
+        },
+        "delete_window": {
+          "n": 20,
+          "median": 54.873574000000005,
+          "p95": 56.315188
+        },
+        "detach_client_exit": {
+          "n": 20,
+          "median": 1.1117535,
+          "p95": 1.116116
+        },
+        "enter_copy_mode": {
+          "n": 20,
+          "median": 1.053126,
+          "p95": 1.106491
+        },
+        "exit_copy_mode": {
+          "n": 20,
+          "median": 1.0587575,
+          "p95": 1.127192
+        },
+        "extend_character_selection": {
+          "n": 20,
+          "median": 0.6752994999999999,
+          "p95": 0.812547
+        },
+        "focus_horizontal": {
+          "n": 20,
+          "median": 9.4540375,
+          "p95": 9.538226
+        },
+        "focus_horizontal_back": {
+          "n": 20,
+          "median": 9.445024,
+          "p95": 9.594741
+        },
+        "focus_vertical": {
+          "n": 20,
+          "median": 9.3780435,
+          "p95": 9.500236
+        },
+        "focus_vertical_back": {
+          "n": 20,
+          "median": 9.370844,
+          "p95": 9.464632
+        },
+        "history_bottom": {
+          "n": 20,
+          "median": 3.410189,
+          "p95": 3.620086
+        },
+        "history_search_backward_commit": {
+          "n": 20,
+          "median": 14.833858,
+          "p95": 16.93483
+        },
+        "history_search_forward_commit": {
+          "n": 20,
+          "median": 13.662265999999999,
+          "p95": 15.8776
+        },
+        "history_search_next_match": {
+          "n": 20,
+          "median": 2.3164315,
+          "p95": 3.200423
+        },
+        "history_search_previous_match": {
+          "n": 20,
+          "median": 2.065595,
+          "p95": 2.448838
+        },
+        "history_top": {
+          "n": 20,
+          "median": 10.2186205,
+          "p95": 10.459205
+        },
+        "join_pane_command_to_viewport": {
+          "n": 20,
+          "median": 7.0866435,
+          "p95": 7.544465
+        },
+        "navigate_pending_bell": {
+          "n": 20,
+          "median": 12.8083135,
+          "p95": 12.989689
+        },
+        "open_session_rename": {
+          "n": 20,
+          "median": 10.506137500000001,
+          "p95": 11.091027
+        },
+        "open_window_rename": {
+          "n": 20,
+          "median": 10.516496,
+          "p95": 10.719241
+        },
+        "populated_attach_startup": {
+          "n": 20,
+          "median": 20.13282,
+          "p95": 30.087899
+        },
+        "reattach": {
+          "n": 20,
+          "median": 20.4830215,
+          "p95": 57.891879
+        },
+        "reorder_window_left": {
+          "n": 20,
+          "median": 9.538539,
+          "p95": 9.651354
+        },
+        "reorder_window_right": {
+          "n": 20,
+          "median": 9.531558,
+          "p95": 9.681465
+        },
+        "resize_horizontal": {
+          "n": 20,
+          "median": 10.706224500000001,
+          "p95": 11.319924
+        },
+        "resize_vertical": {
+          "n": 20,
+          "median": 9.3166225,
+          "p95": 9.361467
+        },
+        "second_client_attach": {
+          "n": 20,
+          "median": 18.590339,
+          "p95": 24.230216
+        },
+        "select_two_characters": {
+          "n": 20,
+          "median": 8.953959000000001,
+          "p95": 9.123578
+        },
+        "split_for_break": {
+          "n": 20,
+          "median": 18.001524000000003,
+          "p95": 18.323935
+        },
+        "split_horizontal": {
+          "n": 20,
+          "median": 18.0530125,
+          "p95": 18.27151
+        },
+        "split_vertical": {
+          "n": 20,
+          "median": 18.0549755,
+          "p95": 18.242255
+        },
+        "switch_session": {
+          "n": 20,
+          "median": 15.1641045,
+          "p95": 15.522378
+        },
+        "switch_session_back": {
+          "n": 20,
+          "median": 19.944750499999998,
+          "p95": 21.698055
+        },
+        "switch_window": {
+          "n": 20,
+          "median": 4.642497,
+          "p95": 4.777328
+        },
+        "switch_window_back": {
+          "n": 20,
+          "median": 3.7475765,
+          "p95": 3.905017
+        },
+        "terminal_resize_viewport": {
+          "n": 20,
+          "median": 12.271726000000001,
+          "p95": 17.648348
+        },
+        "unzoom_horizontal": {
+          "n": 20,
+          "median": 10.5548575,
+          "p95": 10.873741
+        },
+        "unzoom_vertical": {
+          "n": 20,
+          "median": 10.08169,
+          "p95": 11.405234
+        },
+        "yank_line_clipboard_receipt": {
+          "n": 20,
+          "median": 9.693501999999999,
+          "p95": 10.022586
+        },
+        "zoom_horizontal": {
+          "n": 20,
+          "median": 9.163911500000001,
+          "p95": 9.483924
+        },
+        "zoom_vertical": {
+          "n": 20,
+          "median": 8.606113,
+          "p95": 8.964626
+        }
+      },
+      "pss_kib": {
+        "n": 20,
+        "median": 17053.0,
+        "p95": 17079
+      },
+      "rss_kib": {
+        "n": 20,
+        "median": 46762.0,
+        "p95": 46788
+      },
+      "observed_state_logical_bytes": {
+        "n": 20,
+        "median": 205725.0,
+        "p95": 206255
+      },
+      "observed_state_allocated_bytes": {
+        "n": 20,
+        "median": 225280.0,
+        "p95": 233472
+      },
+      "profile_cpu_percent_one_cpu_lower_bound": {
+        "n": 20,
+        "median": 8.443931437284547,
+        "p95": 8.620444801384497
+      }
+    },
+    "w3-p2/idle/tmux": {
+      "operations": {
+        "break_pane": {
+          "n": 20,
+          "median": 5.4107705,
+          "p95": 5.671191
+        },
+        "cancel_character_selection": {
+          "n": 20,
+          "median": 0.9799955,
+          "p95": 1.11272
+        },
+        "commit_session_rename": {
+          "n": 20,
+          "median": 3.173959,
+          "p95": 3.32607
+        },
+        "commit_window_rename": {
+          "n": 20,
+          "median": 3.232213,
+          "p95": 3.390921
+        },
+        "copy_big_word_forward": {
+          "n": 20,
+          "median": 1.0145985,
+          "p95": 1.184779
+        },
+        "copy_cursor_left": {
+          "n": 20,
+          "median": 0.9561795,
+          "p95": 1.118059
+        },
+        "copy_cursor_right": {
+          "n": 20,
+          "median": 0.9806765,
+          "p95": 1.110397
+        },
+        "copy_find_character_commit": {
+          "n": 20,
+          "median": 3.538908,
+          "p95": 3.633828
+        },
+        "create_session": {
+          "n": 20,
+          "median": 8.723273500000001,
+          "p95": 9.468428
+        },
+        "create_window": {
+          "n": 20,
+          "median": 9.022031,
+          "p95": 9.26546
+        },
+        "delete_pane_horizontal": {
+          "n": 20,
+          "median": 4.0457345,
+          "p95": 4.186033
+        },
+        "delete_pane_vertical": {
+          "n": 20,
+          "median": 3.9111944999999997,
+          "p95": 4.153986
+        },
+        "delete_session": {
+          "n": 20,
+          "median": 3.2786795,
+          "p95": 3.428418
+        },
+        "delete_window": {
+          "n": 20,
+          "median": 4.0300265,
+          "p95": 4.19214
+        },
+        "detach_client_exit": {
+          "n": 20,
+          "median": 1.1117445,
+          "p95": 1.118337
+        },
+        "enter_copy_mode": {
+          "n": 20,
+          "median": 4.1565335,
+          "p95": 4.649743
+        },
+        "exit_copy_mode": {
+          "n": 20,
+          "median": 3.708369,
+          "p95": 3.98566
+        },
+        "extend_character_selection": {
+          "n": 20,
+          "median": 0.30810550000000003,
+          "p95": 0.371361
+        },
+        "focus_horizontal": {
+          "n": 20,
+          "median": 1.1390855,
+          "p95": 1.205731
+        },
+        "focus_horizontal_back": {
+          "n": 20,
+          "median": 1.0316839999999998,
+          "p95": 1.145371
+        },
+        "focus_vertical": {
+          "n": 20,
+          "median": 1.0402555,
+          "p95": 1.112651
+        },
+        "focus_vertical_back": {
+          "n": 20,
+          "median": 0.9792289999999999,
+          "p95": 1.030888
+        },
+        "history_bottom": {
+          "n": 20,
+          "median": 3.396845,
+          "p95": 3.996098
+        },
+        "history_search_backward_commit": {
+          "n": 20,
+          "median": 10.6281745,
+          "p95": 11.206506
+        },
+        "history_search_forward_commit": {
+          "n": 20,
+          "median": 9.7087255,
+          "p95": 9.86188
+        },
+        "history_search_next_match": {
+          "n": 20,
+          "median": 2.5369485,
+          "p95": 2.583634
+        },
+        "history_search_previous_match": {
+          "n": 20,
+          "median": 2.0501305,
+          "p95": 2.569004
+        },
+        "history_top": {
+          "n": 20,
+          "median": 2.5074129999999997,
+          "p95": 3.041203
+        },
+        "join_pane_command_to_viewport": {
+          "n": 20,
+          "median": 7.69109,
+          "p95": 7.985913
+        },
+        "navigate_pending_bell": {
+          "n": 20,
+          "median": 4.416258,
+          "p95": 4.809187
+        },
+        "open_session_rename": {
+          "n": 20,
+          "median": 1.985319,
+          "p95": 2.042464
+        },
+        "open_window_rename": {
+          "n": 20,
+          "median": 1.9819485000000001,
+          "p95": 2.05953
+        },
+        "populated_attach_startup": {
+          "n": 20,
+          "median": 18.651527,
+          "p95": 24.141586
+        },
+        "reattach": {
+          "n": 20,
+          "median": 16.438748,
+          "p95": 18.163036
+        },
+        "reorder_window_left": {
+          "n": 20,
+          "median": 2.2709444999999997,
+          "p95": 2.525253
+        },
+        "reorder_window_right": {
+          "n": 20,
+          "median": 2.380631,
+          "p95": 2.524522
+        },
+        "resize_horizontal": {
+          "n": 20,
+          "median": 3.4733245,
+          "p95": 3.542514
+        },
+        "resize_vertical": {
+          "n": 20,
+          "median": 2.3869655,
+          "p95": 2.510351
+        },
+        "second_client_attach": {
+          "n": 20,
+          "median": 16.9572665,
+          "p95": 20.202359
+        },
+        "select_two_characters": {
+          "n": 20,
+          "median": 1.1013635000000002,
+          "p95": 1.214484
+        },
+        "split_for_break": {
+          "n": 20,
+          "median": 9.086186,
+          "p95": 9.426747
+        },
+        "split_horizontal": {
+          "n": 20,
+          "median": 9.229063,
+          "p95": 9.590774
+        },
+        "split_vertical": {
+          "n": 20,
+          "median": 8.7261445,
+          "p95": 9.600569
+        },
+        "switch_session": {
+          "n": 20,
+          "median": 2.386295,
+          "p95": 2.918627
+        },
+        "switch_session_back": {
+          "n": 20,
+          "median": 4.1849515,
+          "p95": 4.592956
+        },
+        "switch_window": {
+          "n": 20,
+          "median": 4.730453000000001,
+          "p95": 5.203974
+        },
+        "switch_window_back": {
+          "n": 20,
+          "median": 3.8328895,
+          "p95": 4.23216
+        },
+        "terminal_resize_viewport": {
+          "n": 20,
+          "median": 4.487161,
+          "p95": 4.658891
+        },
+        "unzoom_horizontal": {
+          "n": 20,
+          "median": 5.2169895,
+          "p95": 5.555101
+        },
+        "unzoom_vertical": {
+          "n": 20,
+          "median": 4.1583305,
+          "p95": 4.593596
+        },
+        "yank_line_clipboard_receipt": {
+          "n": 20,
+          "median": 54.6998355,
+          "p95": 54.879424
+        },
+        "zoom_horizontal": {
+          "n": 20,
+          "median": 4.7637355,
+          "p95": 4.92527
+        },
+        "zoom_vertical": {
+          "n": 20,
+          "median": 4.599947,
+          "p95": 4.839682
+        }
+      },
+      "pss_kib": {
+        "n": 20,
+        "median": 16251.0,
+        "p95": 16259
+      },
+      "rss_kib": {
+        "n": 20,
+        "median": 46456.0,
+        "p95": 46464
+      },
+      "observed_state_logical_bytes": {
+        "n": 20,
+        "median": 0.0,
+        "p95": 0
+      },
+      "observed_state_allocated_bytes": {
+        "n": 20,
+        "median": 0.0,
+        "p95": 0
+      },
+      "profile_cpu_percent_one_cpu_lower_bound": {
+        "n": 20,
+        "median": 0.0,
+        "p95": 0.0
+      }
+    },
+    "w3-p2/idle/tmux-persistence": {
+      "operations": {
+        "break_pane": {
+          "n": 20,
+          "median": 5.3504065,
+          "p95": 5.745976
+        },
+        "cancel_character_selection": {
+          "n": 20,
+          "median": 1.062059,
+          "p95": 1.157559
+        },
+        "commit_session_rename": {
+          "n": 20,
+          "median": 3.234822,
+          "p95": 3.346349
+        },
+        "commit_window_rename": {
+          "n": 20,
+          "median": 3.2639785000000003,
+          "p95": 4.591423
+        },
+        "copy_big_word_forward": {
+          "n": 20,
+          "median": 1.082745,
+          "p95": 1.173161
+        },
+        "copy_cursor_left": {
+          "n": 20,
+          "median": 1.027256,
+          "p95": 1.130348
+        },
+        "copy_cursor_right": {
+          "n": 20,
+          "median": 0.992278,
+          "p95": 1.117187
+        },
+        "copy_find_character_commit": {
+          "n": 20,
+          "median": 3.5839280000000002,
+          "p95": 3.745019
+        },
+        "create_session": {
+          "n": 20,
+          "median": 8.9425855,
+          "p95": 9.640953
+        },
+        "create_window": {
+          "n": 20,
+          "median": 8.6469715,
+          "p95": 8.905197
+        },
+        "delete_pane_horizontal": {
+          "n": 20,
+          "median": 4.0291345,
+          "p95": 4.253707
+        },
+        "delete_pane_vertical": {
+          "n": 20,
+          "median": 3.9412874999999996,
+          "p95": 4.194976
+        },
+        "delete_session": {
+          "n": 20,
+          "median": 3.2980074999999998,
+          "p95": 4.77994
+        },
+        "delete_window": {
+          "n": 20,
+          "median": 4.033633,
+          "p95": 4.221242
+        },
+        "detach_client_exit": {
+          "n": 20,
+          "median": 1.1215535,
+          "p95": 3.21919
+        },
+        "enter_copy_mode": {
+          "n": 20,
+          "median": 4.43259,
+          "p95": 5.893901
+        },
+        "exit_copy_mode": {
+          "n": 20,
+          "median": 3.7167385,
+          "p95": 4.244634
+        },
+        "extend_character_selection": {
+          "n": 20,
+          "median": 0.35088450000000004,
+          "p95": 0.425223
+        },
+        "focus_horizontal": {
+          "n": 20,
+          "median": 1.1503335,
+          "p95": 1.202747
+        },
+        "focus_horizontal_back": {
+          "n": 20,
+          "median": 1.0521185000000002,
+          "p95": 1.150026
+        },
+        "focus_vertical": {
+          "n": 20,
+          "median": 1.0499155,
+          "p95": 1.134156
+        },
+        "focus_vertical_back": {
+          "n": 20,
+          "median": 0.9669855,
+          "p95": 1.087502
+        },
+        "history_bottom": {
+          "n": 20,
+          "median": 3.5445175,
+          "p95": 3.925587
+        },
+        "history_search_backward_commit": {
+          "n": 20,
+          "median": 10.675565500000001,
+          "p95": 12.232708
+        },
+        "history_search_forward_commit": {
+          "n": 20,
+          "median": 9.491643,
+          "p95": 9.816856
+        },
+        "history_search_next_match": {
+          "n": 20,
+          "median": 2.3520665000000003,
+          "p95": 2.632848
+        },
+        "history_search_previous_match": {
+          "n": 20,
+          "median": 2.3440950000000003,
+          "p95": 2.610001
+        },
+        "history_top": {
+          "n": 20,
+          "median": 2.5998314999999996,
+          "p95": 3.036699
+        },
+        "join_pane_command_to_viewport": {
+          "n": 20,
+          "median": 7.6927905,
+          "p95": 8.906405
+        },
+        "navigate_pending_bell": {
+          "n": 20,
+          "median": 4.516636500000001,
+          "p95": 4.910016
+        },
+        "open_session_rename": {
+          "n": 20,
+          "median": 1.9781825,
+          "p95": 2.087822
+        },
+        "open_window_rename": {
+          "n": 20,
+          "median": 1.986734,
+          "p95": 2.057819
+        },
+        "populated_attach_startup": {
+          "n": 20,
+          "median": 17.663742499999998,
+          "p95": 20.347287
+        },
+        "reattach": {
+          "n": 20,
+          "median": 19.970237500000003,
+          "p95": 24.614517
+        },
+        "reorder_window_left": {
+          "n": 20,
+          "median": 2.4668455,
+          "p95": 2.55241
+        },
+        "reorder_window_right": {
+          "n": 20,
+          "median": 2.482028,
+          "p95": 3.673795
+        },
+        "resize_horizontal": {
+          "n": 20,
+          "median": 3.4999405,
+          "p95": 4.705773
+        },
+        "resize_vertical": {
+          "n": 20,
+          "median": 2.3910109999999998,
+          "p95": 3.95698
+        },
+        "second_client_attach": {
+          "n": 20,
+          "median": 17.032486,
+          "p95": 19.190378
+        },
+        "select_two_characters": {
+          "n": 20,
+          "median": 1.1530710000000002,
+          "p95": 1.231691
+        },
+        "split_for_break": {
+          "n": 20,
+          "median": 8.833063,
+          "p95": 9.604838
+        },
+        "split_horizontal": {
+          "n": 20,
+          "median": 8.908724,
+          "p95": 9.448999
+        },
+        "split_vertical": {
+          "n": 20,
+          "median": 8.744998500000001,
+          "p95": 9.922927
+        },
+        "switch_session": {
+          "n": 20,
+          "median": 2.3478645,
+          "p95": 2.463741
+        },
+        "switch_session_back": {
+          "n": 20,
+          "median": 4.1237625,
+          "p95": 4.260318
+        },
+        "switch_window": {
+          "n": 20,
+          "median": 4.7863285,
+          "p95": 5.152258
+        },
+        "switch_window_back": {
+          "n": 20,
+          "median": 3.8514295,
+          "p95": 4.184189
+        },
+        "terminal_resize_viewport": {
+          "n": 20,
+          "median": 4.5461475,
+          "p95": 4.694351
+        },
+        "unzoom_horizontal": {
+          "n": 20,
+          "median": 5.315617,
+          "p95": 6.887241
+        },
+        "unzoom_vertical": {
+          "n": 20,
+          "median": 4.3181329999999996,
+          "p95": 4.661631
+        },
+        "yank_line_clipboard_receipt": {
+          "n": 20,
+          "median": 54.728989,
+          "p95": 54.879702
+        },
+        "zoom_horizontal": {
+          "n": 20,
+          "median": 4.8209915,
+          "p95": 6.116647
+        },
+        "zoom_vertical": {
+          "n": 20,
+          "median": 4.7419975,
+          "p95": 6.166104
+        }
+      },
+      "pss_kib": {
+        "n": 20,
+        "median": 16271.0,
+        "p95": 16307
+      },
+      "rss_kib": {
+        "n": 20,
+        "median": 46476.0,
+        "p95": 46520
+      },
+      "observed_state_logical_bytes": {
+        "n": 20,
+        "median": 0.0,
+        "p95": 0
+      },
+      "observed_state_allocated_bytes": {
+        "n": 20,
+        "median": 0.0,
+        "p95": 0
+      },
+      "profile_cpu_percent_one_cpu_lower_bound": {
+        "n": 20,
+        "median": 0.33149415377267644,
+        "p95": 0.331557498660802
+      }
+    }
+  }
+}

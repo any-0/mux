@@ -46,7 +46,7 @@ def exercise(root, number):
         r.action('tree_expand',b'l',lambda:r.client.contains('▾'))
         r.action('tree_preview_second_window',b'jjj',lambda:r.client.contains('UI_TWO>') and not r.client.contains('UI_ONE>'))
         offset=r.columns-100
-        r.action('tree_choose_preview',b'\r',lambda:not r.client.contains(' sessions') and any(line.startswith(' '*offset+'UI_TWO>') for line in r.client.screen.display),lambda:r.windows())
+        r.action('tree_choose_preview',b'\r',lambda:not r.client.contains(' sessions') and any(line[offset:].startswith('UI_TWO>') for line in r.client.screen.display),lambda:r.windows())
         assert r.selected_window()==2
         r.keys(b'\x1bs');r.keys(b'l')
         r.action('tree_collapse',b'h',lambda:r.client.contains('▸') and not r.client.contains('▾'))
