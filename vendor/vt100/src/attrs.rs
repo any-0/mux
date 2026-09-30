@@ -212,6 +212,21 @@ impl Attrs {
 #[cfg(test)]
 mod intensity_tests {
     #[test]
+    fn persisted_scrollback_accepts_simultaneous_bold_and_faint() {
+        let mut parser = crate::Parser::new(2, 20, 10);
+        parser.process(b"\x1b[1;2;4:3;58;5;45mBOTH\r\nNEXT\r\n");
+        let packed = parser.screen().encode_history();
+        let mut restored = crate::Parser::new(2, 20, 10);
+        assert!(restored.screen_mut().restore_history(&packed));
+        restored.screen_mut().set_scrollback(1);
+        let cell = restored.screen().cell(0, 0).unwrap();
+        assert_eq!(cell.contents(), "B");
+        assert!(cell.bold() && cell.dim());
+        assert_eq!(cell.underline_style(), crate::UnderlineStyle::Curly);
+        assert_eq!(cell.underline_color(), crate::Color::Idx(45));
+    }
+
+    #[test]
     fn bold_and_faint_are_independent_and_sgr_22_clears_both() {
         let mut parser = crate::Parser::new(3, 20, 0);
         parser.process(b"\x1b[1;2;4:3;58;5;45mX\x1b[22mY");

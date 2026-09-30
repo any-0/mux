@@ -33,3 +33,6 @@ attribute bits. SGR 22 clears both. Formatted output resets intensity before
 setting a changed combination so moving from bold to faint does not accumulate
 both attributes in the terminal receiving that output. Recorded real-shell
 cat/head stress exposed the original mutually-exclusive intensity assumption.
+Persisted compact rows also accept the combined bold/faint bits. The parser now
+produces that valid state, so rejecting it during history restore would discard
+the pane's journal after styled output had entered scrollback.
