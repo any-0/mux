@@ -17,7 +17,7 @@ packaging flake and a host Rust installation are not used.
 ./scripts/stress-nix python3 -m unittest discover -s stress -p test_oracle.py -v
 ./scripts/stress-nix cargo build --locked
 ./scripts/stress-nix python3 stress/run.py --binary target/debug/mux \
-  --output /tmp/mux-terminal-stress --cycles 40 --seed 76431
+  --output /tmp/mux-terminal-stress --cycles 240 --seed 76431
 ./scripts/stress-nix python3 stress/replay.py /tmp/mux-terminal-stress/bash
 ./scripts/stress-nix python3 stress/replay.py /tmp/mux-terminal-stress/zsh
 ./scripts/stress-nix python3 stress/replay.py /tmp/mux-terminal-stress/fish
@@ -53,7 +53,13 @@ plus cursor position, visibility and shape. Canonicalization is limited to NFC
 combining characters and equivalent indexed-color encodings (for example SGR
 36 and SGR 38;5;6). Default color remains distinct from an explicit color.
 
-Small independently specified protocol vectors check pyte's extensions:
+Seven test methods check pyte's extensions, including fifteen hand-authored
+external-spec fixtures in `stress/fixtures/protocol.json`, tested at every byte
+split. Fixture expectations are partial cell/cursor fields authored from
+[kitty underline semantics](https://sw.kovidgoyal.net/kitty/underlines/) and
+[xterm control sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html),
+never generated from mux or the Python oracle. This is specification validation,
+not a claim that a third emulator was executed. Vectors cover:
 colon/semicolon SGR colors, all six underline states, SGR 22 transitions,
 private modifyOtherKeys negotiation, split UTF-8/control strings, DEC 1049
 alternate screen, and cursor position/visibility/shape. The expected protocol
@@ -74,12 +80,17 @@ observations only; they do not generate expected state.
 ## Real sustained workload
 
 Each shell has a three-line colored custom prompt with embedded newlines,
-fixed cwd/time labels, no user startup files, and its normal real line editor.
+an initial fixed prompt and then a changing command counter and actual cwd,
+no user startup files, and its normal real line editor. A Unicode directory name
+changes prompt width at narrow terminal geometries. CI runs 240 cycles per
+profile, seed 76431, with a 30-minute per-profile action budget and 45-minute job
+budget. Summary files report actual elapsed seconds, actions and checkpoints.
 The seeded session repeatedly:
 
 - Runs `cat` on a Unicode/blank-line fixture and `head` on styled long lines.
-- Runs `cat` on 2,400 logical styled rows every fourth cycle. Forty cycles
-  produce 24,000 large-output rows, plus 1,480 head rows and small cat output.
+- Runs `cat` on 2,400 logical styled rows every fourth cycle. The 240-cycle soak
+  produces 144,000 large-output rows and 8,880 head rows per profile,
+  plus small cat output (432,000 large rows across the three shells).
   Long rows wrap; styles cycle through no underline, straight, double, curly,
   dotted and dashed, with RGB underline color and bold/faint/italic transitions.
 - Edits a long wrapped command with Home/end, forward moves and deletions;
@@ -87,9 +98,13 @@ The seeded session repeatedly:
   the command, and checks the resulting multiline prompt and cursor.
 - Runs real Vim on a Unicode file, edits its buffer, resizes its alternate
   screen, explicitly redraws, exits, and checks the shell screen restoration.
-- Attaches a second equal-size client and compares both streams to the same
-  independent source; then exercises graceful and SIGKILL recovery while a
-  foreground command holds a known styled screen.
+- Attaches a second equal-size client, then a larger third client. Four
+  competing per-client resizes alternate ownership of the shared PTY size,
+  as specified in README. Each client is compared with the independent
+  source projected into its own top-left viewport; cells outside the source
+  are expected default blanks and cursor positions are clamped to that viewport.
+  Returns all clients to equal geometry, then exercises graceful and SIGKILL
+  recovery while a foreground command holds a known styled screen.
 - Creates twelve windows, traverses the strip, and checks tile backgrounds
   and labels from the scenario's count/selection model.
 
@@ -101,7 +116,8 @@ session, pane splitting/killing, the session tree, leader and mux Vim modes.
 Completed output is gated by decoded cells and bounded output quiescence,
 with five-second deadlines rather than unbounded sleeps. Process icons have a
 bounded polling deadline because their updates are asynchronous. Clock, cwd
-labels, prompt colors, data fixtures and resize RNG are controlled. The
+time labels, prompt colors, data fixtures and resize RNG are controlled.
+Dynamic cwd/counters are captured, so offline replay does not rerun expansion. The
 artifacts retain actual chunk boundaries, so replay does not depend on timing.
 
 ## Confirmed failures and fixes
@@ -148,7 +164,11 @@ and [fish](https://github.com/any-0/mux/actions/runs/36748241151/artifacts/11114
 That run passed all three long sessions (221 checkpoints each), unproxied
 sidebar sessions, graceful/crash recovery, and offline checkpoint replay.
 Its comparisons covered cursor position/visibility; cursor-shape comparisons
-were added subsequently and require the later run to pass before being claimed.
+were added subsequently; all three shells passed shape checks and the new
+session/mode assertions on `656b777` in
+[run 36750933430](https://github.com/any-0/mux/actions/runs/36750933430).
+The expanded 240-cycle dynamic-prompt/unequal-client soak is a later revision
+and must pass before its results are claimed.
 
 Artifacts contain client `.ansi`, byte-offset resize events, pane capture JSONL,
 action logs, source snapshots, full mismatch snapshots/cell diffs, profile
@@ -162,8 +182,8 @@ This is a terminal-state oracle, not a pixel/font-rendering test. It covers the
 listed SGR properties, not every terminal extension (for example sixel,
 hyperlinks, blinking/strikethrough, runtime OSC palette changes or kitty input).
 The PTY proxy changes process ancestry, which is why process icons are tested
-separately. Multi-client coverage uses equal dimensions and does not establish
-semantics for competing unequal-size clients or severely stalled consumers.
+separately. Unequal-size clients are tested after repaint against the documented
+last-resize-wins policy; severely stalled consumers are not exercised here.
 
 Terminal resize/reflow behavior is not specified by ECMA-48. The cell oracle
 compares **after explicit shell/Vim repaint** at the new geometry, rather than
@@ -176,8 +196,34 @@ Recovery holds a known foreground screen with bracketed paste disabled; fresh
 recorded shell output is composed over the independent pre-stop screen.
 It checks completed durable output after a 1.5-second checkpoint allowance,
 not an arbitrary crash-window loss budget, recovery of live OS jobs, or idle
-multiline-prompt deduplication without shell integration. Dynamic time/git/cwd
-prompts and asynchronous prompt plugins are not yet covered. Output quiescence
+multiline-prompt deduplication without shell integration. Dynamic cwd and command-count prompts are covered; wall-clock/git prompts
+and asynchronous prompt plugins are not yet covered. Output quiescence
 is a bounded synchronization mechanism, not proof that an arbitrarily delayed
 plugin has finished. These limitations are deliberate and must not be presented
 as full terminal compatibility or exhaustive persistence coverage.
+
+## Supported-feature inventory and independent expectations
+
+| Behavior | Workload and expectation | Remaining boundary |
+| --- | --- | --- |
+| Terminal cells, Unicode, SGR, cursor | Source PTY replay versus client bytes; external-spec fixtures | Pixel rendering, blink, strike, OSC palette, graphics |
+| Multiline shell prompts and redraw | Real bash/zsh/fish, changing cwd/counter, wrapped edits, SIGWINCH, Ctrl-L | Arbitrary async prompt plugins |
+| Input delivery | `input_sessions.py`: edited command writes exact action-derived file bytes; multiline bracketed paste must await Enter | Every keyboard protocol/mouse gesture |
+| Vim alternate screen | Actual Vim edit, resize, redraw and exit; source cell/style/cursor oracle | Exhaustive Vim interaction |
+| Multiple clients | Three retained terminal streams, competing sizes and cursor clipping | Sustained backpressure |
+| Windows, sessions, panes and modes | Script-owned names/counts/selection, split/kill, tree, focus, leader/Vim mode and foreground jobs | Every nested split topology and UI editing path |
+| Persistence | Graceful/SIGKILL restore of completed styled screen | Idle prompt deduplication and arbitrary crash loss window |
+| Reproduction/minimization | Seeded action log, linear offline replay, retained raw bytes and minimized witnesses | General automatic action delta debugging |
+
+Input-file expectations do not depend on the terminal oracle: this catches
+misdelivered keys even if the source and rendered screens agree. The separate
+input workload can be reproduced with:
+
+```sh
+./scripts/stress-nix python3 stress/input_sessions.py --binary target/debug/mux \
+  --output /tmp/mux-input-bash --shell bash
+```
+
+The user-reported undisclosed bug remains unresolved. These two valid baseline
+fixes are not claimed to identify or fix that bug; test selection follows the
+supported-feature inventory rather than a presumed trigger.
