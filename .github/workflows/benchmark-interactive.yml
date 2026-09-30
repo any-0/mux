@@ -1,4 +1,4 @@
-name: Hosted interactive operation benchmarks
+name: Hosted paired interactive operations
 on:
   pull_request:
     paths:
@@ -8,14 +8,15 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: interactive-${{ github.ref }}
+  group: interactive-benchmark-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  paired:
+  operations:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 340
     env:
       BENCH_MUX_SOURCE_DIR: ${{ github.workspace }}/pinned-runtime
+      BENCH_EXECUTION_CONTEXT: hosted-ci-interactive-paired
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -28,16 +29,16 @@ jobs:
           ref: ${{ steps.pin.outputs.revision }}
           path: pinned-runtime
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
-      - name: Broad attached-key correctness gates
+      - name: Diagnostic operation gates before accepting any performance data
         run: ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/interactive-smoke" --smoke
-      - name: Twenty paired blocks at each scale and load
-        run: ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/interactive-performance" --trials 20
-      - name: Keep raw evidence on success or failure
+      - name: Paired randomized scale and busy/idle sweep on this runner
+        run: ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/interactive-measured" --trials 20
+      - name: Retain complete evidence on success or failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: interactive-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/interactive-smoke/
-            ${{ runner.temp }}/interactive-performance/
+            ${{ runner.temp }}/interactive-measured/
           retention-days: 90
