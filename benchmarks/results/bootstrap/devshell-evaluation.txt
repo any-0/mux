@@ -1,0 +1,1 @@
+/nix/store/xq6mhwqxwg0w8hv8xw5qagb6s66lj0mm-nix-shell.drv
