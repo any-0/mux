@@ -29,10 +29,10 @@ class OracleVectors(unittest.TestCase):
 
     def test_equivalent_indexed_color_encodings_and_private_sgr(self):
         terminal = Terminal(2, 20)
-        terminal.feed(b'\x1b[36mX\x1b[38;5;6mX\x1b[>4;2mY')
+        terminal.feed(b'\x1b[36mX\x1b[38;5;6mX\x1b[>4;1mY')
         cells = terminal.snapshot()['cells'][0]
         self.assertEqual(cells[0], cells[1])
-        self.assertEqual(cells[2][0], 'Y')
+        self.assertEqual(cells[2], ['Y', *cells[1][1:]])
 
     def test_all_underline_styles_reset_and_color(self):
         terminal = Terminal(3, 20)

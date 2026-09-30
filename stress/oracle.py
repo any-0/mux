@@ -136,6 +136,8 @@ class Terminal:
                 seq = match.group(0)
                 if final == 'm' and not intermediate and not raw.startswith(('?', '>', '<', '=')):
                     self.screen.sgr(raw)
+                elif final == 'm':
+                    pass  # XTerm modifyOtherKeys is not graphic rendition.
                 elif raw == '?1049' and final in 'hl':
                     self.screen.alternate(final == 'h')
                 else:
