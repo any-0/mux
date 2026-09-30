@@ -26,7 +26,7 @@ and confirmed fresh live shells. Median / p95 restart-to-live times were
 Baseline tmux lost all 600 rows as expected. These are clean-save results;
 **default-period crash recovery remains unmeasured**.
 
-[Raw hosted dataset](results/hosted-ci/36744338567/raw.zip) include
+[Raw hosted dataset](results/hosted-ci/36744338567/raw.zip) includes
 startup, output, CPU, storage and save timings with their limits. Reproduce with:
 
 ```sh
@@ -133,6 +133,53 @@ published aggregate. It also rejects clean fidelity failures. Offline auditing
 needs only Python's standard library; no host-built backend produced these data.
 The run's preflight passed 44 Nix tests and six actual PTY integration gates;
 the separate project Tests and benchmark correctness workflows also passed.
+
+## Requested measurement coverage and remaining crash budget
+
+| Requested measurement | Accepted evidence | Remaining limit |
+| --- | --- | --- |
+| Startup | 30 fresh starts per variant; decoded prompt endpoint | Warm caches, not cold boot |
+| Output throughput | 30 identical 820,019-byte workloads per variant; decoded end marker | Finite ASCII workload, not sustained saturation |
+| Scroll and RAM | 600 events and 30 process-tree PSS/RSS samples per variant | Decoded cells and post-output memory |
+| CPU and storage | 30 samples per variant | CPU lower bound; journal and unsaved periodic state are not equivalent snapshots |
+| Clean save/shutdown | 30 trials each; mux combined flush/shutdown and stack explicit save plus separate stop | Different operations are labeled separately |
+| Clean restart/restore | 30 trials each; restart-to-live for both, explicit stack restore script separately | mux restoration is included in restart, not separately instrumented |
+| Clean recovery fidelity | Complete tagged histories, wraps, sampled style, metadata and fresh shells passed | Finite fixture; does not restore old shell process memory |
+| Default-period process-crash recovery | No accepted samples | Same-runner duration exceeds hosted job limit |
+
+The crash harness retains continuum's real 900-second scheduler and never
+manually saves in its crash path. Each isolated variant waits one interval and
+then crashes at age fractions 0, .25, .5, .75 and .99 while recording equal
+post-snapshot output. It rejects a second save before the requested crash age.
+No clean result above has been relabeled as crash evidence.
+
+The configured 30 trials plus a warm-up, three variants and five ages require
+`31 × 3 × 900 × (5 + 0 + .25 + .5 + .75 + .99)` = **626,913 seconds / 174.14
+hours / 7.26 days**, before startup, fidelity checks and restoration. Even the
+minimum supported 20 trials plus warm-up at only age zero would require
+`21 × 3 × 900` = **15.75 hours**, exceeding GitHub's six-hour hosted-job limit.
+These are timer-budget calculations, not measured execution times.
+
+One three-variant triplet would take at least 45 minutes at age zero or about
+67.5 minutes at age .5, plus overhead. That can provide a diagnostic but cannot
+supply repeated median/p95 evidence. Splitting repeated trials across fresh CI
+jobs changes the runner; checkpointing state between jobs also changes the
+crash experiment. Neither closes the controlled single-runner gap. No additional
+long diagnostic job was started merely to add a smoke sample.
+
+The practical supported next step is a quiet Linux machine or long-lived runner
+with the same pinned Nix closure and uninterrupted time, then:
+
+```sh
+./scripts/benchmark-nix python3 benchmarks/recovery.py \
+  --output /tmp/mux-recovery-crash-1 --mode crash --trials 30
+```
+
+The selected cloud still needs policy-supported Nix dependency access or a
+pre-populated locked closure. That environment setup and long runtime remain
+required; changing continuum's interval, moving environments silently or reporting
+clean timings as crash timings would not resolve the blocker. No new runner
+provisioning or paid compute was initiated.
 
 ## Reproducible environment
 
