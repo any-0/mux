@@ -213,8 +213,16 @@ impl Grid {
             return false;
         }
         let rows = u32::from_le_bytes(packed[..4].try_into().unwrap());
-        let uncompressed_len =
-            usize::try_from(u64::from_le_bytes(packed[4..12].try_into().unwrap())).unwrap();
+        let Ok(uncompressed_len) =
+            usize::try_from(u64::from_le_bytes(packed[4..12].try_into().unwrap()))
+        else {
+            return false;
+        };
+        // Persisted history is untrusted. Bound decompression and allocation
+        // before accepting the row count or compressed-size declaration.
+        if uncompressed_len > 64 * 1024 * 1024 || packed[12] > 1 {
+            return false;
+        }
         let compressed = packed[12] != 0;
         let body = &packed[13..];
         let raw = if compressed {
@@ -229,19 +237,26 @@ impl Grid {
             return false;
         }
         let mut input = raw.as_slice();
-        let mut restored = Vec::with_capacity(rows as usize);
+        if rows as usize > raw.len() / 15 {
+            return false;
+        }
+        let mut restored = std::collections::VecDeque::new();
         for _ in 0..rows {
-            // A row that ran out of bytes would decode as rubbish, and the
-            // caller can still replay what follows onto an empty scrollback.
-            if input.is_empty() {
+            let Some(row) = crate::row::Row::decode_checked(&mut input) else {
                 return false;
+            };
+            if self.scrollback_len > 0 {
+                if restored.len() == self.scrollback_len {
+                    restored.pop_front();
+                }
+                restored.push_back(row);
             }
-            restored.push(crate::row::Row::decode(&mut input));
         }
         if !input.is_empty() {
             return false;
         }
         self.scrollback = restored.into_iter().collect();
+        self.scrollback_offset = self.scrollback_offset.min(self.scrollback.len());
         true
     }
 

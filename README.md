@@ -142,9 +142,10 @@ installed; only the durable runtime state described below is written.
 
 ### Testing and upgrades
 
-Run `./scripts/test-container` to build an isolated test image and run formatting,
-unit tests, vendored terminal-parser tests, and strict Clippy checks. CI runs this
-against a Docker-in-Docker service; no Rust packages are installed on the host.
+Run `./scripts/test-nix` to enter the project’s pinned `.nix` development shell
+and run formatting, unit tests, vendored terminal-parser tests, and strict Clippy
+checks. CI uses the same pinned shell. `./scripts/test-container` remains
+available as a separate Docker runner. See [regression coverage](docs/regression-coverage.md).
 
 The client/daemon protocol has an explicit version. A mismatched running daemon
 must be stopped with its matching binary before attaching with the new version.
