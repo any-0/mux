@@ -37,7 +37,7 @@ a separate performance metric.
 | Character/word/line/find motions, visual/block selection | Cursor-left/right and word-forward implemented; other motions pending | Cursor/selection-cell gates needed; distinct motion semantics must be disclosed |
 | Search repeat, pane-local jump list, character hints | Pending / partly mux-specific | tmux has search repeat, no identical mux jump-list/hint UI |
 | Sustained/background output | Interactive idle/busy profiles + accepted finite throughput | Equal 50 Hz in-place ANSI producer in isolated background window; finite active-pane output already measured |
-| Working directory/session root, rename | Seeded cwd / existing clean fidelity; rename UI timing pending | Session-root policy is mux-specific; don't equate arbitrary tmux working directories |
+| Working directory/session root, rename | Seeded cwd / existing clean fidelity; window/session rename editor opening and commit implemented | Session-root policy is mux-specific; don't equate arbitrary tmux working directories |
 | Bell/activity navigation | Supported in both; pending | Must generate actual bell in background pane and confirm target selection |
 | Session tree preview/expand/collapse | Mux-specific interface, pending | tmux choose-tree exists but different preview/rendering semantics |
 | Theme picker, palette update | Mux-specific interface, pending | Can report mux-only UI latency; no equivalent tmux picker |
