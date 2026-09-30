@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import signal
@@ -11,6 +12,7 @@ import time
 
 from input_sessions import file_equals
 from run import Session, write_json
+from transport import client_transport
 
 
 def gate(session, path, value, timeout=10):
@@ -40,8 +42,8 @@ with open(control) as commands:
   n=int(command)
   # Full-screen fresh styled output prevents a repeated identical frame from
   # making a suspended-reader test vacuous. Unicode includes combining/wide.
-  rows=[f"{n:04d}:{r:02d} 界 e\\u0301 " + chr(65+(n+r)%26)*55 for r in range(22)]
-  payload="\\x1b[H\\x1b[2J\\x1b[1;2;4:3;58:2::17:34:51m"+"\\r\\n".join(rows)+"\\x1b[0m\\r\\n"
+  rows=[f"{n:04d}:{r:02d} 界 e\\u0301 " + chr(65+(n+r)%26)*100 for r in range(64)]
+  payload="\\x1b[H\\x1b[2J\\x1b[1;2;4:3;58:2::17:34:51m"+"\\r\\n".join("\\x1b[38;2;"+str((n+r)%256)+";73;119m"+row for r,row in enumerate(rows))+"\\x1b[0m\\r\\n"
   os.write(1,payload.encode())
   pathlib.Path(ack).write_text(str(n))
 ''')
@@ -67,7 +69,7 @@ with open(control) as commands:
                 session.input(b'\x01\x05\x7f\x7f\x7f\r')
                 file_equals(session, directory / 'work/async-proof.txt', (value+'\n').encode())
                 session.checkpoint(f'async-input-effect-{n}')
-            session.resize(24, 85)
+            session.resize(48, 125)
             session.checkpoint('before-stall')
             stalled = session.attach('stalled')
             session.checkpoint('both-live')
@@ -75,13 +77,40 @@ with open(control) as commands:
             stalled['paused'] = True
             session.action('client-stop', name=stalled['name'])
             started = time.monotonic()
-            # A bounded burst, shorter than the documented disconnect timeout.
-            # SIGSTOP is a real reader suspension; active-client comparisons
-            # and producer acknowledgements must continue during the stall.
-            for n in range(3, 83):
+            baseline = client_transport(stalled['process'].pid)
+            session.action('transport-before', **baseline)
+            n = 3
+            def pulse():
+                nonlocal n
+                old_offset = session.clients[0]['offset']
                 os.write(control, f'{n}\n'.encode())
                 gate(session, ack, str(n))
+                while session.clients[0]['offset'] == old_offset:
+                    session.pump(.005)
+                    assert time.monotonic()-started < 4, 'active client stalled before transport saturation'
+                n += 1
+            while True:
+                pulse()
+                measured = client_transport(stalled['process'].pid)
+                session.action('transport-measurement', generation=n-1, **measured)
+                if measured['saturated']:
+                    break
+                assert time.monotonic()-started < 3, 'transport never saturated within suspension budget'
+            session.checkpoint('active-at-saturation')
+            full = client_transport(stalled['process'].pid)
+            assert full['saturated'] and full['receiver']['receive_bytes'] > 0
+            # Hold the same full receive queue while distinct new frames and
+            # an action-owned input effect continue through the active client.
+            for _ in range(8):
+                pulse()
+            session.input(b"\x0cprintf '%s\\n' 'live-under-pressure' > pressure-proof.txt\r")
+            file_equals(session, directory / 'work/pressure-proof.txt', b'live-under-pressure\n')
             session.checkpoint('active-during-stall')
+            after = client_transport(stalled['process'].pid)
+            assert after['saturated'], 'sender left saturation while reader remained stopped'
+            assert after['receiver']['receive_bytes'] == full['receiver']['receive_bytes'], 'stopped receive queue did not plateau'
+            session.action('transport-plateau', before=full, after=after,
+                           active_bytes=session.clients[0]['offset'], additional_frames=8)
             os.kill(stalled['process'].pid, signal.SIGCONT)
             stalled['paused'] = False
             session.action('client-continue', name=stalled['name'], elapsed=time.monotonic()-started)
@@ -96,7 +125,10 @@ with open(control) as commands:
         # The selected short line has no width-dependent trailing space policy.
         target = 'COPY-TARGET-界-e\u0301'
         fixture = directory / 'work/copy-fixture.txt'
-        fixture.write_text(('prefix-' + '界x'*90 + '\n')*30 + target + '\n' + ('suffix-' + 'ab'*120 + '\n')*30)
+        style = '\x1b[1;2;3;38;2;18;52;86;48;2;52;86;120;4:3;58;2;171;205;239m'
+        fixture.write_text(style + ('LONG-STYLE-' + 'R'*180 + '\n')*30
+                           + 'ANCHOR-STYLE-界\n\x1b[0m' + target + '\n' + style
+                           + 'ANCHOR-STYLE-界\n' + ('LONG-STYLE-' + 'R'*240 + '\n')*30 + '\x1b[0m')
         session.input(b'cat copy-fixture.txt\r')
         session.settle()
         for n, (rows, cols) in enumerate([(12, 45), (31, 107), (9, 37)]):
@@ -116,13 +148,33 @@ with open(control) as commands:
             session.settle()
             session.input(b'gg/COPY-TARGET-\r')
             session.settle()
+            # Copy viewport geometry has no portable terminal reflow spec.
+            # Preserve a reliable independent invariant instead: unselected
+            # fixture cells retain the explicitly assigned SGR attributes even
+            # when their long logical line has wrapped/reflowed. Expectations
+            # are constants from the fixture, not captured mux/source state.
+            cells = session.clients[0]['terminal'].snapshot(session.bar, cols-session.bar)['cells']
+            styled = []
+            anchors = 0
+            for row in cells:
+                text = ''.join(cell[0] or ' ' for cell in row)
+                if 'ANCHOR-STYLE-' in text:
+                    begin = text.index('ANCHOR-STYLE-')
+                    styled.extend(row[begin:begin+13])
+                    anchors += 1
+                for match in re.finditer(r'R{4,}', text):
+                    styled.extend(row[match.start():match.end()])
+            assert anchors and len(styled) > 20, 'copy viewport did not expose styled fixture anchors and wrapped runs'
+            wanted = ['123456','345678',True,True,True,False,3,'abcdef']
+            assert all(cell[1:] == wanted for cell in styled), 'copy/reflow changed fixture SGR attributes'
+            session.action('copy-style-invariant', checked_cells=len(styled), expected_attributes=wanted)
             session.input(b'0yy')
             file_equals(session, clipboard, (target+'\n').encode())
             session.action('copy-reflow-effect', expected_hex=(target+'\n').encode().hex(), rows=rows, cols=cols)
             session.input(b'\x0c')
             session.checkpoint(f'after-copy-reflow-{n}')
         return {'shell':shell,'passed':True,'checkpoints':session.checkpoints,
-                'limits':['Suspended reader is proven by SIGSTOP; kernel/server queue occupancy is not measured.',
+                'limits':['SIGSTOP reader; UNIX_DIAG proves sender buffer saturation and receive-queue plateau; internal writer channel occupancy is not measured.',
                           'Copy mode checks action-owned clipboard bytes across resize; copy viewport styles are not emulated.']}
     finally:
         session.close()

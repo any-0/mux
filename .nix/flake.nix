@@ -38,8 +38,10 @@
         stress = pkgs.mkShell {
           STRESS_NIXPKGS_REV = nixpkgs.rev;
           STRESS_RUST_VERSION = pkgs.rustc.version;
+          STRESS_ASYNC_PLUGIN = "${pkgs.pure-prompt}/share/zsh/site-functions/async";
+          STRESS_PURE_VERSION = pkgs.pure-prompt.version;
           packages = with pkgs; [ cargo rustc rustfmt clippy bash zsh fish vim
-            coreutils git util-linux
+            coreutils git util-linux pure-prompt
             (python3.withPackages (p: [ p.pyte ])) ];
         };
         default = pkgs.mkShell {
