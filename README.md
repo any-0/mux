@@ -74,13 +74,15 @@ and tmux with resurrect + continuum. Run it with:
   --output /tmp/mux-benchmark-run-1 --trials 30
 ```
 
-**Actual measured performance results: none yet (0 samples).** On the selected
+**Accepted performance results: none yet (0 benchmark trials).** On the selected
 cloud machine, Nix dependency realization was blocked by proxy and runtime
 restrictions; the devShell expression evaluated, but no variant executed.
 [Raw bootstrap evidence](benchmarks/results/bootstrap/) records the attempts.
 The microbenchmark and save/restart/restore/recovery-fidelity harnesses are
 implemented. Supported Nix CI has built the pinned backend and exposed harness
-issues in real smoke interactions; validation and failure artifacts are linked
+issues in real smoke interactions. [Candidate Nix CI](https://github.com/any-0/mux/actions/runs/36740002774)
+passed 44 tests and six integration gates at PR #2 candidate `6da51cf`;
+validation and raw artifacts are linked
 in the benchmark draft. No
 median/p95 or performance advantage is claimed. The methodology, pinned
 versions, correctness gates and remaining
