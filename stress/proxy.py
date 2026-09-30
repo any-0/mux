@@ -40,7 +40,12 @@ if pid == 0:
                  'zsh': ['-i'], 'fish': ['--interactive']}[Path(shell).name]
     os.execv(shell, [shell, *arguments])
 os.close(slave)
-signal.signal(signal.SIGWINCH, resize)
+# Signal handlers must not write the buffered capture log: SIGWINCH can
+# interrupt record() and Python rejects the reentrant TextIO write. Wake the
+# ordinary event loop instead, preserving one serial order for resize/output.
+signal_read, signal_write = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+signal.set_wakeup_fd(signal_write)
+signal.signal(signal.SIGWINCH, lambda *_: None)
 def stop(signum, _frame):
     raise SystemExit(128 + signum)
 
@@ -50,7 +55,11 @@ old = termios.tcgetattr(0)
 tty.setraw(0)
 try:
     while True:
-        ready, _, _ = select.select([0, master], [], [])
+        ready, _, _ = select.select([0, master, signal_read], [], [])
+        if signal_read in ready:
+            pending = os.read(signal_read, 4096)
+            if signal.SIGWINCH in pending:
+                resize()
         if master in ready:
             try:
                 data = os.read(master, 65536)
@@ -71,6 +80,9 @@ try:
             while view:
                 view = view[os.write(master, view):]
 finally:
+    signal.set_wakeup_fd(-1)
+    os.close(signal_read)
+    os.close(signal_write)
     termios.tcsetattr(0, termios.TCSANOW, old)
     try:
         os.killpg(pid, signal.SIGHUP)
