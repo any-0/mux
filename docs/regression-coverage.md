@@ -22,7 +22,7 @@ deadline, and checks fixed expected sidebar rows and terminal attributes.
 | `input-malformed.sh`, `input-osc.sh`, `input-replies.sh`, `input-requests.sh` | Real oversized OSC recovery and subsequent text; existing parser callback query tests remain complementary |
 | `input-sgr.sh`, `input-raw-sgr.sh`, `capture-pane-sgr0.sh` | Curly underline and color transitions, reset to plain text, no underline leakage into sidebar cells |
 | `input-raw-unicode.sh`, `input-raw-reflow.sh`, `input-reflow-stress.sh` | Wide-cell clipping followed by erase; generated numbered combining/wide scrollback resized to 7, 3, 2, 1, 2, 4 and 12 columns and compacted at each size |
-| `screen-redraw-status.sh`, `screen-redraw-tiled.sh`, `mode-tree-scroll.sh` | Retained client render stream across alternate screen, zoom/unzoom and window switch; sidebar rows checked against literal expected labels |
+| `screen-redraw-status.sh`, `screen-redraw-tiled.sh`, `mode-tree-scroll.sh`, `mode-mutation.sh`, `alerts.sh` | Retained client render stream across alternate screen, zoom/unzoom and window switch; fixed sidebar labels; one-row mode tile after a PTY bell; selected session/pane previews after an earlier background shell exits |
 | `lifecycle-deferred.sh`, `session-ops.sh`, `window-ops.sh` | Separate daemon processes and real shell output; persisted scrollback/styles survive restart while another pane has a malformed history record and the healthy pane has a torn tail |
 
 Persistence cases also exercise every byte boundary of a three-record journal
@@ -46,23 +46,47 @@ kept the leading half at the new right edge. Erasing or overwriting that half
 could index outside the row. Shrinking now uses the existing truncation rule,
 which clears a clipped leading half.
 
+The bar's other-session bell badge occupied the last row even when that was
+the mode tile's only row. A real PTY bell followed by a one-row resize displayed
+`!` instead of `●`. The badge now requires its own row.
+
+An open tree stored only a list index. If an earlier session's background shell
+exited, the same index selected a different session or pane and preview. Pane
+closure now retains the selected object's identity and adjusts child positions
+as the hierarchy changes, falling back to its surviving parent if it closed.
+The regression checks the decoded client preview and highlight for both folded
+session selection and expanded pane selection.
+
 ## Running checks
 
 Use `./scripts/test-nix`, which enters the project's pinned `.nix` development
 shell and performs the same fmt, mux tests, vendored vt100 library tests and
 clippy checks as the container runner. No lockfile update is needed.
 
-At implementation time, this execution environment had no Nix. A bootstrap
-from GitHub succeeded and a local container could start Nix 2.20.6, but fetching
-the pinned shell failed: `cache.nixos.org` and `releases.nixos.org` were blocked
-with HTTP 403. No build or test success is claimed until those pinned checks
-can run. `git diff --check` and shell syntax checks are available independently.
+CI runs this same shell with Rust, Cargo, rustfmt and Clippy 1.93.0. The local
+execution environment's Nix cache access is blocked, so runtime validation is
+performed by the PR's Nix CI, with the exact tested commit recorded in its run
+and PR description.
+
+To verify that the panic and mode-tile tests distinguish the fixes from the old
+implementations, run:
+
+```sh
+nix develop ./.nix --command ./scripts/check-regression-witnesses 9c74b7029e6112175d0914c0efc12d87317efccf
+```
+
+This creates an isolated checkout of the current test harness, replaces only
+the row/grid/bar implementations with that baseline, and requires the three
+behavior tests to fail. A compilation failure or empty test filter does not
+count as a regression witness. The primary checkout remains untouched. CI also
+runs this check after the fixed implementation passes its full checks.
 
 ## Remaining investigation
 
-The undisclosed sidebar bug is not yet identified. Process icon refresh,
-background bell navigation, tree selection after asynchronous pane closure,
-multi-client resize and mouse routing need further interaction coverage.
-The new tests check label placement and SGR isolation but do not yet exhaust
-these state machines. They observe the daemon's client protocol, not the
-crossterm client's own key decoder or a hardware terminal.
+Two sidebar/tree failures have been reproduced: a one-row bell badge overwrote
+the mode tile, and removing an earlier session changed the selected tree object
+and its preview. Whether either is Julian's undisclosed bug remains unknown.
+Process icon refresh, multi-client resize and mouse routing need further
+interaction coverage. The tests observe the daemon's client protocol, not the
+crossterm client's key decoder or a hardware terminal. PTY byte fixtures use an
+interactive `/bin/sh` to avoid readline injecting unrelated resize redraws.

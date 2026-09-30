@@ -424,6 +424,15 @@ fn background_pty_bell_cannot_overwrite_the_mode_tile_after_narrow_resize() {
 
 #[test]
 fn tree_keeps_the_selected_session_when_an_earlier_background_shell_exits() {
+    tree_selection_survives_exit(false);
+}
+
+#[test]
+fn tree_keeps_the_selected_pane_when_an_earlier_background_shell_exits() {
+    tree_selection_survives_exit(true);
+}
+
+fn tree_selection_survives_exit(expanded: bool) {
     let mut session = Session::new();
     session.command(MuxCommand::NewSession(Some("other".into())));
     session.output(b"\x1bcOTHER", "OTHER");
@@ -434,6 +443,14 @@ fn tree_keeps_the_selected_session_when_an_earlier_background_shell_exits() {
         .server
         .handle_key(1, crate::protocol::parse_for_test("Up"))
         .unwrap();
+    if expanded {
+        for key in ["Right", "Down", "Down"] {
+            session
+                .server
+                .handle_key(1, crate::protocol::parse_for_test(key))
+                .unwrap();
+        }
+    }
     assert!(session.capture().contents().contains("OTHER"));
 
     session.server.sessions[0].windows[0].panes[0]
@@ -453,5 +470,6 @@ fn tree_keeps_the_selected_session_when_an_earlier_background_shell_exits() {
         screen.contents().contains("OTHER"),
         "preview changed after unrelated exit"
     );
-    assert_eq!(screen.cell(1, 0).unwrap().bgcolor(), selected_background);
+    let row = if expanded { 4 } else { 1 };
+    assert_eq!(screen.cell(row, 0).unwrap().bgcolor(), selected_background);
 }
