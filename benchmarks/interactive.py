@@ -140,7 +140,7 @@ class Interactive(Recovery):
 
     def visible_selected_window(self, number, count, name):
         if self.variant=='mux':
-            row=(38-count*3)//2+(number-1)*3+1
+            row=(self.client.screen.lines-2-count*3)//2+(number-1)*3+1
             return self.client.screen.buffer[row][1].data=='•'
         return f'{number}:{name}*' in self.client.screen.display[-1]
 
@@ -307,14 +307,19 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
             r.keys(b'\x02:kill-session')
             kill=b'\r'
         r.action('delete_session',kill,lambda:r.client.contains('SCRATCH>'))
-        # Physical client resize: endpoint is a shell's real SIGWINCH redraw.
-        r.client.input(b"PS1='SIZE>'; stty echo\n");r.client.drain()
+        # Native TIOCSWINSZ + SIGWINCH: stop at the new visible geometry,
+        # not a CLI acknowledgement or a shell probe with a settle delay.
+        selected=next(w for w in r.windows() if w['active'])
+        index=r.selected_window();count=len(r.windows());name=selected['name']
+        before=list(r.client.screen.display)
         start=time.perf_counter_ns();r.client.size(44 if variant=='mux' else 45,r.columns)
-        r.client.until(lambda:r.client.screen.cursor.y<44)
-        r.client.input(b"printf 'SIZE_RESULT:'; stty size\n")
-        end=r.client.until(lambda:r.client.contains('44 100'))
-        r.measurements.append({'name':'terminal_resize_plus_probe','latency_ms':(end-start)/1e6,'input_ns':start,'decoded_ns':end,'correct':True,'after':list(r.client.screen.display)})
-        r.client.size(40 if variant=='mux' else 41,r.columns);r.client.drain();r.shell_marker('SCRATCH',history_rows)
+        assert not r.visible_selected_window(index,count,name)
+        end=r.client.until(lambda:r.visible_selected_window(index,count,name) and r.client.contains('SCRATCH>'))
+        dimensions=r.active();assert dimensions['rows']==44 and dimensions['cols']==100,dimensions
+        r.measurements.append({'name':'terminal_resize_viewport','latency_ms':(end-start)/1e6,'input_ns':start,'decoded_ns':end,'correct':True,'before':before,'after':list(r.client.screen.display),'dimensions_after':dimensions,'resize':{'content_rows':44,'content_columns':100}})
+        r.client.size(40 if variant=='mux' else 41,r.columns)
+        r.client.until(lambda:r.visible_selected_window(index,count,name))
+        r.shell_marker('SCRATCH',history_rows)
         # Search a retained record far outside the live viewport.
         before=list(r.client.screen.display)
         r.action('enter_copy_mode',b'\x1bw',lambda:r.client.screen.display!=before)
