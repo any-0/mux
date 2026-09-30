@@ -20,6 +20,7 @@ def synchronized(session):
         assert time.monotonic()<deadline, 'synchronized fixture startup timed out'
     session.checkpoint('sync-base')
     completed=session.expected.snapshot()
+    completed_offset=session.capture_offset
     write_json(session.root/'sync-completed-presentation.json',completed)
     try:
         for command,stage in ((b'B','begin'),(b'R','repeat')):
@@ -43,7 +44,10 @@ def synchronized(session):
                 assert time.monotonic()-started<.8, 'synchronized fresh-frame barrier exceeded pre-expiry budget'
             write_json(session.root/f'sync-{stage}-actual.json',actual)
             assert actual==completed, 'synchronized prebatch presentation: cells/cursor/styles must retain completed state'
-            session.action('synchronized-presentation',stage=stage,elapsed_seconds=time.monotonic()-started,client=client['name'],response_hex=proof.read_bytes().hex())
+            session.action('synchronized-presentation',stage=stage,elapsed_seconds=time.monotonic()-started,
+                           client=client['name'],client_offset=client['offset'],bar=session.bar,
+                           rows=session.rows,cols=session.cols,capture_file=session.capture_path.name,
+                           completed_capture_offset=completed_offset,response_hex=proof.read_bytes().hex())
         os.write(fifo,b'E')
         deadline=time.monotonic()+5
         while not (work/'sync-end.response').exists():

@@ -19,9 +19,11 @@ class WitnessSignature(unittest.TestCase):
             root=Path(temporary)
             path=root/'witness-styled-intensity-diff.json'
             path.write_text(json.dumps(exact));self.assertTrue(intended_intensity_failure(root))
-            for alter in ('cursor','glyph','dim','color','count'):
+            for alter in ('cursor','hidden','shape','glyph','dim','color','count'):
                 data=copy.deepcopy(exact)
                 if alter=='cursor':data[0]['actual_cursor']=[2,7]
+                elif alter=='hidden':data[0]['actual_hidden']=True
+                elif alter=='shape':data[0]['actual_shape']='block'
                 elif alter=='glyph':data[0]['cells'][0]['actual'][0]='X'
                 elif alter=='dim':data[0]['cells'][0]['actual'][4]=False
                 elif alter=='color':data[0]['cells'][0]['actual'][1]='ff0000'
