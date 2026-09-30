@@ -53,12 +53,17 @@ plus cursor position, visibility and shape. Canonicalization is limited to NFC
 combining characters and equivalent indexed-color encodings (for example SGR
 36 and SGR 38;5;6). Default color remains distinct from an explicit color.
 
-Seven test methods check pyte's extensions, including fifteen hand-authored
+Seven test methods check pyte's extensions, including sixteen hand-authored
 external-spec fixtures in `stress/fixtures/protocol.json`, tested at every byte
 split. Fixture expectations are partial cell/cursor fields authored from
 [kitty underline semantics](https://sw.kovidgoyal.net/kitty/underlines/) and
 [xterm control sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html),
-never generated from mux or the Python oracle. This is specification validation,
+never generated from mux or the Python oracle. The wide-glyph margin fixture
+is independently transcribed from pinned upstream
+[libvterm 61screen_unicode.test](https://github.com/neovim/libvterm/blob/934bc2fbf21800ac3458a499df8820ca5fb45fd3/t/61screen_unicode.test).
+It exposed a pyte 0.8.2 defect: a wide glyph at the last column did not wrap
+intact. The oracle corrects that behavior according to the upstream fixture;
+replaying the saved dynamic-prompt failure then matches all thirteen checkpoints. This is specification validation,
 not a claim that a third emulator was executed. Vectors cover:
 colon/semicolon SGR colors, all six underline states, SGR 22 transitions,
 private modifyOtherKeys negotiation, split UTF-8/control strings, DEC 1049

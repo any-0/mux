@@ -13,7 +13,7 @@ class OracleVectors(unittest.TestCase):
             data = fixture['sequence'].encode()
             for split in range(len(data) + 1):
                 with self.subTest(fixture=fixture['name'], split=split):
-                    terminal = Terminal(3, 20)
+                    terminal = Terminal(fixture.get('rows', 3), fixture.get('cols', 20))
                     terminal.feed(data[:split])
                     terminal.feed(data[split:])
                     snapshot = terminal.snapshot()

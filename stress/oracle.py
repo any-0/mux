@@ -10,6 +10,7 @@ from collections import namedtuple
 
 import pyte
 from pyte import graphics, modes
+from wcwidth import wcwidth
 
 
 def viewport(snapshot, rows, cols):
@@ -31,6 +32,16 @@ Char = namedtuple('Char', pyte.screens.Char._fields + ('dim', 'underline_style',
 
 
 class Screen(pyte.Screen):
+    def draw(self, data):
+        # libvterm's upstream 61screen_unicode.test requires a double-width
+        # glyph at the final column to wrap intact. pyte 0.8.2 instead paints
+        # half the glyph there. Apply that external contract before its draw.
+        for char in data:
+            if wcwidth(char) == 2 and self.cursor.x == self.columns - 1 and modes.DECAWM in self.mode:
+                self.carriage_return()
+                self.linefeed()
+            super().draw(char)
+
     @property
     def default_char(self):
         return Char(' ', reverse=modes.DECSCNM in self.mode)
