@@ -52,8 +52,9 @@ with open(control) as commands:
             # Background output arrives while a real multiline shell editor
             # holds a wrapped command. Explicit redraw establishes a protocol
             # comparison boundary; file effects additionally verify input.
-            command = "printf '%s\\n' 'async-input-界-e\u0301' > async-proof.txtXXX"
             for n, (rows, cols) in enumerate([(24, 85), (9, 37), (17, 61)]):
+                value = f'async-input-{n}-界-e\u0301'
+                command = f"printf '%s\\n' '{value}' > async-proof.txtXXX"
                 session.input(command.encode())
                 session.settle()
                 os.write(control, f'{n}\n'.encode())
@@ -64,7 +65,7 @@ with open(control) as commands:
                 session.resize(rows, cols)
                 session.checkpoint(f'async-editor-resized-{n}')
                 session.input(b'\x01\x05\x7f\x7f\x7f\r')
-                file_equals(session, directory / 'work/async-proof.txt', 'async-input-界-e\u0301\n'.encode())
+                file_equals(session, directory / 'work/async-proof.txt', (value+'\n').encode())
                 session.checkpoint(f'async-input-effect-{n}')
             session.resize(24, 85)
             session.checkpoint('before-stall')
