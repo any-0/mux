@@ -41,6 +41,11 @@ if pid == 0:
     os.execv(shell, [shell, *arguments])
 os.close(slave)
 signal.signal(signal.SIGWINCH, resize)
+def stop(signum, _frame):
+    raise SystemExit(128 + signum)
+
+for signum in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
+    signal.signal(signum, stop)
 old = termios.tcgetattr(0)
 tty.setraw(0)
 try:
@@ -67,5 +72,8 @@ try:
                 view = view[os.write(master, view):]
 finally:
     termios.tcsetattr(0, termios.TCSANOW, old)
-    os.kill(pid, signal.SIGHUP)
+    try:
+        os.killpg(pid, signal.SIGHUP)
+    except ProcessLookupError:
+        pass
     os.waitpid(pid, 0)

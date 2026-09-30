@@ -2537,7 +2537,12 @@ fn detached_sessions_do_not_poll_process_icons() {
 fn two_digit_sidebar_process_tiles_keep_their_background_through_the_right_edge() {
     let directory = env::temp_dir().join(format!("mux-wide-bar-{}", std::process::id()));
     let (mut server, _events, _client) = server_with_pending_bell(&directory);
+    let (messages, received) = mpsc::sync_channel(1);
     let client = server.clients.get_mut(&1).unwrap();
+    client.writer = ClientWriter {
+        messages,
+        thread: thread::spawn(|| {}),
+    };
     client.initialized = true;
     client.session_id = Some(server.sessions[0].id);
     server.sessions[0].windows[0].bell = None;
@@ -2545,11 +2550,10 @@ fn two_digit_sidebar_process_tiles_keep_their_background_through_the_right_edge(
         server.new_window(1).unwrap();
     }
     let theme = server.clients[&1].rendered_theme();
-    let mut frame = Frame::default();
-    frame.reset(24, 80);
-    server.render_bar(1, &mut frame, 24, false, 6);
-    let mut bytes = Vec::new();
-    frame.diff(&Frame::default(), ColorDepth::TrueColor, &mut bytes);
+    server.render_all();
+    let ServerMessage::Render(bytes) = received.recv().unwrap() else {
+        panic!("expected terminal output");
+    };
     let mut terminal = vt100::Parser::new(24, 80, 0);
     terminal.process(&bytes);
     // Ten windows, the last selected, seven tiles visible: first tile is
