@@ -45,10 +45,10 @@ jobs:
           mkdir -p evidence
           for group in '1 idle' '3 busy'; do
             read -r windows load <<< "$group"
-            for mode in perf strace; do
+            for mode in strace perf; do
               nix develop ./.nix#benchmark --command python3 scripts/performance/profile.py --harness harness --output "evidence/w${windows}-${load}-${mode}" --windows "$windows" --load "$load" --mode "$mode"
               if [ "$mode" = perf ]; then
-                sudo "$PERF_BINARY" report -i "evidence/w${windows}-${load}-${mode}/perf.data" --stdio --no-children --percent-limit .2 > "evidence/w${windows}-${load}-${mode}/perf-report.txt"
+                "$PERF_BINARY" report -i "evidence/w${windows}-${load}-${mode}/perf.data" --stdio --no-children --percent-limit .2 > "evidence/w${windows}-${load}-${mode}/perf-report.txt"
               fi
             done
           done
