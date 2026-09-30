@@ -25,7 +25,12 @@ def run(binary, directory, shell):
             value = f'delivered-{n}-界-e\u0301'
             command = f"printf '%s\\n' '{value}' > input-proof.txtXXX"
             session.input(command.encode())
+            # The two-PTY recorder cannot impose a total order on old-width
+            # output already in flight when the outer parser resizes. Drain
+            # that output, then wait for explicit repaint before editing.
+            session.settle()
             session.resize(rows, cols)
+            session.settle()
             session.input(b'\x01\x05\x7f\x7f\x7f\r')
             file_equals(session, proof, (value + '\n').encode())
             session.checkpoint(f'input-edited-{n}')
