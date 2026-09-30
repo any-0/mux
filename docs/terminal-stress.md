@@ -360,7 +360,7 @@ The sensitivity runner checks fixed focus/split/output/sync cases first, then
 isolated no-op zoom, wrong input routing, live-rendered synchronized batch and
 silently suppressed large-cat output mutations. A compile/setup failure does
 not count: each must reach its designated observable assertion. It saves exact
-patches, logs, exit codes and revision/pin provenance, restores the fixed build,
+patches, logs, exit codes and revision/pin provenance, keeps the fixed build separate,
 and never commits mutant production code. The minimized intensity witness also
 requires exactly four `BOTH` cells losing only bold; unrelated cursor, glyph,
 faintness, color or additional mismatches cannot satisfy baseline evidence.

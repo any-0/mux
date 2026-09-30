@@ -48,7 +48,10 @@ def check(output):
     case(fixed,'output','mutant-output','observed 0 rows/0 complete bodies',os.environ|{'PATH':str(wrapper)+os.pathsep+os.environ['PATH']})
     worktree=output/'mutant-source'
     subprocess.run(['git','worktree','add','--detach',str(worktree),'HEAD'],cwd=ROOT,check=True)
-    target=ROOT/'target'
+    # Cargo can reuse an executable from another checkout when an otherwise
+    # identical package shares its target directory. Never let deliberate
+    # mutations replace the binary used by the preserved long-run corpus.
+    target=output.parent/'feature-mutant-target'
     mutations=[
         ('focus','src/server/mod.rs','window.zoomed = !window.zoomed;','window.zoomed = window.zoomed;','pane visible rectangle F'),
         ('split','src/server/input.rs',
@@ -76,8 +79,7 @@ def check(output):
             path.write_text(original)
     finally:
         subprocess.run(['git','worktree','remove','--force',str(worktree)],cwd=ROOT,check=True)
-        code,text=execute(['cargo','build','--locked'],output/'restore-fixed-build.log')
-        assert code==0,f'fixed rebuild failed: {text[-3000:]}'
+        assert hashlib.sha256((ROOT/'target/debug/mux').read_bytes()).digest()==hashlib.sha256(fixed.read_bytes()).digest(), 'mutation runner changed the fixed binary'
     write_json(output/'provenance.json',dict(source_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),nixpkgs=os.environ.get('STRESS_NIXPKGS_REV'),rust=os.environ.get('STRESS_RUST_VERSION')))
     # Exact hashes, patches and build logs reproduce each mutation. Keeping four
     # debug executables would overwhelm the raw trace artifact transfer budget.
