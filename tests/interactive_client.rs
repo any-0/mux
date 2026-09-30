@@ -33,18 +33,34 @@ impl TerminalSession {
         fs::write(&config, "mouse = true\n").unwrap();
         let socket = runtime.join("mux.sock");
         let daemon = Command::new(env!("CARGO_BIN_EXE_mux"))
-            .arg("__server").arg(&socket)
-            .env("HOME", &home).env("SHELL", "/bin/sh")
+            .arg("__server")
+            .arg(&socket)
+            .env("HOME", &home)
+            .env("SHELL", "/bin/sh")
             .env("XDG_STATE_HOME", root.join("state"))
             .env("XDG_RUNTIME_DIR", &runtime)
-            .env_remove("MUX").env_remove("MUX_PANE")
-            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit())
-            .spawn().unwrap();
-        let pair = native_pty_system().openpty(PtySize {
-            rows: 12, cols: 40, pixel_width: 0, pixel_height: 0,
-        }).unwrap();
+            .env_remove("MUX")
+            .env_remove("MUX_PANE")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 12,
+                cols: 40,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_mux"));
-        command.args(["--config", config.to_str().unwrap(), "--session", "interactive"]);
+        command.args([
+            "--config",
+            config.to_str().unwrap(),
+            "--session",
+            "interactive",
+        ]);
         command.cwd(&root);
         command.env("HOME", &home);
         command.env("SHELL", "/bin/sh");
@@ -71,13 +87,20 @@ impl TerminalSession {
                 match reader.read(&mut bytes) {
                     Ok(0) | Err(_) => return,
                     Ok(length) => {
-                        if sender.send(bytes[..length].to_vec()).is_err() { return; }
+                        if sender.send(bytes[..length].to_vec()).is_err() {
+                            return;
+                        }
                     }
                 }
             }
         });
         let mut session = Self {
-            root, daemon, client, master: pair.master, input, output,
+            root,
+            daemon,
+            client,
+            master: pair.master,
+            input,
+            output,
             terminal: vt100::Parser::new(12, 40, 0),
         };
         session.wait(|screen| screen.mouse_protocol_mode() != vt100::MouseProtocolMode::None);
@@ -88,8 +111,15 @@ impl TerminalSession {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !ready(self.terminal.screen()) {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            assert!(!remaining.is_zero(), "terminal timed out: {:?}", self.terminal.screen().contents());
-            let bytes = self.output.recv_timeout(remaining).expect("client produced no terminal output");
+            assert!(
+                !remaining.is_zero(),
+                "terminal timed out: {:?}",
+                self.terminal.screen().contents()
+            );
+            let bytes = self
+                .output
+                .recv_timeout(remaining)
+                .expect("client produced no terminal output");
             self.terminal.process(&bytes);
         }
     }
@@ -108,8 +138,11 @@ impl TerminalSession {
 
     fn command(&self, command: &str) {
         let result = Command::new(env!("CARGO_BIN_EXE_mux"))
-            .arg(command).env("MUX", self.root.join("runtime/mux.sock"))
-            .env_remove("MUX_PANE").output().unwrap();
+            .arg(command)
+            .env("MUX", self.root.join("runtime/mux.sock"))
+            .env_remove("MUX_PANE")
+            .output()
+            .unwrap();
         assert!(result.status.success(), "command failed: {:?}", result);
     }
 }
@@ -131,8 +164,16 @@ fn executable_decodes_keys_bracketed_paste_and_mouse_then_selects_visible_window
     let setup = session.root.join("setup");
     let done = session.root.join("done");
     let captured = session.root.join("input-bytes");
-    fs::write(&setup, b"\x1b[?1h\x1b[?2004h\x1b[?1002h\x1b[?1006h\r\nINPUT-READY").unwrap();
-    fs::write(&done, b"\x1b[?1l\x1b[?2004l\x1b[?1002l\x1b[?1006l\r\nINPUT-DONE").unwrap();
+    fs::write(
+        &setup,
+        b"\x1b[?1h\x1b[?2004h\x1b[?1002h\x1b[?1006h\r\nINPUT-READY",
+    )
+    .unwrap();
+    fs::write(
+        &done,
+        b"\x1b[?1l\x1b[?2004l\x1b[?1002l\x1b[?1006l\r\nINPUT-DONE",
+    )
+    .unwrap();
     let expected = b"\x1bOA\x1b[200~hello\nworld\x1b[201~\x1b[<0;5;3M\x1b[<0;5;3m";
     session.type_bytes(format!("stty raw -echo; cat '{}'; dd bs=1 count={} of='{}' 2>/dev/null; stty -raw -echo; cat '{}'\r", setup.display(), expected.len(), captured.display(), done.display()).as_bytes());
     session.wait(|screen| screen.contents().contains("INPUT-READY"));
@@ -143,12 +184,26 @@ fn executable_decodes_keys_bracketed_paste_and_mouse_then_selects_visible_window
     session.fixture("second", b"\x1bcSECOND-WINDOW", "SECOND-WINDOW");
     session.command("new-window");
     session.fixture("third", b"\x1bcTHIRD-WINDOW", "THIRD-WINDOW");
-    session.master.resize(PtySize { rows: 7, cols: 40, pixel_width: 0, pixel_height: 0 }).unwrap();
+    session
+        .master
+        .resize(PtySize {
+            rows: 7,
+            cols: 40,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
     session.terminal.screen_mut().set_size(7, 40);
     session.wait(|screen| screen.cell(2, 1).unwrap().contents() == "•");
     session.type_bytes(b"\x1b[<0;2;3M\x1b[<0;2;3m");
     // Execute a command after the click. Its unique output proves which real
     // shell received subsequent input, even when a click produces no redraw.
     session.fixture("clicked", b"\r\nCLICK-READY", "CLICK-READY");
-    assert!(session.terminal.screen().contents().contains("THIRD-WINDOW"));
+    assert!(
+        session
+            .terminal
+            .screen()
+            .contents()
+            .contains("THIRD-WINDOW")
+    );
 }

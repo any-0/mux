@@ -668,6 +668,8 @@ fn two_clients_observe_shared_windows_but_keep_independent_history_viewports() {
         ))
         .unwrap();
     peer.terminal.screen_mut().set_size(6, 18);
+    // Shrinking clips bottom screen rows. Emit fresh live output afterward.
+    session.output(b"\\x1b[H\\x1b[2KLIVE-END", "LIVE-END");
     // A peer's resize must not force this client's private history view live.
     assert!(!session.capture().contents().contains("LIVE-END"));
     for _ in 0..20 {
