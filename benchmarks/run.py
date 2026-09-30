@@ -41,7 +41,22 @@ class Terminal:
 
         self.master, slave = pty.openpty()
         self.size(rows, columns)
-        self.screen = pyte.Screen(columns, rows)
+        master = self.master
+
+        class AttachedScreen(pyte.Screen):
+            def write_process_input(self, data):
+                os.write(master, data.encode())
+
+            def report_device_status(self, mode, **kwargs):
+                # pyte 0.8.2 does not accept DEC's private DSR keyword.
+                # tmux requests it during real attached-client negotiation.
+                if kwargs.get('private'):
+                    if mode == 6:
+                        self.write_process_input(f'\x1b[?{self.cursor.y + 1};{self.cursor.x + 1}R')
+                else:
+                    super().report_device_status(mode)
+
+        self.screen = AttachedScreen(columns, rows)
         self.stream = pyte.Stream(self.screen)
         self.decoder = codecs.getincrementaldecoder('utf-8')('replace')
         self.raw = (directory / 'client.ansi').open('wb')
