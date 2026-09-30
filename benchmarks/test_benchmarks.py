@@ -389,6 +389,24 @@ class RecoveryControllerTests(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec('pyte'), 'pyte absent; run validation in Nix shell')
 class AttachedPTYTests(unittest.TestCase):
+    def test_secondary_identity_query_cannot_inject_primary_reply_into_shell(self):
+        program = r'''
+import os, tty
+tty.setraw(0)
+os.write(1, b'\x1b[>cWAIT_IDENTITY')
+reply = os.read(0, 20)
+os.write(1, b'IDENTITY_OK' if reply == b'X' else b'IDENTITY_FAILED')
+os.read(0, 1)
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            terminal = Terminal([sys.executable, '-c', program], dict(os.environ), Path(tmp), 8, 100)
+            try:
+                terminal.until(lambda: terminal.contains('WAIT_IDENTITY'), timeout=3)
+                terminal.input(b'X')
+                terminal.until(lambda: terminal.contains('IDENTITY_OK'), timeout=3)
+            finally:
+                terminal.close()
+
     def test_overwritten_wide_leading_cell_renders_orphan_stub_as_blank(self):
         program = "import os; os.write(1, '漢\\x1b[1GA'.encode()); input()"
         with tempfile.TemporaryDirectory() as tmp:
