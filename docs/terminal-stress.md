@@ -94,8 +94,16 @@ The seeded session repeatedly:
 
 - Runs `cat` on a Unicode/blank-line fixture and `head` on styled long lines.
 - Runs `cat` on 2,400 logical styled rows every fourth cycle. The 240-cycle soak
-  produces 144,000 large-output rows and 8,880 head rows per profile,
-  plus small cat output (432,000 large rows across the three shells).
+  requests 144,000 large-output rows and 8,880 head rows per profile,
+  plus small cat output (432,000 requested large rows across the three shells).
+  Earlier manifests through `01eaa380` derived large-row totals from the cycle
+  count; these were requested/generated totals, not independently measured
+  source output. This coverage gap does not establish that those passing runs
+  skipped output. Current commands require generation-specific zero-exit
+  completion files, exactly one full fixture body in recorded source PTY bytes,
+  and measured `ROW` records. Summaries distinguish requested and observed
+  source rows. Observed source rows do not mean every row was individually
+  rendered, retained or compared: full-cell comparisons occur at checkpoints.
   Long rows wrap; styles cycle through no underline, straight, double, curly,
   dotted and dashed, with RGB underline color and bold/faint/italic transitions.
 - Edits a long wrapped command with Home/end, forward moves and deletions;
@@ -311,6 +319,47 @@ key dismisses it and shell-cell comparisons resume. Clipboard-file completion
 alone is not a barrier for the daemon's asynchronous notification. Full styled viewport coordinates, scroll anchoring,
 selection overlays and arbitrary reflow history remain unsupported; ECMA-48
 does not define those mux-specific copy-mode policies.
+
+## Independent feature assertions and mutation sensitivity
+
+`stress/pane_probe.py` is a real foreground PTY application that paints known
+RGB, bold/faint, italic and double/curly-underlined cells, sets a known cursor,
+records its kernel PTY geometry on resize, and records every received input byte.
+Focus checks assert its entire styled screen with the sidebar absent, direct
+Alt-a input delivery, then the restored action-owned sidebar and pane rectangle.
+Split checks require both independently identified PTY rectangles, even division
+of available width with one separator, their cursor/styles/kernel geometry,
+distinct input-file effects on each selected pane, and full expansion after kill.
+The oracle accepts either allocation of an odd extra column; it does not copy
+mux's layout algorithm or derive expected state from its JSON queries.
+
+`stress/sync_sessions.py` uses a FIFO and real DECRQM replies to observe a batch
+after parsing and before release. Newly attached clients must present the prior
+completed cells/cursor/styles after both BSU and repeated BSU; ESU must expose
+the changed state. This follows the independent
+[synchronized-output specification](https://github.com/contour-terminal/vt-extensions/blob/master/synchronized-output.md).
+Each transient assertion has a 0.8-second setup budget before native expiry;
+exceeding it is a setup failure, never accepted mutation evidence. The external
+specification defines no consensus expiry duration. Timed-release behavior is
+not modeled: generic oracle snapshots reject unfinished/timed batches rather
+than comparing pyte's live logical buffer as the displayed frame.
+
+Run the fixed cases and deliberate mutations through the project's pin:
+
+```sh
+./scripts/stress-nix python3 stress/check_feature_mutations.py --output /tmp/mux-feature-mutations
+./scripts/stress-nix python3 -m unittest discover -s stress -p test_witness_signature.py -v
+./scripts/stress-nix python3 -m unittest discover -s stress -p test_sync_boundary.py -v
+```
+
+The sensitivity runner checks fixed focus/split/output/sync cases first, then
+isolated no-op zoom, wrong input routing, live-rendered synchronized batch and
+silently suppressed large-cat output mutations. A compile/setup failure does
+not count: each must reach its designated observable assertion. It saves exact
+patches, logs, exit codes and revision/pin provenance, restores the fixed build,
+and never commits mutant production code. The minimized intensity witness also
+requires exactly four `BOTH` cells losing only bold; unrelated cursor, glyph,
+faintness, color or additional mismatches cannot satisfy baseline evidence.
 
 ```sh
 ./scripts/stress-nix python3 -m unittest discover -s stress -p test_transport.py -v

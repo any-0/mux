@@ -338,12 +338,9 @@ def run_profile(binary, directory, shell, cycles, seed):
         session.checkpoint('dynamic-multiline-prompt')
         # Large cat/head fixture includes UTF-8, long logical rows, blank rows,
         # color and all underline variants. Inputs do not contain output markers.
-        lines = []
-        for n in range(2400):
-            style = n % 6
-            lines.append(f'\x1b[1;2;3;4:{style};58:2::13:97:211;38;2;40;180;90mROW{n:05} 界 e\u0301 '
-                         + 'x' * (n % 121) + '\x1b[22;23;24;59;39m plain\n')
-        (directory / 'work/large.txt').write_text(''.join(lines))
+        from output_workloads import large_fixture, output_command
+        large = large_fixture()
+        (directory / 'work/large.txt').write_bytes(large)
         (directory / 'work/sample.txt').write_text('alpha\n界 e\u0301\n\nlast\n')
         nested = directory / 'work/dynamic-cwd-界-long-prompt-boundary'
         nested.mkdir()
@@ -356,15 +353,12 @@ def run_profile(binary, directory, shell, cycles, seed):
                 session.checkpoint(f'{n:03}-dynamic-cwd-prompt')
             # Keep newline-containing prompts alive throughout many resizes,
             # wrapped edits, interrupts, redraws and heavy output bursts.
-            session.input(b'cat sample.txt\r')
-            session.settle()
+            output_command(session, 'cat sample.txt', (directory/'work/sample.txt').read_bytes(), 'sample', n)
             session.checkpoint(f'{n:03}-cat')
-            session.input(b'head -n 37 large.txt\r')
-            session.settle()
+            output_command(session, 'head -n 37 large.txt', b''.join(large.splitlines(keepends=True)[:37]), 'head', n)
             session.checkpoint(f'{n:03}-head-styles')
             if n % 4 == 0:
-                session.input(b'cat large.txt\r')
-                session.settle()
+                output_command(session, 'cat large.txt', large, 'large', n)
                 session.checkpoint(f'{n:03}-large-wrap')
             session.input(('echo ' + 'wrapped-edit-' * 12).encode())
             session.settle()
@@ -442,7 +436,9 @@ def run_profile(binary, directory, shell, cycles, seed):
             session.sidebar(12, active)
         return {'shell': shell, 'cycles': cycles, 'checkpoints': session.checkpoints,
                 'actions': session.action_index, 'elapsed_seconds': round(time.monotonic() - started, 3),
-                'budget_seconds': 1800, 'large_output_logical_rows': ((cycles + 3) // 4) * 2400,
+                'budget_seconds': 1800, 'large_output_requested_logical_rows': sum(c['requested_logical_rows'] for c in getattr(session,'output_coverage',[]) if c['kind']=='large'),
+                'large_output_observed_source_logical_rows': sum(c['observed_source_logical_rows'] for c in getattr(session,'output_coverage',[]) if c['kind']=='large'),
+                'head_output_observed_source_logical_rows': sum(c['observed_source_logical_rows'] for c in getattr(session,'output_coverage',[]) if c['kind']=='head'),
                 'passed': True}
     finally:
         session.close()
@@ -464,6 +460,7 @@ def main():
         'nixpkgs_revision': os.environ.get('STRESS_NIXPKGS_REV'),
         'rust_version': os.environ.get('STRESS_RUST_VERSION'),
         'seed': args.seed, 'cycles': args.cycles, 'shells': args.shells,
+        'row_accounting': 'requested rows and independently observed source PTY rows; not a count of individually displayed or retained rows',
         'cell_fields': ['text', 'fg', 'bg', 'bold', 'dim', 'italic', 'inverse', 'underline_style', 'underline_color'],
         'cursor_fields': ['row', 'column', 'visibility', 'shape'],
     })

@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 import time
 from run import Session, write_json
+from pane_checks import focus, split
 
 SHELL_ICONS = {'bash': '$', 'zsh': '❯', 'fish': '·'}
 VIM_ICON = '\ue01f\ue020\ue021'
@@ -80,10 +81,7 @@ def run(binary, directory, shell):
             session.command('select-window', str(active + 1))
             session.sidebar(12, active)
         # Focus mode removes the sidebar; exit must restore the same model.
-        session.input(b'\x1bf')
-        session.settle()
-        session.input(b'\x1bf')
-        session.sidebar(12, 5)
+        focus(session, 12, 5)
         metadata(session, {'stress': (12, 12, True)})
         session.command('new-session', '-s', 'auxiliary')
         session.command('rename-session', 'aux-renamed')
@@ -93,11 +91,7 @@ def run(binary, directory, shell):
         metadata(session, {'stress': (12, 12, False), 'aux-renamed': (1, 1, True)})
         windows = session.query('list-windows')
         assert [(w['name'], w['active'], w['panes']) for w in windows] == [('named-window', True, 1)]
-        session.command('split-window', '-h')
-        metadata(session, {'stress': (12, 12, False), 'aux-renamed': (1, 2, True)})
-        panes = session.query('list-panes')
-        assert [(p['index'], p['active']) for p in panes] == [(1, False), (2, True)]
-        session.command('kill-pane')
+        split(session)
         metadata(session, {'stress': (12, 12, False), 'aux-renamed': (1, 1, True)})
         session.command('choose-tree')
         session.wait_text('aux-renamed')
