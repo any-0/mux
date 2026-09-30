@@ -1,0 +1,158 @@
+{
+  "mux": {
+    "startup_ms": {
+      "n": 30,
+      "median": 37.724194,
+      "p95": 39.929101
+    },
+    "output_ms": {
+      "n": 30,
+      "median": 113.108473,
+      "p95": 118.185616
+    },
+    "output_mib_s": {
+      "n": 30,
+      "median": 6.913995624635392,
+      "p95": 7.250694845479336
+    },
+    "pss_kib": {
+      "n": 30,
+      "median": 9080.0,
+      "p95": 9114
+    },
+    "rss_kib": {
+      "n": 30,
+      "median": 15046.0,
+      "p95": 15080
+    },
+    "output_cpu_seconds": {
+      "n": 30,
+      "median": 0.1,
+      "p95": 0.1
+    },
+    "idle_cpu_percent": {
+      "n": 30,
+      "median": 0.992134834625224,
+      "p95": 1.3228320041300272
+    },
+    "storage_bytes": {
+      "n": 30,
+      "median": 839243.5,
+      "p95": 843921
+    },
+    "storage_allocated_bytes": {
+      "n": 30,
+      "median": 851968.0,
+      "p95": 856064
+    },
+    "scroll_ms": {
+      "n": 600,
+      "median": 2.3881335000000004,
+      "p95": 2.652053
+    }
+  },
+  "tmux": {
+    "startup_ms": {
+      "n": 30,
+      "median": 17.894824,
+      "p95": 19.31241
+    },
+    "output_ms": {
+      "n": 30,
+      "median": 142.301273,
+      "p95": 159.338119
+    },
+    "output_mib_s": {
+      "n": 30,
+      "median": 5.495641449163735,
+      "p95": 5.665492931811333
+    },
+    "pss_kib": {
+      "n": 30,
+      "median": 13553.0,
+      "p95": 13557
+    },
+    "rss_kib": {
+      "n": 30,
+      "median": 20088.0,
+      "p95": 20092
+    },
+    "output_cpu_seconds": {
+      "n": 30,
+      "median": 0.05,
+      "p95": 0.07
+    },
+    "idle_cpu_percent": {
+      "n": 30,
+      "median": 0.0,
+      "p95": 0.330735143421927
+    },
+    "storage_bytes": {
+      "n": 30,
+      "median": 0.0,
+      "p95": 0
+    },
+    "storage_allocated_bytes": {
+      "n": 30,
+      "median": 0.0,
+      "p95": 0
+    },
+    "scroll_ms": {
+      "n": 600,
+      "median": 2.2999165,
+      "p95": 2.833883
+    }
+  },
+  "tmux-persistence": {
+    "startup_ms": {
+      "n": 30,
+      "median": 188.9426455,
+      "p95": 203.486621
+    },
+    "output_ms": {
+      "n": 30,
+      "median": 145.21124500000002,
+      "p95": 162.215593
+    },
+    "output_mib_s": {
+      "n": 30,
+      "median": 5.38547267925204,
+      "p95": 5.595306357365957
+    },
+    "pss_kib": {
+      "n": 30,
+      "median": 13577.0,
+      "p95": 13617
+    },
+    "rss_kib": {
+      "n": 30,
+      "median": 20112.0,
+      "p95": 20152
+    },
+    "output_cpu_seconds": {
+      "n": 30,
+      "median": 0.06,
+      "p95": 0.07
+    },
+    "idle_cpu_percent": {
+      "n": 30,
+      "median": 0.3304622521629085,
+      "p95": 0.6613987206571076
+    },
+    "storage_bytes": {
+      "n": 30,
+      "median": 0.0,
+      "p95": 0
+    },
+    "storage_allocated_bytes": {
+      "n": 30,
+      "median": 0.0,
+      "p95": 0
+    },
+    "scroll_ms": {
+      "n": 600,
+      "median": 2.4331945,
+      "p95": 3.507087
+    }
+  }
+}

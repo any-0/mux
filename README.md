@@ -63,31 +63,47 @@ bell animation, or expiring message is due.
 
 ## Build and run
 
-### Benchmark status
+### Hosted-CI benchmarks
 
-The [benchmark draft](benchmarks/README.md) defines a Nix environment from this
-repository's `.nix` development lockfile and an attached-PTY comparison of mux, tmux,
-and tmux with resurrect + continuum. Run it with:
+[Run 36744338567](https://github.com/any-0/mux/actions/runs/36744338567)
+measured all three variants sequentially on one hosted Ubuntu VM using the
+project's pinned Nix development toolchain and mux main commit `d6dd228`.
+All 30 paired trials per variant passed correctness gates and an independent
+raw-data audit. Values below are **median / p95**.
+
+| Variant | Scroll viewport latency (ms) | PSS (MiB) | RSS (MiB) |
+| --- | ---: | ---: | ---: |
+| mux | 2.388 / 2.652 | 8.867 / 8.900 | 14.693 / 14.727 |
+| tmux | 2.300 / 2.834 | 13.235 / 13.239 | 19.617 / 19.621 |
+| tmux + resurrect + continuum | 2.433 / 3.507 | 13.259 / 13.298 | 19.641 / 19.680 |
+
+Each trial used the same Bash shell, 100×40 pane, 20,000-row history capacity
+and 10,000 numbered output rows. Scroll timings cover 600 actual attached-PTY
+PageUp events per variant, ending at the correct decoded viewport; they include
+harness scheduling/emulation, not physical display latency. RAM sums daemon,
+client and live descendants after output. One warm-up per variant is excluded.
+Hosted VM caches and shared physical compute limit generalization to other machines.
+
+Thirty clean recovery trials per variant also passed: mux and the plugin stack
+preserved all 600 tagged rows, sampled formatting, layout, cwd and selection,
+and confirmed fresh live shells. Median / p95 restart-to-live times were
+**253.843 / 258.021 ms** for mux and **826.810 / 834.535 ms** for the stack.
+Baseline tmux lost all 600 rows as expected. These are clean-save results;
+**default-period crash recovery remains unmeasured**.
+
+[Full results, Nix pins, methods and raw samples](benchmarks/README.md) include
+startup, output, CPU, storage and save timings with their limits. Reproduce with:
 
 ```sh
 ./scripts/benchmark-nix python3 benchmarks/run.py \
-  --output /tmp/mux-benchmark-run-1 --trials 30
+  --output /tmp/mux-benchmark-run-1 --trials 30 --rows 10000 \
+  --scroll-samples 20 --idle-seconds 3
+./scripts/benchmark-nix python3 benchmarks/recovery.py \
+  --output /tmp/mux-recovery-clean-1 --trials 30 --mode clean
 ```
 
-**Accepted performance results: none yet (0 benchmark trials).** On the selected
-cloud machine, Nix dependency realization was blocked by proxy and runtime
-restrictions; the devShell expression evaluated, but no variant executed.
-[Raw bootstrap evidence](benchmarks/results/bootstrap/) records the attempts.
-The microbenchmark and save/restart/restore/recovery-fidelity harnesses are
-implemented. Supported Nix CI has built the pinned backend and exposed harness
-issues in real smoke interactions. [Candidate Nix CI](https://github.com/any-0/mux/actions/runs/36740002774)
-passed 44 tests and six integration gates at the earlier PR #2 candidate
-`6da51cf`. The benchmark now pins its upstream main merge `d19f0dc`;
-validation and raw artifacts are linked
-in the benchmark draft. No
-median/p95 or performance advantage is claimed. The methodology, pinned
-versions, correctness gates and remaining
-work are documented in the benchmark draft.
+The selected cloud machine's dependency downloads remain policy-blocked;
+these results are explicitly hosted CI, not measurements of Julian's hardware.
 
 Build without installing anything:
 

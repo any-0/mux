@@ -1,0 +1,61 @@
+{
+  "micro_audit": "passed",
+  "trials_per_variant": 30,
+  "events_per_variant": 600,
+  "warmups_excluded": 3,
+  "paired": {
+    "mux": {
+      "trial_median_scroll_ms": {
+        "n": 30,
+        "median": 2.38221975,
+        "p95": 2.577734
+      },
+      "paired_trial_median_difference_from_tmux_ms": {
+        "n": 30,
+        "median": 0.08504600000000018,
+        "p95": 0.31359800000000027
+      },
+      "paired_pss_difference_from_tmux_kib": {
+        "n": 30,
+        "median": -4473.0,
+        "p95": -4435
+      }
+    },
+    "tmux": {
+      "trial_median_scroll_ms": {
+        "n": 30,
+        "median": 2.296924,
+        "p95": 2.806403
+      },
+      "paired_trial_median_difference_from_tmux_ms": {
+        "n": 30,
+        "median": 0.0,
+        "p95": 0.0
+      },
+      "paired_pss_difference_from_tmux_kib": {
+        "n": 30,
+        "median": 0.0,
+        "p95": 0
+      }
+    },
+    "tmux-persistence": {
+      "trial_median_scroll_ms": {
+        "n": 30,
+        "median": 2.4196665,
+        "p95": 2.8091475
+      },
+      "paired_trial_median_difference_from_tmux_ms": {
+        "n": 30,
+        "median": 0.08777950000000012,
+        "p95": 0.5584985000000002
+      },
+      "paired_pss_difference_from_tmux_kib": {
+        "n": 30,
+        "median": 26.0,
+        "p95": 68
+      }
+    }
+  },
+  "clean_failures": [],
+  "clean_timing_comparison_accepted": true
+}

@@ -1,0 +1,13 @@
+{
+  "run_url": "https://github.com/any-0/mux/actions/runs/36744338567",
+  "artifact_id": 11113277869,
+  "runtime_commit": "d6dd228054231e77772bd17a412d8f0d07871835",
+  "harness_branch_commit": "1c1f9417d742d4b0e67e8fe4ffde8941c28f779c",
+  "harness_executed_merge_commit": "4a7223d4c16628d17d00f7294edb7570bb32103b",
+  "sha256": {
+    "audit.json": "60a25249476f10567ebfd3b816bdcda3709451c5c2077bd0e1b58220afe7b19e",
+    "clean-summary.json": "fe5cec1169c1556e1e0c9237de21fb56d0abc26841cb428bfcb2668cf06bafd9",
+    "micro-summary.json": "2f64077d0f277636f2f27e18687a41386f44ac28334c9305c9edf9b8f60b72bd",
+    "raw.zip": "4f31c3751d35df6a8b1a87657b244c484370ca210aadaaf9c7c7e636e4193683"
+  }
+}
