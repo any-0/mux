@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+repository=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repository"
+revision=$(cat benchmarks/mux-revision)
+created_source=
+cleanup() {
+    if [ -n "$created_source" ]; then
+        git worktree remove --force "$created_source"
+    fi
+}
+trap cleanup EXIT HUP INT TERM
+if [ -z "${BENCH_MUX_SOURCE_DIR:-}" ]; then
+    git cat-file -e "$revision^{commit}" 2>/dev/null || git fetch origin "$revision"
+    created_source=$(mktemp -d "${TMPDIR:-/tmp}/mux-benchmark-source.XXXXXX")
+    rmdir "$created_source"
+    git worktree add --detach "$created_source" "$revision"
+    BENCH_MUX_SOURCE_DIR=$created_source
+    export BENCH_MUX_SOURCE_DIR
+fi
+[ "$(git -C "$BENCH_MUX_SOURCE_DIR" rev-parse HEAD)" = "$revision" ] || {
+    echo 'Benchmark runtime checkout differs from benchmarks/mux-revision' >&2
+    exit 1
+}
+nix develop ./.nix#benchmark --command "$@"

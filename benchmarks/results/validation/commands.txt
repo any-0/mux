@@ -1,0 +1,8 @@
+# Host-only correctness validation, NOT a benchmark execution or Nix toolchain comparison.
+python3 -m unittest discover -s benchmarks -p test_benchmarks.py -v
+# Same pyte source version selected by the existing nixpkgs pin; no install/mirror/cache workaround.
+git clone --depth 1 --branch 0.8.2 https://github.com/selectel/pyte.git /tmp/mux-bench-pyte
+PYTHONPATH=/tmp/mux-bench-pyte python3 -m unittest discover -s benchmarks -p test_benchmarks.py -v
+python3 -m py_compile benchmarks/*.py
+# Reproducible validation once the required Nix environment is available:
+nix develop .#benchmark --command python3 -m unittest discover -s benchmarks -p test_benchmarks.py -v

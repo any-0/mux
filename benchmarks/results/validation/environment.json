@@ -1,0 +1,15 @@
+{
+  "kind": "correctness-validation-only",
+  "benchmark_samples": 0,
+  "python_executable": "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+  "python_version": "3.12.14",
+  "wcwidth_version": "0.8.2",
+  "pyte_source": {
+    "version": "0.8.2",
+    "git_commit": "b106bb7bd23ab31ec7709c5e6788117dcc07203c",
+    "loaded_via": "PYTHONPATH=/tmp/mux-bench-pyte",
+    "source": "https://github.com/selectel/pyte"
+  },
+  "nix_environment_realized": false,
+  "note": "Host Python correctness tests and real PTY/emulator validation; not mux/tmux performance trials."
+}

@@ -1,0 +1,22 @@
+installing files
+figuring out ssl certs
+figuring out which runtime to use
+bwrap executable: /usr/bin/bwrap
+nix executable: /tmp/mux-nix-portable/.nix-portable/bin/nix
+proot executable: /tmp/mux-nix-portable/.nix-portable/bin/proot
+testing all available runtimes...
+runtime selected via NP_RUNTIME: proot
+NP_RUNTIME: proot
+base command will be: /tmp/mux-nix-portable/.nix-portable/bin/proot -r /tmp/mux-nix-portable/.nix-portable/emptyroot -b /dev:/dev -b /tmp/mux-nix-portable/.nix-portable/nix:/nix -b /usr/bin:/bin -b /boot:/boot -b /etc:/etc -b /home:/home -b /usr/lib:/lib -b /usr/lib64:/lib64 -b /media:/media -b /mnt:/mnt -b /opt:/opt -b /proc:/proc -b /root:/root -b /run:/run -b /usr/sbin:/sbin -b /srv:/srv -b /sys:/sys -b /tmp:/tmp -b /usr:/usr -b /var:/var -b /workspace:/workspace -b /etc/host.conf:/etc/host.conf -b /etc/hosts:/etc/hosts -b /etc/networks:/etc/networks -b /etc/passwd:/etc/passwd -b /etc/group:/etc/group -b /etc/nsswitch.conf:/etc/nsswitch.conf -b /etc/resolv.conf:/etc/resolv.conf -b /usr/share/zoneinfo/Etc/UTC:/usr/share/zoneinfo/Etc/UTC -b /home/agent:/home/agent -b /etc/ssl/certs/ca-certificates.crt:/tmp/mux-nix-portable/.nix-portable/ca-bundle.crt
+Testing if nix can build stuff without sandbox
+proot error: execve("/nix/store/j823gnvpxh1fjibycmldrspkk3pgivwp-nix-2.20.6/bin/nix"): Bad address
+proot info: possible causes:
+  * the program is a script but its interpreter (eg. /bin/sh) was not found;
+  * the program is an ELF but its interpreter (eg. ld-linux.so) was not found;
+  * the program is a foreign binary but qemu was not specified;
+  * qemu does not work correctly (if specified);
+  * the loader was not found or doesn't work.
+fatal error: see `proot --help`.
+proot warning: ptrace(PEEKDATA): Function not implemented
+proot error: can't chmod '/tmp/proot-3325-hgLPHC': Bad address
+Fatal error: nix is unable to build packages

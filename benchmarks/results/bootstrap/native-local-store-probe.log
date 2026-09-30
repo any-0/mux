@@ -1,0 +1,4 @@
+warning: creating directory '/home/agent/.cache/nix': Read-only file system
+this derivation will be built:
+  /tmp/mux-native-nix/store/d6qaspq4zlld0y2qr8n8qpfhqckwmszk-mux-bootstrap-probe.drv
+building '/tmp/mux-native-nix/store/d6qaspq4zlld0y2qr8n8qpfhqckwmszk-mux-bootstrap-probe.drv'...
