@@ -239,7 +239,7 @@ impl Grid {
             Box::new(body)
         };
         let mut remaining = uncompressed_len;
-        let mut restored = std::collections::VecDeque::new();
+        let mut restored = crate::scrollback::Scrollback::default();
         for _ in 0..rows {
             let mut header = [0; 15];
             if remaining < 15 || reader.read_exact(&mut header).is_err() {
@@ -279,7 +279,7 @@ impl Grid {
         if remaining != 0 || !matches!(reader.read(&mut [0]), Ok(0)) {
             return false;
         }
-        self.scrollback = restored.into_iter().collect();
+        self.scrollback = restored;
         self.scrollback_offset = self.scrollback_offset.min(self.scrollback.len());
         true
     }
