@@ -1,0 +1,55 @@
+name: Hosted paired Nix benchmarks
+
+on:
+  pull_request:
+    types: [opened, reopened]
+    paths:
+      - '.github/workflows/benchmark-performance.yml'
+      - 'benchmarks/**'
+      - '.nix/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  paired:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      BENCH_EXECUTION_CONTEXT: hosted-ci-paired-performance
+      BENCH_MUX_SOURCE_DIR: ${{ github.workspace }}/pinned-runtime
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Read exact merged-main runtime pin
+        id: pin
+        run: echo "revision=$(cat benchmarks/mux-revision)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.pin.outputs.revision }}
+          path: pinned-runtime
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+      - name: Correctness validation before measurements
+        run: |
+          nix develop ./.nix#benchmark --command python3 -m unittest discover -s benchmarks -p test_benchmarks.py -v
+          ./scripts/benchmark-nix python3 benchmarks/ci_validate.py --output "$RUNNER_TEMP/paired-preflight"
+      - name: Thirty paired microbenchmark blocks on this runner
+        run: ./scripts/benchmark-nix python3 benchmarks/run.py --output "$RUNNER_TEMP/paired-micro" --trials 30 --rows 10000 --scroll-samples 20 --idle-seconds 3
+      - name: Thirty paired clean recovery blocks on this same runner
+        if: success() || failure()
+        run: ./scripts/benchmark-nix python3 benchmarks/recovery.py --output "$RUNNER_TEMP/paired-clean" --trials 30 --mode clean
+      - name: Preserve all trials, commands and environment even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: hosted-paired-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/paired-preflight/
+            ${{ runner.temp }}/paired-micro/
+            ${{ runner.temp }}/paired-clean/
+          retention-days: 90
