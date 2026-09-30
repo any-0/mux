@@ -13,7 +13,7 @@ cleanup() {
 }
 trap cleanup 0 HUP INT TERM
 git worktree add --detach "$directory" HEAD
-for path in vendor/vt100/src/row.rs vendor/vt100/src/grid.rs src/server/render.rs; do
+for path in vendor/vt100/src/row.rs vendor/vt100/src/grid.rs src/server/render.rs src/server/input.rs; do
     git show "$baseline:$path" > "$directory/$path"
 done
 cd "$directory"
@@ -22,7 +22,8 @@ export CARGO_TERM_COLOR=never
 for name in \
     malformed_persisted_history_is_rejected_before_render_or_reflow \
     resizing_through_a_wide_cell_then_erasing_does_not_panic \
-    background_pty_bell_cannot_overwrite_the_mode_tile_after_narrow_resize; do
+    background_pty_bell_cannot_overwrite_the_mode_tile_after_narrow_resize \
+    mouse_clicks_follow_the_visible_sidebar_after_narrow_resize; do
     log="$directory/$name.log"
     if cargo test --locked "server::session_regression_tests::$name" -- --exact --nocapture > "$log" 2>&1; then
         cat "$log"
