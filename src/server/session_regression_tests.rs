@@ -377,7 +377,8 @@ fn malformed_persisted_history_is_rejected_before_render_or_reflow() {
         (17, 255),
         (18, 2),
         (22, 3),
-        (34, 3),
+        // Bold+faint (3) is legal; underline styles 6/7 are not.
+        (34, 6 << 5),
         (34, 224),
     ] {
         let mut invalid = row.clone();
@@ -825,7 +826,8 @@ fn supported_style_transitions_and_active_attributes_survive_journal_compaction(
         assert_eq!(cell.underline_style(), style);
     }
     let dim = screen.cell(0, 3).unwrap();
-    assert!(dim.dim() && !dim.bold() && !dim.italic() && !dim.inverse());
+    // SGR 2 adds faint without clearing bold; only SGR 22 clears both.
+    assert!(dim.dim() && dim.bold() && !dim.italic() && !dim.inverse());
     let plain = screen.cell(0, 4).unwrap();
     assert_eq!(plain.underline_style(), vt100::UnderlineStyle::None);
     assert_eq!(plain.fgcolor(), vt100::Color::Default);
