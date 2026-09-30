@@ -1,0 +1,43 @@
+name: Hosted interactive operation benchmarks
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/benchmark-interactive.yml'
+      - 'benchmarks/interactive.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: interactive-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  paired:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      BENCH_MUX_SOURCE_DIR: ${{ github.workspace }}/pinned-runtime
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Runtime pin
+        id: pin
+        run: echo "revision=$(cat benchmarks/mux-revision)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.pin.outputs.revision }}
+          path: pinned-runtime
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+      - name: Broad attached-key correctness gates
+        run: ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/interactive-smoke" --smoke
+      - name: Twenty paired blocks at each scale and load
+        run: ./scripts/benchmark-nix python3 benchmarks/interactive.py --output "$RUNNER_TEMP/interactive-performance" --trials 20
+      - name: Keep raw evidence on success or failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interactive-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/interactive-smoke/
+            ${{ runner.temp }}/interactive-performance/
+          retention-days: 90
