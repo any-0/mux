@@ -13,7 +13,7 @@ concurrency:
 jobs:
   paired:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 340
     env:
       BENCH_MUX_SOURCE_DIR: ${{ github.workspace }}/pinned-runtime
     steps:
