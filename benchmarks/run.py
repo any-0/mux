@@ -32,7 +32,8 @@ ROW = re.compile(r'ROW(\d{8}) x{68}')
 
 
 def command(argv, env=None):
-    return subprocess.check_output(argv, env=env, text=True, stderr=subprocess.STDOUT).strip()
+    return subprocess.check_output(argv, env=env, text=True, stderr=subprocess.STDOUT,
+                                   timeout=120).strip()
 
 
 class Terminal:

@@ -42,9 +42,11 @@ def main():
     clean.mkdir()
     samples = []
     for variant in ('mux', 'tmux', 'tmux-persistence'):
+        print('starting micro', variant, flush=True)
         samples.append(trial(variant, 0, micro, SimpleNamespace(rows=300, scroll_samples=2, idle_seconds=0.2)))
         print('micro', variant, samples[-1]['correct'], samples[-1].get('error'), flush=True)
     for variant in ('mux', 'tmux', 'tmux-persistence'):
+        print('starting clean', variant, flush=True)
         samples.append(recovery_trial(variant, 0, 'clean', 0.0, clean))
         print('clean', variant, samples[-1]['correct'], samples[-1].get('error'), flush=True)
     gates = {'kind': 'hosted-ci-correctness-validation', 'performance_comparison': False,
