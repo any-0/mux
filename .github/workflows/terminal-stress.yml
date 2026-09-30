@@ -26,6 +26,7 @@ jobs:
       - name: Oracle protocol vectors and pinned build
         run: |
           ./scripts/stress-nix python3 -m unittest discover -s stress -p test_oracle.py -v
+          ./scripts/stress-nix python3 -m unittest discover -s stress -p test_transport.py -v
           ./scripts/stress-nix cargo build --locked
       - name: Baseline reproductions on verified pre-fix main
         if: matrix.shell == 'bash'
@@ -47,6 +48,11 @@ jobs:
         run: |
           ./scripts/stress-nix python3 stress/interaction_sessions.py --binary target/debug/mux --output "$RUNNER_TEMP/interaction-stress" --shell ${{ matrix.shell }}
           ./scripts/stress-nix python3 stress/replay.py "$RUNNER_TEMP/interaction-stress"
+      - name: Pinned zsh-async Git prompt completion and wrapped input
+        if: matrix.shell == 'zsh'
+        run: |
+          ./scripts/stress-nix python3 stress/async_prompt.py --binary target/debug/mux --output "$RUNNER_TEMP/async-prompt-stress"
+          ./scripts/stress-nix python3 stress/replay.py "$RUNNER_TEMP/async-prompt-stress"
       - name: Short state-boundary reproduction before the soak
         run: ./scripts/stress-nix python3 stress/run.py --binary target/debug/mux --output "$RUNNER_TEMP/boundary-stress" --cycles 0 --shells ${{ matrix.shell }}
       - name: 240-cycle adversarial soak (30-minute profile budget)
@@ -64,5 +70,6 @@ jobs:
             ${{ runner.temp }}/sidebar-stress/
             ${{ runner.temp }}/input-stress/
             ${{ runner.temp }}/interaction-stress/
+            ${{ runner.temp }}/async-prompt-stress/
             ${{ runner.temp }}/boundary-stress/
           retention-days: 30
