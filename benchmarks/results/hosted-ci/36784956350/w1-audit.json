@@ -1,0 +1,24 @@
+{
+  "accepted_trials": 60,
+  "warmups_excluded": 3,
+  "windows": 1,
+  "summary": {
+    "mux": {
+      "n": 20,
+      "median": 47.637668500000004,
+      "p95": 52.61784
+    },
+    "tmux": {
+      "n": 20,
+      "median": 467.92578100000003,
+      "p95": 470.950793
+    },
+    "tmux-persistence": {
+      "n": 20,
+      "median": 492.34340199999997,
+      "p95": 500.086766
+    }
+  },
+  "source_commit": "d6dd228054231e77772bd17a412d8f0d07871835",
+  "all_layout_history_live_gates": true
+}

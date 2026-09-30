@@ -1,5 +1,7 @@
 # Hosted-CI paired benchmark results
 
+Newer separate datasets: [360 paired interactive trials and 20 mux-only trials](#complete-expanded-interactive-sweep-hosted-ci-2026-09-30), and [180 cold restored-layout/fresh-provisioning startup trials](#cold-saved-layout-scale-startup-hosted-ci-2026-09-30). Their workloads/endpoints differ from the historical microbenchmark below; results are not pooled.
+
 [Run 36744338567](https://github.com/any-0/mux/actions/runs/36744338567)
 measured all three variants sequentially on one hosted Ubuntu VM using the
 project's pinned Nix development toolchain and mux main commit `d6dd228`.
@@ -660,7 +662,7 @@ Controller/decoder cost is included, pixels and exclusive physical hardware are
 not measured. Hosted VM data are not Julian's hardware and do not establish a
 universal ranking. Earlier accepted scroll/throughput/clean-recovery and core
 datasets below remain separate; do not pool across VMs or changed endpoints.
-Restored-layout scale coverage and default-period crash recovery remain unmeasured.
+These historical runs did not measure cold restored-layout scale startup; see the separate cold-startup follow-up. Default-period crash recovery remains unmeasured.
 
 #### Initial PSS (MiB)
 
@@ -1162,8 +1164,8 @@ in the complete tables and audits below.
 New three-second profile CPU/storage fields, bell navigation, additional search/selection,
 and mux-only tree/theme/root UI cases are implemented but **not measured in these
 accepted groups**. Existing finite-output throughput/CPU/storage and clean recovery
-results above remain separate. Restored-layout scale coverage and real default-period
-crash recovery remain unmeasured.
+results above remain separate. Those groups did not measure cold restored-layout scale
+startup; see the separate follow-up below. Real default-period crash recovery remains unmeasured.
 
 #### w1-idle
 
@@ -1396,3 +1398,86 @@ python3 -m zipfile -e benchmarks/results/hosted-ci/36762906986/w1-idle-raw.zip /
 ./scripts/benchmark-nix python3 benchmarks/audit_interactive.py /tmp/mux-interactive-group/interactive-performance --windows 1 --load idle
 ```
 <!-- interactive-results:end -->
+
+<!-- cold-startup-results:start -->
+### Cold saved-layout scale startup (hosted CI, 2026-09-30)
+
+Actual [run 36784956350](https://github.com/any-0/mux/actions/runs/36784956350): **180 accepted process trials**, 20 per variant/scale; nine warm-ups excluded. All complete-layout, history and fresh live-shell gates passed. Runtime remains `d6dd228054231e77772bd17a412d8f0d07871835`.
+
+| Windows × panes | mux clean restored startup, ms | tmux + persistence clean restored startup, ms | plain tmux fresh provisioning, ms |
+| --- | ---: | ---: | ---: |
+| 1 × 1 | 47.638 / 52.618 | 492.343 / 500.087 | 467.926 / 470.951 |
+| 3 × 2 | 54.587 / 60.868 | 814.062 / 821.960 | 2384.134 / 2391.826 |
+| 6 × 4 | 144.959 / 151.890 | 1698.465 / 1712.741 | 9239.081 / 9263.699 |
+
+| Windows × panes | mux endpoint PSS, MiB | stack endpoint PSS, MiB | plain fresh provisioning endpoint PSS, MiB |
+| --- | ---: | ---: | ---: |
+| 1 × 1 | 8.882 / 9.050 | 8.438 / 8.488 | 8.312 / 8.316 |
+| 3 × 2 | 16.339 / 16.368 | 14.611 / 14.629 | 14.641 / 14.645 |
+| 6 × 4 | 39.053 / 39.928 | 36.322 / 36.369 | 36.193 / 36.197 |
+
+Endpoint PSS includes daemon/client/shell descendants and live helpers observed just after the timed frame. It is a snapshot, not peak RAM; transient exited helpers are absent. RSS/process records are retained.
+
+Values are median / nearest-rank p95. **Plain tmux persistence is unsupported**; fresh provisioning includes generating the matched history and controller preparation waits, and has no restore-speed ratio.
+
+Paired groups ran sequentially on one AMD EPYC 7763 64-Core Processor hosted VM (`GitHub Actions 1000002138`, image `20260920.314.1`). Executed harness `aec786740953afa50a7064793d9b9769bfb02143`, branch candidate `c47a5301237f496df696720f069cd216242deac1`. Project Nix pin/Rust/tmux/plugins match the earlier benchmark environment; filesystem caches remain warm.
+
+The endpoint is cold client/daemon launch to the first selected window’s complete retained viewport and fresh prompts. Every hidden window’s geometry/cwd/history and fresh shell response are independently verified after timing; this is not a timed tour of all windows. Clean saves are separate from crash recovery. No default-period crash claim is made. Additional motion and differing-size client-contention cases remain unmeasured.
+
+
+[Raw manifest](results/hosted-ci/36784956350/manifest.json), [reproducible harness](cold_startup.py), and [independent auditor](audit_cold_startup.py).
+<!-- cold-startup-results:end -->
+
+Cold saved-layout startup measures a new daemon and new attached client after a
+clean save/shutdown and identity-checked teardown of the old server and its
+owned shell processes. State files and executable filesystem caches remain
+warm; this is not cold-disk startup or crash recovery. Runtime stays d6dd228,
+independently checked out and built with the same locked project Nix shell.
+
+For each of 1×1, 3×2 and 6×4 windows×panes, all variants receive the same Bash,
+100×40 content rectangle, native matched split geometry, 1,000 tagged ASCII
+history rows per pane and an isolated per-pane cwd. Outer terminal sizes are
+105×40 for mux and 100×41 for tmux. One warm-up per variant/scale is excluded,
+then 20 shuffled paired blocks run sequentially on one hosted VM.
+
+mux replays its clean journals automatically. tmux+resurrect+continuum loads both
+pinned plugins, saves pane contents/layout explicitly, starts a fresh bootstrap
+server, invokes resurrect, and removes the bootstrap session. Its default
+15-minute continuum interval is unchanged; this clean experiment does not
+measure a scheduled crash checkpoint. Plugin setup/restore orchestration is
+included in startup, not just the restore script's acknowledgement.
+
+Timing starts before the attached client process launch and ends after the
+first selected window contains the retained last tagged row of every pane and
+the new shell prompts in the decoded terminal. Complete window/pane layout,
+names, selected window, cwd, exact history digests and fresh split-input nonce
+responses in every pane are independent acceptance gates after that endpoint.
+Hidden-window fidelity/liveness traversal is not included in latency. Raw
+terminal output, inputs, command chronology, environment and samples are kept.
+
+Plain tmux has no saved-layout recovery. Its separately labeled fresh
+provisioning timing includes recreating all windows/panes and regenerating the
+same tagged history/cwd, including controller preparation waits (300 ms per
+pane for the shared cwd-sampling protocol). This is not a persistence restore
+or a fair restore-speed ratio. It is kept visible rather than passed off as a
+successful restore. All reported distributions use whole-scale correctness
+acceptance; one failure rejects the declared scale, not only that sample.
+
+Validation evidence is mixed at an earlier documentation head: test run
+36783470230 checked out c651f0e, passed all 193 unit tests, then timed out in
+the executable PTY test at its generic five-second output wait. The independent
+same-head run 36783475872 passed. The failure log is retained; it contains no
+backtrace/terminal-state dump that could distinguish setup/load from a product
+race. The fixture already waits for daemon binding, so it is not evidence of
+the separate daemon auto-start race. Local Nix is unavailable for controlled
+reproduction. Later passing checks do not erase this exception.
+
+These are idle Bash fixtures. Recovery covers layout/names/cwd/history and fresh shells, not resumed application processes or shell variables. The earlier UTF-8/style clean-recovery dataset remains separate.
+
+Reproduce one scale and independently audit it:
+
+```sh
+./scripts/benchmark-nix python3 benchmarks/cold_startup.py --output /tmp/mux-cold-w6 --windows 6 --trials 20
+./scripts/benchmark-nix python3 benchmarks/audit_cold_startup.py /tmp/mux-cold-w6
+./scripts/benchmark-nix python3 benchmarks/render_cold_startup_results.py benchmarks/results/hosted-ci/36784956350
+```
