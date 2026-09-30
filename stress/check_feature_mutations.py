@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native pinned-Nix sensitivity checks; setup/build errors never count as kills."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,7 +26,8 @@ def check(output):
         log=output/(label+'.log')
         command=[sys.executable,str(ROOT/'stress/feature_witnesses.py'),'--binary',str(binary),'--case',name,'--output',str(output/label)]
         code,text=execute(command,log,env)
-        result=dict(case=name,label=label,exit_code=code,expected_failure=signature is not None,signature=signature)
+        result=dict(case=name,label=label,exit_code=code,expected_failure=signature is not None,signature=signature,
+                    binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
         results.append(result)
         write_json(output/'results.json',results)
         if signature is None:
@@ -77,6 +79,10 @@ def check(output):
         code,text=execute(['cargo','build','--locked'],output/'restore-fixed-build.log')
         assert code==0,f'fixed rebuild failed: {text[-3000:]}'
     write_json(output/'provenance.json',dict(source_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),nixpkgs=os.environ.get('STRESS_NIXPKGS_REV'),rust=os.environ.get('STRESS_RUST_VERSION')))
+    # Exact hashes, patches and build logs reproduce each mutation. Keeping four
+    # debug executables would overwhelm the raw trace artifact transfer budget.
+    for binary in output.glob('mux-*'):
+        binary.unlink()
 
 
 if __name__=='__main__':
