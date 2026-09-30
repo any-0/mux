@@ -1,0 +1,17 @@
+{
+  "date": "2026-09-30",
+  "status": "blocked-before-benchmark-execution",
+  "performance_samples": 0,
+  "mux_source_commit": "9c74b7029e6112175d0914c0efc12d87317efccf",
+  "nixpkgs_rev": "b7c2ada94fe99c15b0dbcf4d11fd7850b957a436",
+  "nix_evaluated_versions": {
+    "rustc": "1.97.1", "cargo": "1.97.1", "tmux": "3.7b",
+    "bash": "5.3p15", "python": "3.14.6",
+    "resurrect": "unstable-2022-05-01", "continuum": "unstable-2022-01-25"
+  },
+  "portable_bootstrap": {
+    "release": "v012", "source_commit": "7eba433355a83acff4d0081bb4a59088e8293ea7",
+    "static_nix_version": "2.20.6", "used_for_measurements": false
+  },
+  "scope": "Nix expression evaluation only; no dependency realization or performance measurements"
+}

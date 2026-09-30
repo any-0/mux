@@ -63,6 +63,26 @@ bell animation, or expiring message is due.
 
 ## Build and run
 
+### Benchmark status
+
+The [benchmark draft](benchmarks/README.md) defines a Nix environment from this
+repository's existing lockfile and an attached-PTY comparison of mux, tmux,
+and tmux with resurrect + continuum. Run it with:
+
+```sh
+nix develop .#benchmark --command python3 benchmarks/run.py \
+  --output /tmp/mux-benchmark-run-1 --trials 30
+```
+
+**Actual measured performance results: none yet (0 samples).** On the selected
+cloud machine, Nix dependency realization was blocked by proxy and runtime
+restrictions; the devShell expression evaluated, but no variant executed.
+[Raw bootstrap evidence](benchmarks/results/bootstrap/) records the attempts.
+The harness remains unvalidated, and save/restart/restore and recovery-fidelity
+benchmarks remain to be implemented. No median/p95 or performance advantage is
+claimed. The methodology, pinned versions, correctness gates and remaining
+work are documented in the benchmark draft.
+
 Build without installing anything:
 
 ```sh
