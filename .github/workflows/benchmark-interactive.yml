@@ -4,6 +4,10 @@ on:
     paths:
       - '.github/workflows/benchmark-interactive.yml'
       - 'benchmarks/interactive.py'
+      - 'benchmarks/run.py'
+      - 'benchmarks/recovery.py'
+      - 'benchmarks/mux-revision'
+      - '.nix/**'
   workflow_dispatch:
 permissions:
   contents: read
