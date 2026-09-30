@@ -34,7 +34,7 @@ class Interactive(Recovery):
                         'bind -T copy-mode-vi G send-keys -X history-bottom',
                         'bind -T bench - split-window -v -l 50%', 'bind -T bench | split-window -h -l 50%',
                         'bind -T bench x confirm-before -p "kill pane?" kill-pane', 'bind -T bench ! break-pane',
-                        'bind -T bench > swap-window -d -t +1 \\; select-window -t +1', 'bind -T bench < swap-window -d -t -1 \\; select-window -t -1',
+                        'bind -T bench > swap-window -d -t +1', 'bind -T bench < swap-window -d -t -1',
                         'bind -T bench d detach-client',
                         'bind -T bench , command-prompt -p "rename window:" "rename-window %%"',
                         'bind -T bench $ command-prompt -p "rename session:" "rename-session %%"',
@@ -72,6 +72,7 @@ class Interactive(Recovery):
             self.cli('rename-window', 'fixture', '--pane', str(pane['id']))
         else:
             self.cli('select-pane', '-t', pane['id'])
+            self.cli('rename-window', 'fixture')
         self.client.drain()
 
     def window(self, index):
@@ -191,7 +192,7 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
                 (r.directory/(label+'-history.txt')).write_text(history)
             fixture.append({'window':w,'panes':panes})
         # A matched extra window isolates background activity in both profiles.
-        r.cli('new-window');r.shell_marker('BACKGROUND',history_rows)
+        r.cli('new-window');r.cli('rename-window','BACKGROUND');r.shell_marker('BACKGROUND',history_rows)
         if load=='busy':
             script="import sys,time; i=0\nwhile True:\n sys.stdout.write('\\033[H'+('LOAD%08d'%i+'x'*60+'\\n')*5);sys.stdout.flush();i+=1;time.sleep(.02)"
             r.client.input(('python3 -u -c '+shlex.quote(script)+'\n').encode());r.client.drain()
