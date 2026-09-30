@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import tarfile
 import time
+import traceback
 
 from run import ROOT, SOURCE_COMMIT, SOURCE_ROOT, Terminal, command, storage
 from recovery_workload import record
@@ -556,6 +557,7 @@ def recovery_trial(variant, number, mode, age, output):
             result['correct'] = result['metadata_correct'] and history_ok and result['formatting_correct']
     except Exception as error:
         result['error'] = str(error)
+        result['traceback'] = traceback.format_exc()
     finally:
         try:
             run.cleanup()
