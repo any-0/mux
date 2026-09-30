@@ -33,6 +33,9 @@ jobs:
       - name: Fixed feature witnesses and deliberate mutation sensitivity
         if: matrix.shell == 'bash'
         run: ./scripts/stress-nix python3 stress/check_feature_mutations.py --output "$RUNNER_TEMP/feature-mutations"
+      - name: Exact pre-fix height-loss witness and no-repaint history recovery
+        if: matrix.shell == 'bash'
+        run: ./scripts/stress-nix python3 stress/check_resize_history.py --output "$RUNNER_TEMP/resize-history"
       - name: Baseline reproductions on verified pre-fix main
         if: matrix.shell == 'bash'
         run: |
@@ -82,4 +85,5 @@ jobs:
             ${{ runner.temp }}/async-prompt-stress/
             ${{ runner.temp }}/boundary-stress/
             ${{ runner.temp }}/feature-mutations/
+            ${{ runner.temp }}/resize-history/
           retention-days: 30

@@ -2076,6 +2076,35 @@ fn pane_journal_replays_output_resizes_and_ignores_a_torn_tail() {
 }
 
 #[test]
+fn shrinking_a_pane_keeps_output_above_the_idle_cursor_in_history() {
+    let mut parser = vt100::Parser::new(6, 18, 100);
+    parser.process(b"\x1b[1;2;38;2;1;2;3mfirst\r\nsecond\r\nthird\r\nfourth\r\nfifth\r\nsixth");
+    parser.screen_mut().set_size(2, 18);
+    let (lines, cursor) = snapshot_screen(parser.screen_mut());
+    let text: Vec<_> = lines.lines().map(|line| line.text.as_str()).collect();
+    assert_eq!(
+        text,
+        ["first", "second", "third", "fourth", "fifth", "sixth"]
+    );
+    assert_eq!(cursor.row, 5);
+    assert_eq!(parser.screen().cursor_position(), (1, 5));
+
+    let journal = compacted_journal_records(parser.screen_mut()).unwrap();
+    let mut restored = vt100::Parser::new(2, 18, 100);
+    replay_pane_journal(&mut restored, &mut Vec::new(), journal.as_slice()).unwrap();
+    let (restored_lines, _) = snapshot_screen(restored.screen_mut());
+    let restored_text: Vec<_> = restored_lines
+        .lines()
+        .map(|line| line.text.as_str())
+        .collect();
+    assert_eq!(restored_text, text);
+    restored.screen_mut().set_scrollback(usize::MAX);
+    let first = restored.screen().cell(0, 0).unwrap();
+    assert!(first.bold() && first.dim());
+    assert_eq!(first.fgcolor(), vt100::Color::Rgb(1, 2, 3));
+}
+
+#[test]
 fn resized_scrollback_reflows_instead_of_truncating_lines() {
     let mut parser = vt100::Parser::new(2, 8, 100);
     parser.process(b"abcdefg\r\nhijklmn\r\nopqrstu");

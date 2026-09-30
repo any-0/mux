@@ -369,6 +369,38 @@ checks literal action-owned pane grids, compares transient presentation with
 the completed source capture, and recounts exact output bodies from source
 records. It needs neither a running mux nor application timing.
 
+## Height-shrink history retention
+
+An independently reported defect on `01eaa380` drops recent output when the
+normal-screen cursor overflows a shorter viewport. The cursor row remains live
+after the fix: preceding rows move to bounded scrollback before screen clipping
+and width reflow. Saved cursor and scroll margins project onto surviving rows.
+The existing no-history and alternate-screen clipping policy remains unchanged;
+this does not add arbitrary full-screen reflow or a zero-size parser contract.
+Runtime pane dimensions already clamp both axes to at least one cell.
+
+`stress/resize_history.py` emits thirty action-owned short Unicode lines from
+a foreground FIFO-held PTY application, yanks the complete copy buffer using
+documented `ggVGy`, resizes 24 to 12 rows without Ctrl-L/repaint, then expands.
+The intended pre-fix witness is exactly `30 -> 18 -> 18` retained markers. The
+fixed witness requires all thirty, exactly once and in original order, after
+shrink, expansion, simultaneous height/width change and graceful restart.
+Clipboard completion is gated on the observed yank notification. Each stage
+retains its clipboard bytes, source PTY output, raw client frames and resize
+events. This is a logical-retention oracle, not an invented viewport geometry.
+
+```sh
+./scripts/stress-nix python3 stress/check_resize_history.py --output /tmp/mux-resize-history
+```
+
+The script builds exact pre-fix `01eaa380` in a separate target directory,
+executes the new six-line/journal regression against its original parser and
+requires the intended assertion failure, then runs the baseline and fixed PTY
+witnesses. Library regressions cover cursor overflow/nonoverflow, one-row
+minimum size, saved cursor, projected scroll margins, retained history-view
+anchor, bounded and disabled history, promoted styled rows during simultaneous
+width change, and alternate-screen separation. No Neo installation is changed.
+
 ```sh
 ./scripts/stress-nix python3 -m unittest discover -s stress -p test_transport.py -v
 ./scripts/stress-nix python3 stress/async_prompt.py \
