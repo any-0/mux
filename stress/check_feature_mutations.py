@@ -30,6 +30,8 @@ def check(output):
         write_json(output/'results.json',results)
         if signature is None:
             assert code==0,f'fixed {name} failed: {text[-4000:]}'
+            replay_code,replay_text=execute([sys.executable,str(ROOT/'stress/replay_features.py'),str(output/label)],output/(label+'-replay.log'))
+            assert replay_code==0,f'fixed {name} offline replay failed: {replay_text[-4000:]}'
         else:
             assert code!=0 and signature in text,f'{label}: expected specific assertion {signature!r}, got exit {code}: {text[-4000:]}'
         print(json.dumps(result),flush=True)

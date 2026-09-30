@@ -54,7 +54,7 @@ class ClientReplay:
             self.event_index += 1
         self.terminal.feed(self.data[self.position:offset])
         self.position = offset
-        return self.terminal.snapshot(checkpoint['bar'], self.terminal.screen.columns - checkpoint['bar'])
+        return self.terminal.snapshot(checkpoint['bar'], checkpoint.get('width',self.terminal.screen.columns - checkpoint['bar']))
 
 
 def replay(root):

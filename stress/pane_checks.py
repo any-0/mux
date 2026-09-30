@@ -46,7 +46,9 @@ def rectangle(session, identity, left, width, active=True):
     assert geometry == dict(rows=session.rows, cols=width), f'pane {identity} PTY geometry differs from visible rectangle'
     if active:
         assert actual['cursor'] == [1,2] and not actual['hidden'] and actual['cursor_shape']=='underline', f'pane {identity} cursor differs'
-    session.action('pane-rectangle', identity=identity, left=left, width=width, rows=session.rows, active=active)
+    session.action('pane-rectangle', identity=identity, left=left, width=width, rows=session.rows,
+                   cols=session.cols, active=active, client=session.clients[0]['name'],
+                   client_offset=session.clients[0]['offset'])
 
 
 def focus(session, count, active):

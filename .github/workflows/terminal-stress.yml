@@ -46,7 +46,9 @@ jobs:
           ./scripts/stress-nix python3 stress/witnesses.py --case intensity --binary target/debug/mux --output "$RUNNER_TEMP/terminal-witnesses/fixed-intensity"
           ./scripts/stress-nix python3 stress/witnesses.py --case sidebar --binary target/debug/mux --output "$RUNNER_TEMP/terminal-witnesses/fixed-sidebar"
       - name: Unproxied shell and Vim process icons, signals, and sidebar tiles
-        run: ./scripts/stress-nix python3 stress/sidebar_sessions.py --binary target/debug/mux --output "$RUNNER_TEMP/sidebar-stress" --shell ${{ matrix.shell }}
+        run: |
+          ./scripts/stress-nix python3 stress/sidebar_sessions.py --binary target/debug/mux --output "$RUNNER_TEMP/sidebar-stress" --shell ${{ matrix.shell }}
+          ./scripts/stress-nix python3 stress/replay_features.py "$RUNNER_TEMP/sidebar-stress"
       - name: Independent edited input and multiline bracketed-paste effects
         run: ./scripts/stress-nix python3 stress/input_sessions.py --binary target/debug/mux --output "$RUNNER_TEMP/input-stress" --shell ${{ matrix.shell }}
       - name: Async editing, suspended client, and copy-mode resize interactions
@@ -63,7 +65,9 @@ jobs:
       - name: 240-cycle adversarial soak (30-minute profile budget)
         run: ./scripts/stress-nix python3 stress/run.py --binary target/debug/mux --output "$RUNNER_TEMP/terminal-stress" --cycles 240 --shells ${{ matrix.shell }}
       - name: Replay every terminal checkpoint from saved bytes and resize offsets
-        run: ./scripts/stress-nix python3 stress/replay.py "$RUNNER_TEMP/terminal-stress/${{ matrix.shell }}"
+        run: |
+          ./scripts/stress-nix python3 stress/replay.py "$RUNNER_TEMP/terminal-stress/${{ matrix.shell }}"
+          ./scripts/stress-nix python3 stress/replay_features.py "$RUNNER_TEMP/terminal-stress/${{ matrix.shell }}"
       - name: Preserve raw pane and client bytes, actions, resize ordering, cell diffs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
