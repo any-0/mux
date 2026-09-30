@@ -458,6 +458,9 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.action('history_search_previous_match',b'N',lambda:cursor_record(100))
         r.action('history_bottom',b'G',lambda:r.client.contains('SCRATCH>') and not r.client.contains('SCRATCH-H00000'))
         import re
+        # Escape first clears mux's outstanding search highlight while keeping
+        # copy mode active; prepare that state before the matched exit interval.
+        if variant=='mux':r.keys(b'\x1b')
         r.action('exit_copy_mode',b'\x1b' if variant=='mux' else b'q',
             lambda:tuple(r.client.screen.buffer[0][1])==tile_before if variant=='mux' else not re.search(r'\[\d+/\d+\]',r.client.screen.display[0]))
         # Multi-client redraw: second attached client gets populated viewport.
