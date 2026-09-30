@@ -305,7 +305,10 @@ background, bold plus faint, italic, curly underline and underline color. These
 attribute constants come from fixture actions, not mux snapshots. Glyph-run
 locations are observed to select cells for the invariant, so this is **not** a
 full independent geometric model of the copy viewport. Exact search/yank bytes
-remain action-owned. Full styled viewport coordinates, scroll anchoring,
+remain action-owned. After the clipboard file effect, the workload also awaits
+the independently expected `yanked N bytes` completion notification before a
+key dismisses it and shell-cell comparisons resume. Clipboard-file completion
+alone is not a barrier for the daemon's asynchronous notification. Full styled viewport coordinates, scroll anchoring,
 selection overlays and arbitrary reflow history remain unsupported; ECMA-48
 does not define those mux-specific copy-mode policies.
 
