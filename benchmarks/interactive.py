@@ -269,7 +269,11 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         # Exactly one actual pending bell in a matched background shell.
         # Preparation is untimed; only navigation input to that shell is timed.
         r.cli('new-window');bell_window=len(r.windows());r.shell_marker('BELL',history_rows)
-        r.client.input(('python3 -c '+shlex.quote("import time;time.sleep(.2);print(chr(7))")+'\n').encode())
+        # Attached input and CLI control arrive on different server connections.
+        # Wait for a visible shell receipt before selecting another window; a
+        # CLI acknowledgement cannot prove the attached bytes were consumed.
+        r.client.input(('python3 -c '+shlex.quote("import time;print('BELL_ARMED',flush=True);time.sleep(1);print(chr(7))")+'\n').encode())
+        r.client.until(lambda:r.client.contains('BELL_ARMED'))
         r.window(scratch);r.client.until(lambda:r.client.contains('SCRATCH>'))
         bar_before=r.bar()
         if variant=='mux':
