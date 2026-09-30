@@ -414,6 +414,12 @@ class Recovery:
             signal_owned({self.server: server_identity}, signal.SIGKILL)
         else:
             self.cli('kill-server')
+        # Release the attached client after dispatching shutdown. tmux can
+        # retain client/job resources during exit; keeping its PTY open while
+        # no longer pumping it can stall graceful teardown. This is included
+        # in stop_ms for every variant; server exit remains a separate gate.
+        self.client.close()
+        self.client = None
         self.wait(lambda: proc_identity(self.server) != server_identity, attached=False)
         end = time.perf_counter_ns()
         # tmux/mux shells may remain after SIGKILL. Remove only recorded owned
@@ -422,8 +428,6 @@ class Recovery:
         self.wait(lambda: all(identity is None or proc_identity(pid) != identity
                               for pid, identity in children.items()), attached=False)
         self.events.append({'owned_processes_before_stop': children, 'all_old_processes_ended': True})
-        self.client.close()
-        self.client = None
         self.server = None
         return (end - start) / 1e6
 
