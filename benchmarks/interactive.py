@@ -322,7 +322,8 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.shell_marker('SCRATCH',history_rows)
         # Search a retained record far outside the live viewport.
         before=list(r.client.screen.display)
-        r.action('enter_copy_mode',b'\x1bw',lambda:r.client.screen.display!=before)
+        tile_before=tuple(r.client.screen.buffer[0][1])
+        r.action('enter_copy_mode',b'\x1bw',lambda:tuple(r.client.screen.buffer[0][1])!=tile_before if variant=='mux' else r.client.screen.display!=before)
         r.action('history_search_backward',b'?SCRATCH-H00100\r',lambda:r.client.contains('SCRATCH-H00100 '+'x'*12))
         before=list(r.client.screen.display)
         r.action('history_top',b'gg' if variant=='mux' else b'g',lambda:r.client.contains('SCRATCH-H00000'))
