@@ -111,6 +111,8 @@ class Interactive(Recovery):
             evidence['metadata'] = check()
         evidence['correct'] = True
         self.measurements.append(evidence)
+        if '-000-' in self.directory.name:
+            print(self.directory.name, name, 'visible and semantic gate PASS', flush=True)
         return evidence
 
     def attach(self, name, expected, second=False):
