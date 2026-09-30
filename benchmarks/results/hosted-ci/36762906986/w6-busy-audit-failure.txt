@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/home/runner/work/mux/mux/benchmarks/repack_interactive.py", line 25, in main
+    result=audit(raw,windows,load)
+  File "/home/runner/work/mux/mux/benchmarks/audit_interactive.py", line 54, in audit
+    assert normalized==geometry,('unequal initial geometry/history',windows,panes,load,n,variant)
+           ^^^^^^^^^^^^^^^^^^^^
+AssertionError: ('unequal initial geometry/history', 6, 4, 'busy', 0, 'mux')

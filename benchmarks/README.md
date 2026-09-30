@@ -609,3 +609,292 @@ Graceful stop dispatches shutdown, closes the attached client and then verifies
 the isolated server exits. `stop_ms` includes client teardown for every variant.
 The server-exit correctness gate still rejects a surviving daemon. Failed merged-main
 validation 36742370783 is preserved as a shutdown diagnostic, not performance data.
+
+<!-- interactive-results:start -->
+### Expanded interactive measurements (hosted CI, 2026-09-30)
+
+[Run 36762906986](https://github.com/any-0/mux/actions/runs/36762906986)
+completed the 360-trial sweep. Independent paired fixture/input/resource audits
+accept **240 trials**: 20 per variant in each of four groups (1×1 and 3×2,
+idle/busy), plus excluded warm-ups. Each trial covers 45 endpoints across roughly
+20 operation families. The two 6×4 groups are **rejected** because native pane
+numbering put tagged content in different grid slots; their raw samples and audit
+failures are retained, and corrected logical-slot fixtures are being rerun.
+
+Runtime: `d6dd228054231e77772bd17a412d8f0d07871835`. Actual executed harness:
+`efc5c1551adf0fc24f55e9c15bd444658442efde` (PR merge of branch `ee916e0`).
+Project Nix pin `2fc6539b481e1d2569f25f8799236694180c0993`, Rust 1.93.0,
+tmux 3.6a and the same pinned Bash/Python/plugins documented below. The single
+hosted VM reported AMD EPYC 9V74, four logical CPUs, 16,373,444 KiB RAM, image
+`20260920.314.1`. This is a different runner from the earlier scroll/clean run;
+do not interpret differences between those datasets as workload-only effects.
+
+Variants ran sequentially in shuffled paired blocks. The layout notation counts
+seeded windows × panes per window; each has an additional identical background
+window, and mutations use a temporary scratch window. Content area is 100×40,
+retained tagged history is 1,000 records per seeded pane, cap 20,000. Native chrome
+and bootstrap command history differ. Busy adds the same 50 Hz, five-line in-place
+ANSI producer. Full tagged histories and pane dimensions are independently checked.
+The two accepted scales use full-width panes; wider grids require the pending fix.
+
+All table entries are **median / nearest-rank p95**, 20 independent process trials
+per cell. Interaction latency stops at the decoded correct viewport/cursor/style,
+with metadata checked afterward. `populated attach` launches a client against an
+existing populated daemon; it is not cold daemon startup or restoration. Native
+rename/search editors and deletion confirmations are prepared before timing their
+commit. Join-pane is CLI dispatch→visible viewport; yank is atomic clipboard-file
+receipt; detach is process exit. These distinct endpoints are labeled separately.
+Clipboard receipt uses up to 50 ms controller polling in this dataset; it is an
+observed upper bound, not a precise clipboard-completion or rendered-copy latency.
+Zoom geometry differs because mux hides its sidebar while tmux retains its status
+line. The PTY decoder/harness is part of measured latency; no physical pixels,
+exclusive hardware, maximum throughput or universal ranking is claimed.
+
+Initial resident memory includes daemon, attached client, all shells and busy
+producer when present; it is not peak memory. RSS and every operation result are
+in the complete tables and audits below.
+
+| Seeded layout / load | mux PSS (MiB) | tmux PSS (MiB) | stack PSS (MiB) |
+| --- | ---: | ---: | ---: |
+| 1×1-idle | 10.127 / 10.194 | 9.643 / 9.643 | 9.654 / 9.662 |
+| 1×1-busy | 16.691 / 16.740 | 16.188 / 16.191 | 16.199 / 16.203 |
+| 3×2-idle | 16.669 / 16.694 | 15.874 / 15.882 | 15.888 / 15.898 |
+| 3×2-busy | 23.167 / 23.210 | 22.361 / 22.365 | 22.373 / 22.373 |
+
+New three-second profile CPU/storage fields, bell navigation, additional search/selection,
+and mux-only tree/theme/root UI cases are implemented but **not measured in these
+accepted groups**. Existing finite-output throughput/CPU/storage and clean recovery
+results above remain separate. Restored-layout scale coverage and real default-period
+crash recovery remain unmeasured.
+
+#### w1-idle
+
+| Operation (ms) | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| Populated attach (existing daemon) | 16.975 / 23.032 | 15.387 / 16.305 | 14.224 / 17.216 |
+| create window | 11.715 / 11.961 | 8.659 / 8.953 | 7.920 / 8.022 |
+| switch window | 3.556 / 3.675 | 3.778 / 4.031 | 3.913 / 4.764 |
+| switch window back | 3.536 / 3.695 | 3.837 / 4.147 | 3.975 / 4.176 |
+| Split top/bottom | 11.825 / 18.061 | 8.444 / 9.323 | 8.511 / 9.635 |
+| focus vertical | 9.376 / 9.423 | 0.931 / 0.976 | 0.947 / 1.064 |
+| focus vertical back | 9.366 / 9.425 | 0.877 / 0.918 | 0.867 / 0.922 |
+| resize vertical | 9.319 / 9.425 | 2.280 / 2.324 | 2.265 / 2.345 |
+| zoom vertical | 8.493 / 8.820 | 4.729 / 4.878 | 4.735 / 5.003 |
+| unzoom vertical | 10.995 / 11.337 | 4.356 / 4.543 | 4.351 / 4.616 |
+| delete pane vertical | 54.132 / 55.349 | 3.774 / 3.945 | 3.769 / 4.745 |
+| Split left/right | 15.483 / 18.121 | 8.981 / 9.191 | 8.987 / 9.268 |
+| focus horizontal | 4.970 / 9.562 | 1.033 / 1.071 | 1.044 / 1.069 |
+| focus horizontal back | 4.964 / 9.496 | 0.949 / 0.997 | 0.941 / 1.007 |
+| resize horizontal | 9.037 / 11.217 | 3.365 / 3.449 | 3.384 / 4.379 |
+| zoom horizontal | 9.134 / 9.416 | 4.763 / 4.833 | 4.763 / 5.066 |
+| unzoom horizontal | 10.803 / 11.097 | 5.370 / 5.464 | 5.318 / 5.658 |
+| delete pane horizontal | 57.910 / 59.233 | 3.809 / 3.932 | 3.832 / 3.987 |
+| split for break | 11.818 / 18.072 | 8.863 / 9.011 | 8.334 / 8.985 |
+| break pane | 6.180 / 13.439 | 5.573 / 6.603 | 5.585 / 5.962 |
+| Join pane (CLI→viewport) | 6.603 / 7.110 | 7.481 / 7.610 | 7.480 / 8.452 |
+| delete window | 54.461 / 54.672 | 3.796 / 3.988 | 3.802 / 3.995 |
+| reorder window left | 9.522 / 9.924 | 2.391 / 2.431 | 2.311 / 3.170 |
+| reorder window right | 5.395 / 9.593 | 2.370 / 2.398 | 2.368 / 2.911 |
+| open window rename | 10.527 / 10.797 | 1.958 / 2.042 | 1.966 / 2.111 |
+| commit window rename | 10.680 / 10.817 | 3.193 / 3.299 | 3.200 / 4.089 |
+| open session rename | 6.437 / 10.997 | 1.956 / 2.009 | 1.942 / 2.089 |
+| commit session rename | 10.648 / 10.958 | 3.134 / 3.213 | 3.144 / 4.273 |
+| create session | 11.600 / 11.683 | 8.668 / 9.327 | 8.782 / 9.311 |
+| switch session | 15.109 / 15.862 | 2.294 / 2.712 | 2.563 / 3.748 |
+| switch session back | 17.073 / 17.727 | 4.151 / 4.694 | 4.448 / 4.628 |
+| delete session | 59.085 / 65.047 | 2.989 / 3.140 | 3.054 / 3.159 |
+| terminal resize viewport | 7.852 / 36.010 | 4.466 / 4.663 | 4.469 / 4.795 |
+| enter copy mode | 1.052 / 1.095 | 4.312 / 4.531 | 4.152 / 5.571 |
+| history search backward commit | 14.814 / 16.943 | 10.850 / 11.145 | 10.658 / 11.193 |
+| history top | 6.296 / 10.246 | 2.625 / 2.991 | 2.537 / 3.004 |
+| copy cursor right | 0.684 / 0.719 | 0.972 / 1.044 | 0.941 / 1.062 |
+| copy cursor left | 0.694 / 0.741 | 0.941 / 1.022 | 0.934 / 1.084 |
+| copy big word forward | 1.276 / 1.309 | 1.020 / 1.075 | 0.992 / 1.109 |
+| Yank line (clipboard receipt upper bound) | 9.612 / 9.901 | 54.402 / 54.793 | 54.420 / 54.573 |
+| history bottom | 3.223 / 3.436 | 4.542 / 4.706 | 4.261 / 4.616 |
+| exit copy mode | 0.668 / 0.714 | 3.886 / 4.011 | 3.699 / 3.985 |
+| second client attach | 17.516 / 22.625 | 16.179 / 20.321 | 15.913 / 21.675 |
+| Detach (process exit) | 1.106 / 1.120 | 1.107 / 1.126 | 1.115 / 1.349 |
+| reattach | 18.382 / 22.484 | 15.301 / 22.282 | 19.403 / 21.944 |
+| Initial PSS (MiB) | 10.127 / 10.194 | 9.643 / 9.643 | 9.654 / 9.662 |
+| Initial RSS (MiB) | 19.770 / 19.836 | 19.777 / 19.777 | 19.789 / 19.797 |
+
+#### w1-busy
+
+| Operation (ms) | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| Populated attach (existing daemon) | 19.607 / 21.265 | 18.031 / 19.450 | 18.199 / 20.223 |
+| create window | 13.057 / 16.843 | 8.784 / 9.122 | 7.982 / 8.646 |
+| switch window | 3.660 / 3.777 | 3.851 / 4.068 | 3.777 / 4.095 |
+| switch window back | 3.652 / 3.865 | 3.875 / 4.112 | 3.858 / 4.769 |
+| Split top/bottom | 11.810 / 11.970 | 8.500 / 9.952 | 9.131 / 9.461 |
+| focus vertical | 3.694 / 9.341 | 0.906 / 0.951 | 0.925 / 0.972 |
+| focus vertical back | 9.390 / 9.827 | 0.867 / 0.914 | 0.872 / 0.951 |
+| resize vertical | 8.881 / 9.687 | 2.277 / 2.341 | 2.277 / 3.370 |
+| zoom vertical | 8.499 / 8.932 | 4.568 / 5.065 | 4.745 / 4.876 |
+| unzoom vertical | 11.144 / 11.519 | 4.213 / 4.634 | 4.375 / 5.329 |
+| delete pane vertical | 54.142 / 54.371 | 3.723 / 3.948 | 3.716 / 3.896 |
+| Split left/right | 15.825 / 18.184 | 9.013 / 9.212 | 9.021 / 9.229 |
+| focus horizontal | 4.732 / 9.535 | 0.998 / 1.040 | 0.973 / 1.044 |
+| focus horizontal back | 8.412 / 9.531 | 0.935 / 0.980 | 0.933 / 0.972 |
+| resize horizontal | 11.195 / 11.895 | 3.399 / 3.479 | 3.403 / 3.539 |
+| zoom horizontal | 9.186 / 13.380 | 4.753 / 4.938 | 4.713 / 5.044 |
+| unzoom horizontal | 10.885 / 12.986 | 5.230 / 5.683 | 5.226 / 5.898 |
+| delete pane horizontal | 58.145 / 59.632 | 3.813 / 3.922 | 3.809 / 3.909 |
+| split for break | 11.879 / 17.612 | 8.853 / 9.043 | 8.873 / 9.063 |
+| break pane | 13.475 / 13.754 | 5.555 / 5.711 | 5.517 / 6.363 |
+| Join pane (CLI→viewport) | 6.967 / 9.671 | 7.569 / 7.766 | 7.535 / 7.950 |
+| delete window | 54.728 / 56.018 | 3.767 / 4.004 | 3.801 / 5.047 |
+| reorder window left | 1.378 / 9.551 | 2.196 / 2.407 | 2.349 / 3.210 |
+| reorder window right | 5.502 / 9.557 | 2.172 / 2.426 | 2.280 / 3.098 |
+| open window rename | 8.536 / 10.918 | 1.923 / 2.058 | 1.941 / 2.083 |
+| commit window rename | 10.647 / 10.874 | 3.016 / 3.262 | 3.039 / 3.990 |
+| open session rename | 3.241 / 10.663 | 1.928 / 2.114 | 1.932 / 2.050 |
+| commit session rename | 3.843 / 10.788 | 3.008 / 3.292 | 3.017 / 3.324 |
+| create session | 11.624 / 17.624 | 8.672 / 9.265 | 8.712 / 9.177 |
+| switch session | 15.355 / 17.480 | 2.356 / 2.697 | 2.461 / 2.774 |
+| switch session back | 12.650 / 18.710 | 4.444 / 4.827 | 4.449 / 4.730 |
+| delete session | 64.859 / 65.094 | 3.036 / 3.135 | 3.087 / 3.481 |
+| terminal resize viewport | 8.156 / 13.691 | 4.478 / 4.569 | 4.482 / 4.841 |
+| enter copy mode | 6.422 / 7.377 | 4.113 / 4.462 | 4.122 / 5.468 |
+| history search backward commit | 15.691 / 16.939 | 10.680 / 11.248 | 10.595 / 11.150 |
+| history top | 7.852 / 10.190 | 2.539 / 3.043 | 2.537 / 2.991 |
+| copy cursor right | 0.693 / 6.763 | 0.940 / 1.005 | 0.940 / 1.010 |
+| copy cursor left | 2.231 / 3.918 | 0.927 / 1.022 | 0.977 / 1.057 |
+| copy big word forward | 2.809 / 3.945 | 0.970 / 1.048 | 0.989 / 1.067 |
+| Yank line (clipboard receipt upper bound) | 10.121 / 16.348 | 54.417 / 54.554 | 54.438 / 54.541 |
+| history bottom | 3.399 / 6.307 | 4.541 / 4.824 | 4.562 / 4.833 |
+| exit copy mode | 0.654 / 1.751 | 3.897 / 4.036 | 3.932 / 4.216 |
+| second client attach | 20.665 / 26.575 | 18.318 / 20.031 | 17.151 / 23.045 |
+| Detach (process exit) | 1.110 / 1.129 | 1.110 / 1.132 | 1.113 / 3.215 |
+| reattach | 24.861 / 30.917 | 17.446 / 18.461 | 20.794 / 24.862 |
+| Initial PSS (MiB) | 16.691 / 16.740 | 16.188 / 16.191 | 16.199 / 16.203 |
+| Initial RSS (MiB) | 31.025 / 31.074 | 31.078 / 31.082 | 31.090 / 31.094 |
+
+#### w3-idle
+
+| Operation (ms) | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| Populated attach (existing daemon) | 23.897 / 30.621 | 21.760 / 23.977 | 21.456 / 23.809 |
+| create window | 12.096 / 12.325 | 8.963 / 9.244 | 8.363 / 8.942 |
+| switch window | 4.679 / 5.269 | 4.772 / 5.209 | 4.827 / 6.282 |
+| switch window back | 3.791 / 3.928 | 3.874 / 4.147 | 3.934 / 4.222 |
+| Split top/bottom | 18.046 / 18.243 | 8.611 / 9.377 | 8.764 / 9.715 |
+| focus vertical | 9.410 / 9.469 | 1.028 / 1.076 | 1.035 / 2.248 |
+| focus vertical back | 9.396 / 9.466 | 0.973 / 1.016 | 0.950 / 1.032 |
+| resize vertical | 9.314 / 9.379 | 2.384 / 2.502 | 2.358 / 2.483 |
+| zoom vertical | 8.565 / 8.950 | 4.659 / 4.921 | 4.762 / 5.979 |
+| unzoom vertical | 11.395 / 12.570 | 4.199 / 4.511 | 4.190 / 4.477 |
+| delete pane vertical | 54.224 / 54.569 | 3.886 / 3.984 | 3.871 / 3.976 |
+| Split left/right | 18.118 / 18.224 | 9.067 / 9.386 | 9.206 / 9.627 |
+| focus horizontal | 9.486 / 9.588 | 1.119 / 1.147 | 1.119 / 1.241 |
+| focus horizontal back | 0.543 / 9.572 | 1.021 / 1.073 | 1.022 / 1.099 |
+| resize horizontal | 10.760 / 12.536 | 3.496 / 3.602 | 3.521 / 4.484 |
+| zoom horizontal | 9.344 / 11.988 | 4.678 / 4.891 | 4.766 / 5.875 |
+| unzoom horizontal | 10.990 / 11.228 | 5.170 / 5.539 | 5.314 / 5.741 |
+| delete pane horizontal | 58.402 / 60.142 | 3.934 / 4.021 | 3.994 / 5.122 |
+| split for break | 17.972 / 18.212 | 8.468 / 9.044 | 8.950 / 9.382 |
+| break pane | 13.781 / 13.969 | 5.481 / 5.830 | 5.474 / 5.812 |
+| Join pane (CLI→viewport) | 7.119 / 7.867 | 7.641 / 7.974 | 7.605 / 8.562 |
+| delete window | 54.894 / 56.904 | 3.972 / 5.191 | 3.993 / 4.251 |
+| reorder window left | 0.811 / 9.673 | 2.281 / 2.505 | 2.451 / 3.814 |
+| reorder window right | 9.557 / 9.620 | 2.433 / 2.498 | 2.245 / 3.469 |
+| open window rename | 10.579 / 10.738 | 1.966 / 2.035 | 1.978 / 2.056 |
+| commit window rename | 10.726 / 10.900 | 3.252 / 3.324 | 3.200 / 3.361 |
+| open session rename | 10.538 / 10.628 | 1.966 / 2.035 | 1.972 / 2.040 |
+| commit session rename | 10.697 / 11.060 | 3.197 / 3.258 | 3.187 / 4.297 |
+| create session | 12.070 / 12.299 | 8.725 / 9.437 | 8.854 / 9.363 |
+| switch session | 15.235 / 15.906 | 2.427 / 2.777 | 2.452 / 4.122 |
+| switch session back | 19.887 / 21.209 | 4.202 / 4.595 | 4.248 / 4.693 |
+| delete session | 65.179 / 66.625 | 3.220 / 3.341 | 3.269 / 3.383 |
+| terminal resize viewport | 12.301 / 19.016 | 4.499 / 4.623 | 4.536 / 5.717 |
+| enter copy mode | 1.043 / 1.094 | 4.521 / 4.605 | 4.190 / 4.699 |
+| history search backward commit | 16.184 / 17.805 | 10.909 / 11.226 | 10.767 / 12.665 |
+| history top | 6.330 / 10.297 | 2.538 / 3.025 | 2.603 / 3.135 |
+| copy cursor right | 0.699 / 0.744 | 0.977 / 1.118 | 0.995 / 1.093 |
+| copy cursor left | 0.691 / 0.733 | 0.969 / 1.099 | 1.002 / 1.084 |
+| copy big word forward | 1.278 / 1.336 | 1.009 / 1.158 | 1.011 / 1.115 |
+| Yank line (clipboard receipt upper bound) | 9.707 / 10.452 | 54.670 / 54.802 | 54.759 / 57.084 |
+| history bottom | 3.302 / 4.090 | 4.622 / 4.754 | 4.439 / 4.855 |
+| exit copy mode | 0.671 / 0.725 | 3.970 / 4.058 | 3.786 / 4.166 |
+| second client attach | 23.122 / 27.903 | 20.299 / 20.965 | 18.869 / 24.176 |
+| Detach (process exit) | 1.108 / 1.113 | 1.114 / 1.119 | 1.118 / 3.216 |
+| reattach | 26.394 / 32.668 | 19.926 / 26.882 | 23.452 / 25.862 |
+| Initial PSS (MiB) | 16.669 / 16.694 | 15.874 / 15.882 | 15.888 / 15.898 |
+| Initial RSS (MiB) | 45.682 / 45.707 | 45.371 / 45.379 | 45.385 / 51.383 |
+
+#### w3-busy
+
+| Operation (ms) | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| Populated attach (existing daemon) | 25.403 / 32.275 | 20.063 / 23.661 | 18.936 / 28.210 |
+| create window | 11.989 / 16.531 | 8.401 / 8.983 | 8.094 / 8.805 |
+| switch window | 5.699 / 9.750 | 4.810 / 5.232 | 4.756 / 5.203 |
+| switch window back | 3.828 / 11.041 | 4.069 / 4.222 | 3.886 / 5.436 |
+| Split top/bottom | 18.061 / 18.481 | 8.590 / 9.372 | 8.539 / 9.325 |
+| focus vertical | 3.585 / 9.456 | 0.988 / 1.026 | 0.988 / 1.052 |
+| focus vertical back | 9.004 / 9.464 | 0.908 / 0.973 | 0.916 / 0.973 |
+| resize vertical | 7.400 / 9.457 | 2.325 / 2.409 | 2.351 / 2.408 |
+| zoom vertical | 11.453 / 12.484 | 4.537 / 4.886 | 4.771 / 5.965 |
+| unzoom vertical | 11.376 / 11.567 | 4.105 / 4.461 | 4.286 / 4.491 |
+| delete pane vertical | 55.079 / 55.589 | 3.810 / 3.877 | 3.855 / 3.963 |
+| Split left/right | 16.270 / 17.909 | 9.055 / 9.264 | 9.078 / 9.280 |
+| focus horizontal | 4.975 / 9.572 | 1.068 / 1.117 | 1.065 / 1.104 |
+| focus horizontal back | 6.881 / 9.536 | 0.999 / 1.061 | 0.998 / 1.056 |
+| resize horizontal | 9.035 / 11.403 | 3.491 / 3.563 | 3.473 / 3.595 |
+| zoom horizontal | 9.445 / 13.716 | 4.755 / 4.928 | 4.790 / 4.877 |
+| unzoom horizontal | 11.067 / 14.443 | 5.363 / 5.548 | 5.319 / 5.581 |
+| delete pane horizontal | 58.552 / 59.830 | 3.910 / 4.017 | 3.903 / 4.197 |
+| split for break | 12.200 / 18.185 | 8.954 / 9.084 | 8.716 / 9.029 |
+| break pane | 13.657 / 13.912 | 5.465 / 5.748 | 5.632 / 6.226 |
+| Join pane (CLI→viewport) | 8.378 / 13.141 | 7.551 / 7.731 | 7.566 / 7.781 |
+| delete window | 54.817 / 56.150 | 3.930 / 4.091 | 4.029 / 5.447 |
+| reorder window left | 7.363 / 9.602 | 2.235 / 2.499 | 2.442 / 2.477 |
+| reorder window right | 1.746 / 9.562 | 2.397 / 2.493 | 2.201 / 2.450 |
+| open window rename | 9.465 / 10.630 | 1.964 / 2.049 | 1.959 / 2.115 |
+| commit window rename | 10.660 / 10.975 | 3.227 / 3.276 | 3.236 / 4.673 |
+| open session rename | 9.960 / 10.594 | 1.959 / 2.013 | 1.961 / 2.140 |
+| commit session rename | 10.239 / 10.984 | 3.159 / 3.288 | 3.181 / 3.422 |
+| create session | 12.055 / 16.289 | 8.761 / 9.344 | 9.023 / 9.438 |
+| switch session | 15.470 / 16.134 | 2.361 / 2.777 | 2.352 / 2.863 |
+| switch session back | 20.076 / 20.864 | 4.212 / 4.568 | 4.187 / 5.691 |
+| delete session | 58.596 / 65.354 | 3.169 / 3.310 | 3.195 / 3.880 |
+| terminal resize viewport | 13.998 / 21.086 | 4.491 / 4.566 | 4.525 / 4.811 |
+| enter copy mode | 5.040 / 8.498 | 4.173 / 4.607 | 4.158 / 5.800 |
+| history search backward commit | 14.656 / 16.782 | 11.067 / 11.307 | 10.618 / 11.432 |
+| history top | 6.133 / 10.237 | 2.947 / 3.020 | 2.479 / 3.006 |
+| copy cursor right | 8.588 / 9.017 | 0.970 / 1.064 | 0.930 / 1.009 |
+| copy cursor left | 1.744 / 2.024 | 0.937 / 1.045 | 0.928 / 1.002 |
+| copy big word forward | 1.929 / 2.212 | 0.983 / 1.095 | 0.976 / 1.089 |
+| Yank line (clipboard receipt upper bound) | 9.736 / 10.202 | 54.627 / 54.733 | 54.645 / 54.756 |
+| history bottom | 3.324 / 4.311 | 4.618 / 4.811 | 4.325 / 4.714 |
+| exit copy mode | 0.627 / 0.713 | 3.935 / 4.053 | 3.754 / 4.119 |
+| second client attach | 21.905 / 26.827 | 18.715 / 21.170 | 18.804 / 22.042 |
+| Detach (process exit) | 1.108 / 1.127 | 1.110 / 1.118 | 1.116 / 1.125 |
+| reattach | 25.731 / 30.986 | 18.333 / 26.404 | 21.564 / 29.677 |
+| Initial PSS (MiB) | 23.167 / 23.210 | 22.361 / 22.365 | 22.373 / 22.373 |
+| Initial RSS (MiB) | 56.926 / 56.969 | 56.668 / 56.672 | 56.680 / 56.680 |
+
+#### Retained broad-suite evidence
+
+[Manifest](results/hosted-ci/36762906986/manifest.json) lists raw-shard digests and
+blocked groups. The hosted repack/audit run is [36767080733](https://github.com/any-0/mux/actions/runs/36767080733).
+All 378 process samples (including 18 warm-ups), diagnostic preflights, environments,
+commands, actual PTY input/ANSI, full tagged histories and failure evidence are retained
+in git in complete group shards; no failed trial is removed from a group.
+
+- [w1-idle raw ZIP](results/hosted-ci/36762906986/w1-idle-raw.zip) · [independent audit](results/hosted-ci/36762906986/w1-idle-audit.json)
+- [w1-busy raw ZIP](results/hosted-ci/36762906986/w1-busy-raw.zip) · [independent audit](results/hosted-ci/36762906986/w1-busy-audit.json)
+- [w3-idle raw ZIP](results/hosted-ci/36762906986/w3-idle-raw.zip) · [independent audit](results/hosted-ci/36762906986/w3-idle-audit.json)
+- [w3-busy raw ZIP](results/hosted-ci/36762906986/w3-busy-raw.zip) · [independent audit](results/hosted-ci/36762906986/w3-busy-audit.json)
+- [w6-idle raw ZIP](results/hosted-ci/36762906986/w6-idle-raw.zip) · [blocked audit](results/hosted-ci/36762906986/w6-idle-audit-failure.txt)
+- [w6-busy raw ZIP](results/hosted-ci/36762906986/w6-busy-raw.zip) · [blocked audit](results/hosted-ci/36762906986/w6-busy-audit-failure.txt)
+- [diagnostic-preflight raw ZIP](results/hosted-ci/36762906986/diagnostic-preflight-raw.zip)
+
+Re-audit a complete group (example):
+
+```sh
+python3 -m zipfile -e benchmarks/results/hosted-ci/36762906986/w1-idle-raw.zip /tmp/mux-interactive-group
+./scripts/benchmark-nix python3 benchmarks/audit_interactive.py /tmp/mux-interactive-group/interactive-performance --windows 1 --load idle
+```
+<!-- interactive-results:end -->
