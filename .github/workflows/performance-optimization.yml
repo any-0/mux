@@ -1,0 +1,57 @@
+name: Optimization evidence
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/performance-optimization.yml'
+      - 'scripts/performance/**'
+      - 'src/**'
+      - 'vendor/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: optimization-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  profile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ceb014739ff1bc6b7b1af970e343bd105e4ae26d
+          path: harness
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: d6dd228054231e77772bd17a412d8f0d07871835
+          path: baseline
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+      - name: Install Linux diagnostic tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y strace linux-tools-generic
+          echo "PERF_BINARY=$(find /usr/lib/linux-tools -type f -name perf | sort | tail -1)" >> "$GITHUB_ENV"
+      - name: Build baseline with symbols using the pinned Nix toolchain
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: 1
+        run: nix develop ./.nix#benchmark --command cargo build --manifest-path baseline/Cargo.toml --release --locked
+      - name: Profile unchanged interactive gates at two scales and loads
+        env:
+          BENCH_MUX_SOURCE_DIR: ${{ github.workspace }}/baseline
+        run: |
+          mkdir -p evidence
+          for group in '1 idle' '3 busy'; do
+            read -r windows load <<< "$group"
+            nix develop ./.nix#benchmark --command python3 scripts/performance/profile.py --harness harness --output "evidence/w${windows}-${load}" --windows "$windows" --load "$load"
+            sudo "$PERF_BINARY" report -i "evidence/w${windows}-${load}/perf.data" --stdio --no-children --percent-limit .2 > "evidence/w${windows}-${load}/perf-report.txt"
+          done
+      - name: Retain raw profile and workload correctness evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: optimization-profile-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          retention-days: 90
