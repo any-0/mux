@@ -9,13 +9,14 @@ import pty
 import random
 import select
 import shutil
+import shlex
 import struct
 import subprocess
 import termios
 import time
 import traceback
 
-from oracle import Terminal
+from oracle import Terminal, viewport
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -84,9 +85,10 @@ class Session:
         self.action_file.write(json.dumps({'index': getattr(self, 'action_index', 0), 'kind': kind, **values}) + '\n')
         self.action_index = getattr(self, 'action_index', 0) + 1
 
-    def attach(self, name):
+    def attach(self, name, rows=None, cols=None):
+        rows, cols = rows or self.rows, cols or self.cols
         master, slave = pty.openpty()
-        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', self.rows, self.cols, 0, 0))
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
         def controlling_terminal():
             os.setsid()
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
@@ -94,12 +96,13 @@ class Session:
                                    env=self.env, cwd=self.root / 'work', stdin=slave, stdout=slave, stderr=slave,
                                    preexec_fn=controlling_terminal)
         os.close(slave)
-        client = {'name': name, 'fd': master, 'process': process, 'terminal': Terminal(self.rows, self.cols),
+        client = {'name': name, 'fd': master, 'process': process, 'terminal': Terminal(rows, cols),
+                  'rows': rows, 'cols': cols,
                   'raw': (self.root / f'{name}.ansi').open('wb'),
                   'events': (self.root / f'{name}.events.jsonl').open('w', buffering=1), 'offset': 0}
-        client['events'].write(json.dumps({'event': 'resize', 'offset': 0, 'rows': self.rows, 'cols': self.cols, 'action_index': getattr(self, 'action_index', 0)}) + '\n')
+        client['events'].write(json.dumps({'event': 'resize', 'offset': 0, 'rows': rows, 'cols': cols, 'action_index': getattr(self, 'action_index', 0)}) + '\n')
         self.clients.append(client)
-        self.action('attach', name=name, rows=self.rows, cols=self.cols)
+        self.action('attach', name=name, rows=rows, cols=cols)
         return client
 
     def pump(self, wait=.02):
@@ -166,12 +169,25 @@ class Session:
         self.rows, self.cols = rows, cols
         self.action('resize', rows=rows, cols=cols)
         for client in self.clients:
+            client.update(rows=rows, cols=cols)
             client['events'].write(json.dumps({'event': 'resize', 'offset': client['offset'], 'rows': rows, 'cols': cols, 'action_index': self.action_index - 1}) + '\n')
             fcntl.ioctl(client['fd'], termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
             client['terminal'].resize(rows, cols)
         # No undocumented reflow rule is inferred from mux. Ctrl-L asks each
         # real line editor to repaint at the new width before comparing cells.
         self.settle()
+        self.input(b'\x0c')
+
+    def resize_client(self, client, rows, cols):
+        self.action('resize-client', name=client['name'], rows=rows, cols=cols)
+        client.update(rows=rows, cols=cols)
+        client['events'].write(json.dumps({'event': 'resize', 'offset': client['offset'],
+                                          'rows': rows, 'cols': cols,
+                                          'action_index': self.action_index - 1}) + '\n')
+        fcntl.ioctl(client['fd'], termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+        client['terminal'].resize(rows, cols)
+        self.settle()
+        assert self.expected.screen.lines == rows and self.expected.screen.columns == cols - self.bar, 'last resize did not own shared PTY size'
         self.input(b'\x0c')
 
     def settle(self):
@@ -187,18 +203,19 @@ class Session:
         expected = self.expected.snapshot()
         self.action('checkpoint', name=name, capture_file=self.capture_path.name,
                     capture_offset=self.capture_offset, bar=self.bar, rows=self.rows, cols=self.cols,
-                    clients=[{'name': c['name'], 'offset': c['offset']} for c in self.clients])
+                    clients=[{'name': c['name'], 'offset': c['offset'], 'rows': c['rows'], 'cols': c['cols']} for c in self.clients])
         errors = []
         for index, client in enumerate(self.clients):
-            actual = client['terminal'].snapshot(self.bar, self.cols - self.bar)
-            if actual != expected:
+            actual = client['terminal'].snapshot(self.bar, client['cols'] - self.bar)
+            wanted_view = viewport(expected, client['rows'], client['cols'] - self.bar)
+            if actual != wanted_view:
                 differences = []
-                for y, (wanted_row, got_row) in enumerate(zip(expected['cells'], actual['cells'])):
+                for y, (wanted_row, got_row) in enumerate(zip(wanted_view['cells'], actual['cells'])):
                     for x, (wanted, got) in enumerate(zip(wanted_row, got_row)):
                         if wanted != got:
                             differences.append({'row': y, 'col': x, 'expected': wanted, 'actual': got})
                 errors.append({'client': index, 'cells': differences[:50], 'total_cell_differences': len(differences),
-                               'expected_cursor': expected['cursor'], 'actual_cursor': actual['cursor'],
+                               'expected_cursor': wanted_view['cursor'], 'actual_cursor': actual['cursor'],
                                'expected_hidden': expected['hidden'], 'actual_hidden': actual['hidden'],
                                'expected_shape': expected['cursor_shape'], 'actual_shape': actual['cursor_shape']})
                 write_json(self.root / f'{name}-client{index}-actual.json', actual)
@@ -294,10 +311,21 @@ class Session:
 
 
 def run_profile(binary, directory, shell, cycles, seed):
+    started = time.monotonic()
     session = Session(binary, directory, shell)
     rng = random.Random(seed)
     try:
         session.checkpoint('initial-multiline-prompt')
+        # Prompt expansion is owned by each real shell. Values change after
+        # commands and cd; the oracle consumes captured bytes, never a prompt
+        # template or mux's current screen. No wall clock enters replay.
+        dynamic = {
+            'bash': r'''STRESS_PROMPT_N=0; PROMPT_COMMAND='STRESS_PROMPT_N=$((STRESS_PROMPT_N+1))'; PS1='\[\e[36m\]user@isolated\[\e[0m\]\n[\w command ${STRESS_PROMPT_N}]\nREADY> ' ''',
+            'zsh': r'''STRESS_PROMPT_N=0; function stress_precmd() { (( STRESS_PROMPT_N += 1 )); }; precmd_functions=(stress_precmd); PROMPT=$'%F{cyan}user@isolated%f\n[%~ command ${STRESS_PROMPT_N}]\nREADY> ' ''',
+            'fish': r'''set -g STRESS_PROMPT_N 0; function fish_prompt; set -g STRESS_PROMPT_N (math $STRESS_PROMPT_N + 1); set_color cyan; printf 'user@isolated'; set_color normal; printf '\n[%s command %s]\nREADY> ' (pwd) $STRESS_PROMPT_N; end''',
+        }
+        session.input(dynamic[shell].encode() + b'\r')
+        session.checkpoint('dynamic-multiline-prompt')
         # Large cat/head fixture includes UTF-8, long logical rows, blank rows,
         # color and all underline variants. Inputs do not contain output markers.
         lines = []
@@ -307,7 +335,15 @@ def run_profile(binary, directory, shell, cycles, seed):
                          + 'x' * (n % 121) + '\x1b[22;23;24;59;39m plain\n')
         (directory / 'work/large.txt').write_text(''.join(lines))
         (directory / 'work/sample.txt').write_text('alpha\n界 e\u0301\n\nlast\n')
+        nested = directory / 'work/dynamic-cwd-界-long-prompt-boundary'
+        nested.mkdir()
+        for name in ('sample.txt', 'large.txt'):
+            (nested / name).symlink_to(Path('..') / name)
         for n in range(cycles):
+            assert time.monotonic() - started < 1800, 'profile exceeded 30-minute action budget'
+            if n % 8 == 0:
+                session.input(b'cd ' + (b'..' if n % 16 else nested.name.encode()) + b'\r')
+                session.checkpoint(f'{n:03}-dynamic-cwd-prompt')
             # Keep newline-containing prompts alive throughout many resizes,
             # wrapped edits, interrupts, redraws and heavy output bursts.
             session.input(b'cat sample.txt\r')
@@ -332,6 +368,8 @@ def run_profile(binary, directory, shell, cycles, seed):
             session.settle()
             session.checkpoint(f'{n:03}-interrupt-prompt')
             session.sidebar(1, 0)
+        session.input(('cd ' + shlex.quote(str(directory / 'work')) + '\r').encode())
+        session.checkpoint('dynamic-cwd-return')
         # Vim is a real application: alternate screen, Unicode buffer, edits,
         # resize while cursor is in the buffer, then restoration of shell cells.
         session.input(b'vim -Nu NONE -n sample.txt\r')
@@ -358,6 +396,19 @@ def run_profile(binary, directory, shell, cycles, seed):
         session.input(b'cat sample.txt\r')
         session.settle()
         session.checkpoint('two-client-output')
+        third = session.attach('unequal-client', rows=31, cols=107)
+        session.settle()
+        session.input(b'\x0c')
+        session.checkpoint('unequal-larger-attach')
+        for client, rows, cols in [(session.clients[0], 9, 37), (third, 17, 61),
+                                  (session.clients[1], 24, 85), (third, 12, 45)]:
+            session.resize_client(client, rows, cols)
+            session.input(('echo ' + 'shared-viewport-' * 10).encode())
+            session.checkpoint(f'unequal-{client["name"]}-{rows}x{cols}-edit')
+            session.input(b'\x03')
+            session.checkpoint(f'unequal-{client["name"]}-{rows}x{cols}-interrupt')
+        session.resize(20, 73)
+        session.checkpoint('unequal-clients-return-equal')
         # A running foreground command has no idle prompt to remove. The
         # independent source screen survives the restart; fresh shell bytes
         # from the new recorder are fed on top, exactly as protocol dictates.
@@ -379,7 +430,10 @@ def run_profile(binary, directory, shell, cycles, seed):
         for active in [0, 8, 3, 7, 1, 5]:
             session.command('select-window', str(active + 1))
             session.sidebar(12, active)
-        return {'shell': shell, 'cycles': cycles, 'checkpoints': session.checkpoints, 'passed': True}
+        return {'shell': shell, 'cycles': cycles, 'checkpoints': session.checkpoints,
+                'actions': session.action_index, 'elapsed_seconds': round(time.monotonic() - started, 3),
+                'budget_seconds': 1800, 'large_output_logical_rows': ((cycles + 3) // 4) * 2400,
+                'passed': True}
     finally:
         session.close()
 

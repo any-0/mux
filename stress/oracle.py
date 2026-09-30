@@ -11,6 +11,21 @@ from collections import namedtuple
 import pyte
 from pyte import graphics, modes
 
+
+def viewport(snapshot, rows, cols):
+    """Top-left viewport of the shared PTY, with default blank outside it.
+
+    This is a scenario contract for unequal-size clients, not a second terminal
+    resize: only the most recent client resize changes the source PTY.
+    """
+    blank = [' ', 'default', 'default', False, False, False, False, 0, 'default']
+    cells = []
+    for y in range(rows):
+        source = snapshot['cells'][y] if y < len(snapshot['cells']) else []
+        cells.append([list(source[x]) if x < len(source) else list(blank) for x in range(cols)])
+    return dict(snapshot, cells=cells,
+                cursor=[min(snapshot['cursor'][0], rows - 1), min(snapshot['cursor'][1], cols - 1)])
+
 Char = namedtuple('Char', pyte.screens.Char._fields + ('dim', 'underline_style', 'underline_color'),
                   defaults=pyte.screens.Char.__new__.__defaults__ + (False, 0, 'default'))
 
