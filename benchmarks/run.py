@@ -155,8 +155,8 @@ class Terminal:
     def contains(self, text):
         return any(text in line for line in self.screen.display)
 
-    def drain(self):
-        deadline = time.monotonic() + 0.2
+    def drain(self, seconds=0.2):
+        deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             self.pump(0.01)
 

@@ -73,11 +73,11 @@ class Interactive(Recovery):
         else:
             self.cli('select-pane', '-t', pane['id'])
             self.cli('rename-window', 'fixture')
-        self.client.drain()
+        self.client.drain(0.02)
 
     def window(self, index):
         self.cli('select-window', str(index)) if self.variant == 'mux' else self.cli('select-window', '-t', f':{index}')
-        self.client.drain()
+        self.client.drain(0.02)
 
     def shell_marker(self, label, rows):
         # Each retained row is 30 cells, fitting the smallest seeded pane.
@@ -86,13 +86,19 @@ class Interactive(Recovery):
         self.shell(script, f'{label}-H{rows-1:05d} '+ 'x'*12)
         self.client.until(lambda:self.client.contains(label+'>'))
 
+    def shell(self, text, marker):
+        self.client.input((text+'\n').encode())
+        self.client.until(lambda:self.client.contains(marker))
+        # shell_marker separately waits for the fresh tagged Bash prompt.
+
     def keys(self, data):
         self.client.input(data)
-        self.client.drain()
+        # A lone Escape requires the input decoder's disambiguation window.
+        self.client.drain(0.06 if data==b'\x1b' else 0.02)
 
     def action(self, name, data, predicate, check=None, terminal=None):
         t = terminal or self.client
-        t.drain()
+        t.drain(0.02)
         before = list(t.screen.display)
         # Reject a pre-satisfied gate: the endpoint must observe a transition.
         if predicate():
@@ -195,7 +201,7 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.cli('new-window');r.cli('rename-window','BACKGROUND');r.shell_marker('BACKGROUND',history_rows)
         if load=='busy':
             script="import sys,time; i=0\nwhile True:\n sys.stdout.write('\\033[H'+('LOAD%08d'%i+'x'*60+'\\n')*5);sys.stdout.flush();i+=1;time.sleep(.02)"
-            r.client.input(('python3 -u -c '+shlex.quote(script)+'\n').encode());r.client.drain()
+            r.client.input(('python3 -u -c '+shlex.quote(script)+'\n').encode());r.client.drain(0.02)
         r.window(1);panes=r.panes();r.choose(panes[0])
         labels=[f'W01P{p["index"]:02d}>' for p in panes]
         r.client.until(lambda:all(r.client.contains(x) for x in labels))
@@ -307,7 +313,8 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
             # tmux native command prompt is an attached-key interaction.
             r.keys(b'\x02:kill-session')
             kill=b'\r'
-        r.action('delete_session',kill,lambda:r.client.contains('SCRATCH>'))
+        offset=r.columns-100 if variant=='mux' else 0
+        r.action('delete_session',kill,lambda:any('SCRATCH>' in line and line.index('SCRATCH>')==offset for line in r.client.screen.display))
         # Native TIOCSWINSZ + SIGWINCH: stop at the new visible geometry,
         # not a CLI acknowledgement or a shell probe with a settle delay.
         selected=next(w for w in r.windows() if w['active'])
@@ -372,6 +379,7 @@ def main():
     a.output=a.output.resolve();a.output.mkdir(parents=True,exist_ok=False)
     env={'source_commit':SOURCE_COMMIT,'harness_commit':command(['git','rev-parse','HEAD']),
          'nixpkgs':os.environ['BENCH_NIXPKGS_REV'],'args':vars(a)|{'output':str(a.output)},
+         'inter_operation_drain_seconds':.02,'lone_escape_drain_seconds':.06,
          'execution_context':'hosted-ci-interactive-correctness' if a.smoke else 'hosted-ci-interactive-performance',
          'runner':{k:os.environ.get(k) for k in ('ImageVersion','GITHUB_RUN_ID','RUNNER_NAME')},
          'versions':{k:command([k,'-V' if k=='tmux' else '--version']) for k in ('rustc','cargo','python3','tmux','bash')},
