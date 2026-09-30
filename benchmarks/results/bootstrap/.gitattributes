@@ -1,2 +1,3 @@
 # Preserve exact command output, including HTTP CRLF and progress-control bytes.
 *.log -text -diff
+nix-config-selected.txt -text -diff
