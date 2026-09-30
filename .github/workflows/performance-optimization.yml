@@ -1,63 +1,122 @@
-name: Optimization evidence
+name: Matched optimization validation
 on:
   pull_request:
     paths:
       - '.github/workflows/performance-optimization.yml'
-      - 'scripts/performance/**'
+      - 'scripts/performance/compare.py'
+      - 'scripts/performance/trial.py'
+      - 'scripts/performance/audit.py'
       - 'src/**'
       - 'vendor/**'
+      - 'tests/**'
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: optimization-${{ github.ref }}
+  group: optimization-comparison-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  profile:
+  format:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+      - name: Check formatting with the exact project Nix pin
+        run: |
+          if ! nix develop ./.nix --command cargo fmt --all -- --check; then
+            nix develop ./.nix --command cargo fmt --all
+            git diff > format.patch
+            exit 1
+          fi
+      - name: Preserve pinned formatter patch when needed
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          fetch-depth: 0
+          name: optimization-format-${{ github.run_id }}-${{ github.run_attempt }}
+          path: format.patch
+  paired:
+    needs: format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        windows: [1, 3, 6]
+        load: [idle, busy]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 406ae9a514ab7e16084f2e623324592c2f491f9a
-          path: harness
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: d6dd228054231e77772bd17a412d8f0d07871835
           path: baseline
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 406ae9a514ab7e16084f2e623324592c2f491f9a
+          path: harness
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
-      - name: Install Linux diagnostic tools
+      - name: Uninstrumented release builds with the same pinned toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install -y strace linux-tools-generic
-          echo "PERF_BINARY=$(find /usr/lib -type f -name perf | sort | tail -1)" >> "$GITHUB_ENV"
-      - name: Build baseline with symbols using the pinned Nix toolchain
-        env:
-          CARGO_PROFILE_RELEASE_DEBUG: 1
-        run: nix develop ./.nix#benchmark --command cargo build --manifest-path baseline/Cargo.toml --release --locked
-      - name: Profile unchanged interactive gates at two scales and loads
-        env:
-          BENCH_MUX_SOURCE_DIR: ${{ github.workspace }}/baseline
+          nix develop ./.nix#benchmark --command cargo build --manifest-path baseline/Cargo.toml --release --locked
+          cp -a baseline/target candidate/target
+          nix develop ./.nix#benchmark --command cargo build --manifest-path candidate/Cargo.toml --release --locked
+      - name: Matched randomized blocks with unchanged visible and semantic gates
         run: |
-          mkdir -p evidence
-          status=0
-          for group in '1 idle' '3 busy'; do
-            read -r windows load <<< "$group"
-            for mode in perf strace; do
-              nix develop ./.nix#benchmark --command python3 scripts/performance/profile.py --harness harness --output "evidence/w${windows}-${load}-${mode}" --windows "$windows" --load "$load" --mode "$mode" || status=1
-              if [ "$mode" = perf ]; then
-                "$PERF_BINARY" report -i "evidence/w${windows}-${load}-${mode}/perf.data" --stdio --no-children --percent-limit .2 > "evidence/w${windows}-${load}-${mode}/perf-report.txt" || status=1
-              fi
-            done
-          done
-          exit "$status"
-      - name: Retain raw profile and workload correctness evidence
+          nix develop ./.nix#benchmark --command python3 scripts/performance/compare.py --harness harness --baseline baseline --candidate candidate --output "$RUNNER_TEMP/paired" --windows ${{ matrix.windows }} --load ${{ matrix.load }} --trials 20
+      - name: Independently audit raw inputs, intervals, complete history and paired fixtures
+        run: python3 scripts/performance/audit.py "$RUNNER_TEMP/paired" > "$RUNNER_TEMP/paired/audit.json"
+      - name: Retain every raw trial, failure, warm-up, distribution and resource sample
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: optimization-profile-${{ github.run_id }}-${{ github.run_attempt }}
-          path: evidence/
+          name: optimization-paired-${{ github.run_id }}-${{ github.run_attempt }}-w${{ matrix.windows }}-${{ matrix.load }}
+          path: ${{ runner.temp }}/paired/
           retention-days: 90
+          compression-level: 9
+  micro-and-recovery:
+    needs: format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: d6dd228054231e77772bd17a412d8f0d07871835
+          path: baseline
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 406ae9a514ab7e16084f2e623324592c2f491f9a
+          path: harness
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+      - name: Build both exact runtimes without instrumentation
+        run: |
+          nix develop ./.nix#benchmark --command cargo build --manifest-path baseline/Cargo.toml --release --locked
+          cp -a baseline/target candidate/target
+          nix develop ./.nix#benchmark --command cargo build --manifest-path candidate/Cargo.toml --release --locked
+      - name: Matched startup, throughput, CPU, PSS and 50 rendered scroll events per trial
+        run: |
+          nix develop ./.nix#benchmark --command python3 scripts/performance/compare.py --harness harness --baseline baseline --candidate candidate --output "$RUNNER_TEMP/micro" --windows 1 --load idle --trials 20 --kind micro
+      - name: Full history, styled viewport, layout, cwd and live shell clean-recovery gates
+        run: |
+          for role in baseline candidate; do
+            revision=$(git -C "$role" rev-parse HEAD)
+            nix develop ./.nix#benchmark --command python3 scripts/performance/trial.py --harness harness --source "$role" --revision "$revision" --output "$RUNNER_TEMP/recovery-$role" --windows 1 --load idle --trial 0 --kind recovery
+          done
+      - name: Retain raw evidence even after a failed gate
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: optimization-micro-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/micro/
+            ${{ runner.temp }}/recovery-baseline/
+            ${{ runner.temp }}/recovery-candidate/
+          retention-days: 90
+          compression-level: 9
