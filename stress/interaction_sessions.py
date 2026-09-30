@@ -115,6 +115,14 @@ with open(control) as commands:
             stalled['paused'] = False
             session.action('client-continue', name=stalled['name'], elapsed=time.monotonic()-started)
             session.checkpoint('stalled-caught-up')
+            drain_deadline = time.monotonic()+5
+            while True:
+                drained = client_transport(stalled['process'].pid, session.daemon.pid)
+                if drained['receiver']['receive_bytes'] == 0 and drained['sender']['send_memory'] == 0:
+                    break
+                session.pump(.005)
+                assert time.monotonic() < drain_deadline, 'resumed transport did not drain'
+            session.action('transport-drained', **drained)
         finally:
             os.close(control)
             if 'stalled' in locals():

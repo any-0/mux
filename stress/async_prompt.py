@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pinned Pure/zsh-async worker, FIFO completion gates and action-owned Git state."""
 import argparse
-import json
+import hashlib
 import os
 from pathlib import Path
 import shlex
@@ -9,7 +9,7 @@ import subprocess
 import time
 
 from input_sessions import file_equals
-from run import Session, write_json
+from run import ROOT, Session, write_json
 
 
 class AsyncSession(Session):
@@ -29,6 +29,13 @@ class AsyncSession(Session):
         git('commit', '-m', 'deterministic fixture')
         plugin = os.environ['STRESS_ASYNC_PLUGIN']
         assert Path(plugin).is_file(), 'pinned Pure async library missing'
+        (self.root / 'async-library.zsh').write_bytes(Path(plugin).read_bytes())
+        write_json(self.root / 'manifest.json', {
+            'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
+            'binary_sha256':hashlib.sha256(Path(self.binary).read_bytes()).hexdigest(),
+            'nixpkgs_revision':os.environ['STRESS_NIXPKGS_REV'],
+            'pure_version':os.environ['STRESS_PURE_VERSION'],
+            'async_sha256':hashlib.sha256(Path(plugin).read_bytes()).hexdigest()})
         # Functions are defined before worker fork, as required by zsh-async.
         # The job performs real Git queries after the externally controlled
         # FIFO release. Callback state includes its action generation.
