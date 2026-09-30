@@ -36,8 +36,9 @@ These are corruption and crash-recovery tests, not simulated user actions.
 colors on externally restored history. Partial row framing could panic in a
 restore worker; structurally invalid shapes could reach cell iteration later.
 Persisted rows now undergo structural and UTF-8 validation before entering the
-trusted internal decoder. Restore bounds decompression to 64 MiB, validates
-row counts before allocating, retains at most the configured history limit,
+trusted internal decoder. Restore streams rows using per-cell format bounds before allocating, limits
+zstd frame windows to 128 MiB (the level-1 writer uses a much smaller window),
+retains at most the configured history limit,
 and installs the new history only after every row validates. The daemon's
 existing unreadable-pane recovery can then preserve sibling panes and layout.
 
@@ -76,17 +77,46 @@ nix develop ./.nix --command ./scripts/check-regression-witnesses 9c74b7029e6112
 ```
 
 This creates an isolated checkout of the current test harness, replaces only
-the row/grid/bar implementations with that baseline, and requires the three
+the row/grid/bar/input implementations with that baseline, and requires the four
 behavior tests to fail. A compilation failure or empty test filter does not
 count as a regression witness. The primary checkout remains untouched. CI also
 runs this check after the fixed implementation passes its full checks.
 
 ## Remaining investigation
 
-Two sidebar/tree failures have been reproduced: a one-row bell badge overwrote
-the mode tile, and removing an earlier session changed the selected tree object
-and its preview. Whether either is Julian's undisclosed bug remains unknown.
-Process icon refresh, multi-client resize and mouse routing need further
-interaction coverage. The tests observe the daemon's client protocol, not the
-crossterm client's key decoder or a hardware terminal. PTY byte fixtures use an
+Three sidebar/tree failures have been reproduced: a one-row bell badge overwrote
+the mode tile, removing an earlier session changed the selected tree object
+and its preview, and mouse hit testing selected an offscreen window after a
+narrow resize. Whether either is Julian's undisclosed bug remains unknown.
+Process icon refresh, sustained slow-client backpressure and hardware terminal
+behavior remain to be explored. Both the daemon protocol and executable client
+are exercised through PTYs, including crossterm key, paste and mouse decoding. PTY byte fixtures use an
 interactive `/bin/sh` to avoid readline injecting unrelated resize redraws.
+
+## Further interaction and compatibility coverage
+
+The tmux `sync-output-scroll-clients.sh`, `control-client-size.sh` and
+`format-mouse.sh` fixtures informed the next interaction sequences. mux keeps
+its documented most-recent-resize policy: two clients observe shared windows
+while only the client scrolling enters its private history view. A real shell's
+`stty size` confirms the PTY geometry. One client's resize must not push another
+client's history view back to live output.
+
+Mouse coverage checks exact SGR press/drag/release/wheel bytes read by a raw
+program in the right split, with literal expected coordinates after subtracting
+the sidebar and left pane. A tree popup consumes clicks. A separate executable
+PTY test sends actual keyboard, bracketed-paste and SGR mouse sequences into
+crossterm, then checks the application's captured input bytes and which shell
+receives input after clicking a resized sidebar.
+
+History restoration no longer rejects valid histories above 64 MiB expanded
+size. A 960-row, 4096-column history with RGB and dashed-underline styles on
+every cell is emitted by the real encoder; its compressed representation fits
+a journal record. Both compressed and raw restores retain the specified three
+tail rows and their independently specified text and styles. Truncated compressed
+frames and forged lengths leave that tail intact. Stream allocation is bounded
+by one row's format (at most 65535 cells), not the declared total size.
+
+The style persistence oracle also checks double, dotted and dashed underline,
+RGB foreground/background/underline colors, bold, dim, italic, inverse and
+resets; output appended after compaction inherits the saved active attributes.
