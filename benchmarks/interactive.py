@@ -44,7 +44,7 @@ class Interactive(Recovery):
                         'bind -T bench C-Left resize-pane -L 2',
                         'bind -T bench C-Up resize-pane -U 2',
                         'bind -T bench C-Down resize-pane -D 2']
-            pipe='cat > '+shlex.quote(str(self.capture))
+            pipe='cat > '+shlex.quote(str(self.capture)+'.tmp')+' && mv '+shlex.quote(str(self.capture)+'.tmp')+' '+shlex.quote(str(self.capture))
             bindings += ['bind -T copy-mode-vi V send-keys -X select-line',
                          'bind -T copy-mode-vi y send-keys -X copy-pipe-and-cancel '+shlex.quote(pipe)]
             bindings += [f'bind -n M-{i} select-window -t :{i}' for i in range(1, 10)]
