@@ -67,7 +67,9 @@ impl Session {
     /// A fixture file avoids canonical input's line-length limit while the
     /// command that prints it still enters through the pane's real PTY.
     fn output(&mut self, bytes: &[u8], marker: &str) {
-        let path = self.directory.join(format!("output-{}", self.output_number));
+        let path = self
+            .directory
+            .join(format!("output-{}", self.output_number));
         self.output_number += 1;
         fs::write(&path, bytes).unwrap();
         let command = format!("stty -echo; cat '{}'\r", path.display());
@@ -377,4 +379,33 @@ fn generated_scrollback_keeps_text_and_styles_through_resize_and_compaction() {
         assert_eq!(styled.underline_color(), vt100::Color::Idx(45));
     }
     assert!(expected.contains("00:界e\u{301}:end"));
+}
+
+#[test]
+fn background_pty_bell_cannot_overwrite_the_mode_tile_after_narrow_resize() {
+    let mut session = Session::new();
+    session.server.clients.get_mut(&1).unwrap().bell_style = BellStyle::Steady;
+    session.command(MuxCommand::NewSession(Some("other".into())));
+    session.output(b"\x1bcOTHER\x07", "OTHER");
+    session.command(MuxCommand::ChooseTree);
+    session
+        .server
+        .handle_key(1, crate::protocol::parse_for_test("Up"))
+        .unwrap();
+    session
+        .server
+        .handle_key(1, crate::protocol::parse_for_test("Enter"))
+        .unwrap();
+    assert_eq!(session.server.clients[&1].session_id, Some(0));
+    session
+        .server
+        .handle_event(Event::Client(
+            1,
+            ClientMessage::Resize { cols: 40, rows: 1 },
+        ))
+        .unwrap();
+    session.terminal.screen_mut().set_size(1, 40);
+    // The tile remains the normal-mode dot. The pending-bell badge belongs
+    // on a separate bottom row, and must not overwrite it when none exists.
+    assert_eq!(session.capture().cell(0, 1).unwrap().contents(), "●");
 }
