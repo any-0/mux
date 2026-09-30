@@ -189,7 +189,13 @@ def resource_sample(roots):
         if pid not in processes:
             continue
         values = {}
-        for line in Path(f'/proc/{pid}/smaps_rollup').read_text().splitlines():
+        try:
+            memory_lines = Path(f'/proc/{pid}/smaps_rollup').read_text().splitlines()
+        except (FileNotFoundError, ProcessLookupError):
+            # Short-lived plugin/workload helpers may exit between /proc reads.
+            # They are absent from this resident-memory snapshot and CPU lower bound.
+            continue
+        for line in memory_lines:
             key, _, value = line.partition(':')
             if key in ('Pss', 'Rss'):
                 values[key] = int(value.split()[0])
