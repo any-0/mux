@@ -38,10 +38,10 @@ class Interactive(Recovery):
                         'bind -T bench d detach-client',
                         'bind -T bench Left select-pane -L', 'bind -T bench Right select-pane -R',
                         'bind -T bench Up select-pane -U', 'bind -T bench Down select-pane -D',
-                        'bind -T bench C-Right resize-pane -R 1',
-                        'bind -T bench C-Left resize-pane -L 1',
-                        'bind -T bench C-Up resize-pane -U 1',
-                        'bind -T bench C-Down resize-pane -D 1']
+                        'bind -T bench C-Right resize-pane -R 3',
+                        'bind -T bench C-Left resize-pane -L 3',
+                        'bind -T bench C-Up resize-pane -U 3',
+                        'bind -T bench C-Down resize-pane -D 3']
             pipe='cat > '+shlex.quote(str(self.capture))
             bindings += ['bind -T copy-mode-vi V send-keys -X select-line',
                          'bind -T copy-mode-vi y send-keys -X copy-pipe-and-cancel '+shlex.quote(pipe)]
@@ -236,7 +236,7 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
                 p=r.panes();assert [(x['cols'],x['rows']) for x in p]!=old_dims;return p
             offset=r.columns-100 if variant=='mux' else 0
             by,bx=(parent['rows'],offset+10) if orientation=='vertical' else (0,offset+parent['cols'])
-            new_y,new_x=(by-1,bx) if orientation=='vertical' else (by,bx-1)
+            new_y,new_x=(by-3,bx) if orientation=='vertical' else (by,bx-3)
             old_border=r.client.screen.buffer[by][bx].data
             def visibly_resized():
                 screen=r.client.screen
