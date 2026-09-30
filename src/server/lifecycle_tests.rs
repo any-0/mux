@@ -179,7 +179,7 @@ fn wait_for_render(stream: &mut UnixStream, terminal: &mut vt100::Parser, marker
         match read_message::<ServerMessage>(stream).unwrap() {
             Some(ServerMessage::Render(bytes)) => terminal.process(&bytes),
             Some(ServerMessage::Error(error)) => panic!("daemon error: {error}"),
-            Some(_) => {},
+            Some(_) => {}
             None => panic!("daemon disconnected before {marker:?}"),
         }
     }
@@ -200,9 +200,20 @@ fn real_pty_history_and_styles_survive_restart_and_a_corrupt_sibling() {
     let mut attached = connect(&socket);
     write_message(&mut attached, &hello(root.clone())).unwrap();
     let mut terminal = vt100::Parser::new(24, 80, 0);
-    write_message(&mut attached, &ClientMessage::Paste("stty -echo; printf '\\033cFIRST-PANE'\n".into())).unwrap();
+    write_message(
+        &mut attached,
+        &ClientMessage::Paste("stty -echo; printf '\\033cFIRST-PANE'\n".into()),
+    )
+    .unwrap();
     wait_for_render(&mut attached, &mut terminal, "FIRST-PANE");
-    write_message(&mut attached, &ClientMessage::Command { pane_id: None, command: MuxCommand::NewWindow }).unwrap();
+    write_message(
+        &mut attached,
+        &ClientMessage::Command {
+            pane_id: None,
+            command: MuxCommand::NewWindow,
+        },
+    )
+    .unwrap();
     write_message(&mut attached, &ClientMessage::Paste("stty -echo; i=0; while [ $i -lt 40 ]; do printf 'HISTORY-%02d\\r\\n' $i; i=$((i + 1)); done; printf '\\033[4:3;58;5;45mSTYLED-LAST\\033[24;59m PLAIN-LAST'\n".into())).unwrap();
     wait_for_render(&mut attached, &mut terminal, "STYLED-LAST");
     shutdown(&socket);
@@ -215,7 +226,12 @@ fn real_pty_history_and_styles_survive_restart_and_a_corrupt_sibling() {
     let healthy = state.sessions[0].windows[1].panes[0].id;
     let healthy_path = state_home.join(format!("mux/pane-{healthy}.ansi"));
     let mut saved = super::new_parser(24, 80);
-    super::replay_pane_journal(&mut saved, &mut Vec::new(), fs::File::open(&healthy_path).unwrap()).unwrap();
+    super::replay_pane_journal(
+        &mut saved,
+        &mut Vec::new(),
+        fs::File::open(&healthy_path).unwrap(),
+    )
+    .unwrap();
     let (buffer, _) = super::snapshot_screen(saved.screen_mut());
     assert!(buffer.texts().any(|line| line.contains("HISTORY-00")));
 
@@ -224,7 +240,11 @@ fn real_pty_history_and_styles_survive_restart_and_a_corrupt_sibling() {
     let mut invalid = 1u32.to_le_bytes().to_vec();
     invalid.extend(1u64.to_le_bytes());
     invalid.extend([0, 0]);
-    fs::write(state_home.join(format!("mux/pane-{damaged}.ansi")), encode_journal_record(JOURNAL_HISTORY, &invalid).unwrap()).unwrap();
+    fs::write(
+        state_home.join(format!("mux/pane-{damaged}.ansi")),
+        encode_journal_record(JOURNAL_HISTORY, &invalid).unwrap(),
+    )
+    .unwrap();
     // A crash can also leave any partial header/payload behind a healthy pane.
     let mut healthy_bytes = fs::read(&healthy_path).unwrap();
     healthy_bytes.extend([1, 0, 0, 0, 5, b'x']);
@@ -247,8 +267,19 @@ fn real_pty_history_and_styles_survive_restart_and_a_corrupt_sibling() {
         }
     }
     assert_eq!(styled, "STYLED-LAST".len());
-    write_message(&mut attached, &ClientMessage::Command { pane_id: None, command: MuxCommand::SelectWindow(1) }).unwrap();
-    write_message(&mut attached, &ClientMessage::Paste("printf 'CORRUPT-PANE-STILL-USABLE'\n".into())).unwrap();
+    write_message(
+        &mut attached,
+        &ClientMessage::Command {
+            pane_id: None,
+            command: MuxCommand::SelectWindow(1),
+        },
+    )
+    .unwrap();
+    write_message(
+        &mut attached,
+        &ClientMessage::Paste("printf 'CORRUPT-PANE-STILL-USABLE'\n".into()),
+    )
+    .unwrap();
     wait_for_render(&mut attached, &mut restored, "CORRUPT-PANE-STILL-USABLE");
     shutdown(&socket);
     second.wait();
