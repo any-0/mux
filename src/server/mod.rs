@@ -2683,6 +2683,8 @@ mod lifecycle_tests;
 #[cfg(test)]
 mod responsiveness_tests;
 #[cfg(test)]
+mod session_regression_tests;
+#[cfg(test)]
 mod terminal_query_tests;
 #[cfg(test)]
 mod tests;

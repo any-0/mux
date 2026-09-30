@@ -165,6 +165,12 @@ impl Row {
     }
 
     pub(crate) fn resize(&mut self, len: u16, cell: crate::Cell) {
+        if len < self.cols {
+            // A resize can cut through a double-width character. Use the same
+            // clipping rule as other truncations, clearing its leading half.
+            self.truncate(len);
+            return;
+        }
         self.active_cells().resize(usize::from(len), cell);
         self.cols = len;
         self.wrapped = false;
@@ -302,6 +308,66 @@ impl Row {
             output.extend_from_slice(&span.end.to_le_bytes());
             encode_attrs(output, span.attrs);
         }
+    }
+
+    /// Validate persisted rows before the trusted internal block decoder reads
+    /// them. Neither partial records nor valid framing imply valid cell data.
+    pub(crate) fn decode_checked(input: &mut &[u8]) -> Option<Self> {
+        let header = input.get(..15)?;
+        let cols = u16::from_le_bytes(header[..2].try_into().ok()?);
+        let shape_len = u32::from_le_bytes(header[3..7].try_into().ok()?) as usize;
+        let cells = u16::from_le_bytes(header[7..9].try_into().ok()?);
+        let data_len = u32::from_le_bytes(header[9..13].try_into().ok()?) as usize;
+        let attrs_len = usize::from(u16::from_le_bytes(header[13..15].try_into().ok()?));
+        if cols == 0 || cells > cols || header[2] > 1 || shape_len % 2 != 0 {
+            return None;
+        }
+        let data_end = 15usize.checked_add(data_len)?;
+        let end = data_end.checked_add(attrs_len.checked_mul(17)?)?;
+        let record = input.get(..end)?;
+        let data = &record[15..data_end];
+        let shape = data.get(..shape_len)?;
+        let mut text = data.get(shape_len..)?;
+        let mut count = 0usize;
+        let mut previous_wide = false;
+        for run in shape.chunks_exact(2) {
+            let length = usize::from(run[1] & crate::cell::LEN_BITS);
+            if run[0] == 0 || length > 22 || run[1] & 0x20 != 0 {
+                return None;
+            }
+            for _ in 0..run[0] {
+                let wide = run[1] & 0x80 != 0;
+                let continuation = run[1] & 0x40 != 0;
+                // One-column reflow deliberately stores the two halves in
+                // adjacent wrapped rows; widening joins them again.
+                if (cols > 1 && continuation != previous_wide)
+                    || (continuation && (wide || length != 0))
+                {
+                    return None;
+                }
+                std::str::from_utf8(text.get(..length)?).ok()?;
+                text = text.get(length..)?;
+                previous_wide = wide;
+                count += 1;
+            }
+        }
+        if count != usize::from(cells) || !text.is_empty() || (cols > 1 && previous_wide) {
+            return None;
+        }
+        let mut last_end = 0;
+        for span in record[data_end..].chunks_exact(17) {
+            let start = u16::from_le_bytes(span[..2].try_into().ok()?);
+            let end = u16::from_le_bytes(span[2..4].try_into().ok()?);
+            let mode = span[16];
+            if start < last_end || start >= end || end > cells
+                || [span[4], span[8], span[12]].iter().any(|tag| *tag > 2)
+                || mode & 3 == 3 || mode >> 5 > 5
+            {
+                return None;
+            }
+            last_end = end;
+        }
+        Some(Self::decode(input))
     }
 
     pub(crate) fn decode(input: &mut &[u8]) -> Self {

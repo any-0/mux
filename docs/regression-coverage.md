@@ -1,0 +1,67 @@
+# Terminal session regressions
+
+The reference suite examined for this work is tmux `regress/` at
+`5a820e63b72f05c121441149c72327aeeb16dfa4` (September 30, 2026). Its shell
+fixtures were studied locally; tmux's own suite was not executed here. The
+mux cases adapt the behaviors and oracles, rather than copying tmux-specific
+commands or asserting that two implementations of the same formula agree.
+
+The highest-value pattern in `input-common.inc` is to generate terminal bytes in
+a live pane, then observe the resulting grid, cursor and flags. The redraw
+suite goes further: an outer terminal observes the inner client's actual
+rendered scene, since querying the pane alone cannot detect a broken status
+line. mux's session harness similarly decodes the actual incremental
+`ServerMessage::Render` stream into a persistent client terminal. It sends
+shell `printf` commands through real PTYs, waits for output markers with a
+deadline, and checks fixed expected sidebar rows and terminal attributes.
+
+| tmux sources studied | mux coverage |
+| --- | --- |
+| `input-scroll.sh`, `input-raw-scroll.sh`, `input-cursor.sh`, `input-edit.sh` | Real PTY scroll-region preservation, insert/delete/erase sequencing and fixed sidebar labels |
+| `input-malformed.sh`, `input-osc.sh`, `input-replies.sh`, `input-requests.sh` | Real oversized OSC recovery and subsequent text; existing parser callback query tests remain complementary |
+| `input-sgr.sh`, `input-raw-sgr.sh`, `capture-pane-sgr0.sh` | Curly underline and color transitions, reset to plain text, no underline leakage into sidebar cells |
+| `input-raw-unicode.sh`, `input-raw-reflow.sh`, `input-reflow-stress.sh` | Wide-cell clipping followed by erase; generated numbered combining/wide scrollback resized to 7, 3, 2, 1, 2, 4 and 12 columns and compacted at each size |
+| `screen-redraw-status.sh`, `screen-redraw-tiled.sh`, `mode-tree-scroll.sh` | Retained client render stream across alternate screen, zoom/unzoom and window switch; sidebar rows checked against literal expected labels |
+| `lifecycle-deferred.sh`, `session-ops.sh`, `window-ops.sh` | Separate daemon processes and real shell output; persisted scrollback/styles survive restart while another pane has a malformed history record and the healthy pane has a torn tail |
+
+Persistence cases also exercise every byte boundary of a three-record journal
+and malformed compact-row headers, lengths, shapes, UTF-8, color tags and
+attribute spans. A failed history restore must leave prior history intact.
+These are corruption and crash-recovery tests, not simulated user actions.
+
+## Failure paths addressed
+
+`Row::decode` used unchecked slicing and an unreachable branch for invalid
+colors on externally restored history. Partial row framing could panic in a
+restore worker; structurally invalid shapes could reach cell iteration later.
+Persisted rows now undergo structural and UTF-8 validation before entering the
+trusted internal decoder. Restore bounds decompression to 64 MiB, validates
+row counts before allocating, retains at most the configured history limit,
+and installs the new history only after every row validates. The daemon's
+existing unreadable-pane recovery can then preserve sibling panes and layout.
+
+A screen shrink used `Vec::resize` to drop a wide character's continuation but
+kept the leading half at the new right edge. Erasing or overwriting that half
+could index outside the row. Shrinking now uses the existing truncation rule,
+which clears a clipped leading half.
+
+## Running checks
+
+Use `./scripts/test-nix`, which enters the project's pinned `.nix` development
+shell and performs the same fmt, mux tests, vendored vt100 library tests and
+clippy checks as the container runner. No lockfile update is needed.
+
+At implementation time, this execution environment had no Nix. A bootstrap
+from GitHub succeeded and a local container could start Nix 2.20.6, but fetching
+the pinned shell failed: `cache.nixos.org` and `releases.nixos.org` were blocked
+with HTTP 403. No build or test success is claimed until those pinned checks
+can run. `git diff --check` and shell syntax checks are available independently.
+
+## Remaining investigation
+
+The undisclosed sidebar bug is not yet identified. Process icon refresh,
+background bell navigation, tree selection after asynchronous pane closure,
+multi-client resize and mouse routing need further interaction coverage.
+The new tests check label placement and SGR isolation but do not yet exhaust
+these state machines. They observe the daemon's client protocol, not the
+crossterm client's own key decoder or a hardware terminal.
