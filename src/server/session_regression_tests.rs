@@ -247,7 +247,7 @@ fn every_torn_journal_boundary_replays_only_complete_records() {
     let second = records.len();
     records.extend(encode_journal_record(JOURNAL_OUTPUT, b"\r\nSECOND").unwrap());
     for cut in 0..=records.len() {
-        let mut parser = new_parser(3, 8);
+        let mut parser = new_parser(7, 17);
         let consumed =
             replay_pane_journal(&mut parser, &mut Vec::new(), &records[..cut]).unwrap() as usize;
         let expected = if cut == records.len() {
@@ -260,6 +260,8 @@ fn every_torn_journal_boundary_replays_only_complete_records() {
             0
         };
         assert_eq!(consumed, expected, "cut {cut}");
+        let size = if cut >= first { (3, 8) } else { (7, 17) };
+        assert_eq!(parser.screen().size(), size, "resize cut {cut}");
         assert_eq!(
             parser.screen().contents(),
             if cut == records.len() {
@@ -333,6 +335,22 @@ fn malformed_persisted_history_is_rejected_before_render_or_reflow() {
     parser.screen_mut().set_size(3, 2);
     parser.screen_mut().set_scrollback(1);
     assert!(parser.screen().contents().contains('A'));
+    assert_eq!(
+        parser.screen().cell(0, 0).unwrap().fgcolor(),
+        vt100::Color::Idx(1)
+    );
+
+    let mut source = vt100::Parser::new(2, 8, 10);
+    source.process(b"A\r\nB\r\nC\r\nD");
+    let packed = source.screen().encode_history();
+    let mut bounded = vt100::Parser::new(2, 8, 1);
+    assert!(bounded.screen_mut().restore_history(&packed));
+    assert_eq!(bounded.screen().history_rows(), 1);
+    bounded.screen_mut().set_scrollback(1);
+    assert!(bounded.screen().contents().starts_with('B'));
+    let mut empty = vt100::Parser::new(2, 8, 0);
+    assert!(empty.screen_mut().restore_history(&packed));
+    assert_eq!(empty.screen().history_rows(), 0);
 }
 
 #[test]

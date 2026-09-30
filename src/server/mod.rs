@@ -1586,7 +1586,11 @@ impl Server {
                     });
                 }
             }
-            let Some(tree) = self.clients.get(&id).and_then(|client| client.tree.as_ref()) else {
+            let Some(tree) = self
+                .clients
+                .get(&id)
+                .and_then(|client| client.tree.as_ref())
+            else {
                 continue;
             };
             let items = self.tree_items(&tree.expanded);
