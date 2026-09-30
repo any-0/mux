@@ -188,7 +188,7 @@ listed SGR properties, not every terminal extension (for example sixel,
 hyperlinks, blinking/strikethrough, runtime OSC palette changes or kitty input).
 The PTY proxy changes process ancestry, which is why process icons are tested
 separately. Unequal-size clients are tested after repaint against the documented
-last-resize-wins policy; severely stalled consumers are not exercised here.
+last-resize-wins policy; reader suspension is exercised by the separate interaction workload; server queue saturation is not measured.
 
 Terminal resize/reflow behavior is not specified by ECMA-48. The cell oracle
 compares **after explicit shell/Vim repaint** at the new geometry, rather than
@@ -232,3 +232,34 @@ input workload can be reproduced with:
 The user-reported undisclosed bug remains unresolved. These two valid baseline
 fixes are not claimed to identify or fix that bug; test selection follows the
 supported-feature inventory rather than a presumed trigger.
+
+
+## Interaction workload
+
+`interaction_sessions.py` adds FIFO-gated background output while each real
+shell holds a wrapped command under its embedded-newline prompt. A producer
+acknowledgement records the commanded output index; comparisons use captured
+source bytes, never the acknowledgement as a rendered-screen oracle. Explicit
+Ctrl-L gates compare cells, attributes and cursor before/after resize. Editing
+then submits a command whose exact file bytes are owned by the scenario.
+
+A second real client is SIGSTOP'd while a bounded sequence of changing styled
+screens is emitted. The active client must continue to match the source oracle;
+after SIGCONT both clients must converge. This proves reader suspension and
+continued progress, but does not prove that kernel buffers and the daemon's
+bounded writer queue reached saturation. A faithful saturation test still
+needs a transport-level occupancy/backpressure observable; output count alone
+is insufficient. Arbitrary delayed async prompt plugins also remain uncovered.
+
+Copy mode searches and yanks a script-owned unique Unicode line surrounded by
+long wrapped logical lines. Resizing while in copy mode must retain the exact
+clipboard bytes at three geometries. This is an independent selection/history
+observable, not an emulator-derived prediction of mux's copy viewport. Cell,
+style and cursor comparisons resume after leaving copy mode and repainting;
+full independent styled copy-viewport/reflow emulation remains a gap.
+
+```sh
+./scripts/stress-nix python3 stress/interaction_sessions.py \
+  --binary target/debug/mux --output /tmp/mux-interactions --shell bash
+./scripts/stress-nix python3 stress/replay.py /tmp/mux-interactions
+```
