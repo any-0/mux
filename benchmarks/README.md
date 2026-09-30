@@ -39,8 +39,8 @@ without changing either PR branch; CI supplies its own separate pinned checkout.
 The runner builds mux once with `cargo build --locked --release` inside the Nix shell and
 then runs each variant sequentially. It rejects changes to runtime sources or
 Cargo inputs relative to mux commit
-`af93924bad3553806f3d5bb3d732714dba91f02e`. The source pin is tracked in `benchmarks/mux-revision`, currently PR #2
-revision `af93924bad3553806f3d5bb3d732714dba91f02e`. Benchmark documentation
+`6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`. The source pin is tracked in `benchmarks/mux-revision`, currently PR #2
+revision `6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`. Benchmark documentation
 and harness changes do not change that runtime pin. If the test/fix task produces a new
 runtime commit, explicitly update the pin and rerun all three variants.
 
@@ -211,7 +211,9 @@ UTF-8/red fixture correctly. Tests also cover the save/crash controller, real-sa
 hook versus incomplete archive, corruption/truncation/duplicates, Unicode/wraps,
 metadata and color losses, recycled-PID signal protection, p95, baseline
 unsupported recovery, and failed-trial suppression. The stdlib-only run passes
-35 tests and skips those eight pyte tests.
+35 tests and skips those eight pyte tests. A ninth integration check requires
+the actual Nix-generated shell and verifies that resurrect-style `-c` commands
+execute. The host follow-up runs 44 tests: 43 pass and that Nix-only test skips.
 
 These are logic/PTY validation results, **not benchmark samples** or a claim
 that full mux/tmux performance/recovery trials passed. Real Nix integration
@@ -364,3 +366,25 @@ Cursor-status queries receive actual PTY responses. This terminal model has no
 identity extensions and is shared by all variants; startup includes the
 backend's negotiation behavior. These are decoded-viewport measurements, not
 physical display latency.
+
+[Run 36738815708](https://github.com/any-0/mux/actions/runs/36738815708)
+passed 43 pinned-Nix tests, all three real micro gates, clean mux recovery and
+baseline tmux's expected unavailable recovery. The persistence variant's clean
+fidelity gate correctly rejected empty replayed histories despite a valid
+snapshot and restored metadata. The benchmark shell wrapper had ignored `-c`,
+preventing resurrect's `cat` replay command from executing. The corrected wrapper
+preserves arguments, with a Nix-only command-execution regression. Full rejected
+diagnostics are retained as `36738815708-failed-fidelity-smoke.zip`. Those raw
+timings remain rejected diagnostic values, not an accepted result set.
+
+[Run 36739541991](https://github.com/any-0/mux/actions/runs/36739541991)
+passed all **44 tests and six real integration gates** using Rust/Cargo 1.93.0
+and runtime `af93924bad3553806f3d5bb3d732714dba91f02e`: all three micro variants,
+clean mux, baseline tmux's expected persistence loss, and resurrect/continuum
+clean save/restart/restore with complete history, sampled ANSI formatting,
+layout, cwd, selection and live fresh shells. This is one smoke trial per
+variant, with `performance_comparison: false`, not a median/p95 sample set.
+Default-period crash integration and full repeated measurements remain pending.
+PR #2's final tested handoff advanced to
+`6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`; the explicit runtime pin now selects
+that head and requires its own validation rather than reusing earlier results.
