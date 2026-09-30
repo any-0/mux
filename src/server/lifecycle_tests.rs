@@ -200,9 +200,11 @@ fn real_pty_history_and_styles_survive_restart_and_a_corrupt_sibling() {
     let mut attached = connect(&socket);
     write_message(&mut attached, &hello(root.clone())).unwrap();
     let mut terminal = vt100::Parser::new(24, 80, 0);
+    let first_output = root.join("first-output");
+    fs::write(&first_output, b"\x1bcFIRST-PANE").unwrap();
     write_message(
         &mut attached,
-        &ClientMessage::Paste("stty -echo; printf '\\033cFIRST-PANE'\n".into()),
+        &ClientMessage::Paste(format!("stty -echo; cat '{}'\n", first_output.display())),
     )
     .unwrap();
     wait_for_render(&mut attached, &mut terminal, "FIRST-PANE");
@@ -214,8 +216,20 @@ fn real_pty_history_and_styles_survive_restart_and_a_corrupt_sibling() {
         },
     )
     .unwrap();
-    write_message(&mut attached, &ClientMessage::Paste("stty -echo; i=0; while [ $i -lt 40 ]; do printf 'HISTORY-%02d\\r\\n' $i; i=$((i + 1)); done; printf '\\033[4:3;58;5;45mSTYLED-LAST\\033[24;59m PLAIN-LAST'\n".into())).unwrap();
-    wait_for_render(&mut attached, &mut terminal, "STYLED-LAST");
+    let history_output = root.join("history-output");
+    let mut history = String::new();
+    for line in 0..40 {
+        history.push_str(&format!("HISTORY-{line:02}\r\n"));
+    }
+    history.push_str("\x1b[4:3;58;5;45mSTYLED-LAST\x1b[24;59m PLAIN-LAST");
+    fs::write(&history_output, history).unwrap();
+    // Markers only occur in PTY output, never in the echoed shell command.
+    write_message(
+        &mut attached,
+        &ClientMessage::Paste(format!("stty -echo; cat '{}'\n", history_output.display())),
+    )
+    .unwrap();
+    wait_for_render(&mut attached, &mut terminal, "PLAIN-LAST");
     shutdown(&socket);
     first.wait();
 
@@ -275,9 +289,11 @@ fn real_pty_history_and_styles_survive_restart_and_a_corrupt_sibling() {
         },
     )
     .unwrap();
+    let usable_output = root.join("usable-output");
+    fs::write(&usable_output, b"CORRUPT-PANE-STILL-USABLE").unwrap();
     write_message(
         &mut attached,
-        &ClientMessage::Paste("printf 'CORRUPT-PANE-STILL-USABLE'\n".into()),
+        &ClientMessage::Paste(format!("stty -echo; cat '{}'\n", usable_output.display())),
     )
     .unwrap();
     wait_for_render(&mut attached, &mut restored, "CORRUPT-PANE-STILL-USABLE");
