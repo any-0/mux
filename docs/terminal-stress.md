@@ -350,6 +350,10 @@ Run the fixed cases and deliberate mutations through the project's pin:
 ./scripts/stress-nix python3 stress/check_feature_mutations.py --output /tmp/mux-feature-mutations
 ./scripts/stress-nix python3 -m unittest discover -s stress -p test_witness_signature.py -v
 ./scripts/stress-nix python3 -m unittest discover -s stress -p test_sync_boundary.py -v
+./scripts/stress-nix python3 stress/replay_features.py /tmp/mux-feature-mutations/fixed-focus
+./scripts/stress-nix python3 stress/replay_features.py /tmp/mux-feature-mutations/fixed-split
+./scripts/stress-nix python3 stress/replay_features.py /tmp/mux-feature-mutations/fixed-output
+./scripts/stress-nix python3 stress/replay_features.py /tmp/mux-feature-mutations/fixed-sync
 ```
 
 The sensitivity runner checks fixed focus/split/output/sync cases first, then
@@ -360,6 +364,10 @@ patches, logs, exit codes and revision/pin provenance, restores the fixed build,
 and never commits mutant production code. The minimized intensity witness also
 requires exactly four `BOTH` cells losing only bold; unrelated cursor, glyph,
 faintness, color or additional mismatches cannot satisfy baseline evidence.
+Feature replay reconstructs client frames at recorded byte/resize offsets,
+checks literal action-owned pane grids, compares transient presentation with
+the completed source capture, and recounts exact output bodies from source
+records. It needs neither a running mux nor application timing.
 
 ```sh
 ./scripts/stress-nix python3 -m unittest discover -s stress -p test_transport.py -v
