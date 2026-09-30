@@ -198,16 +198,22 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
             direction=b'\x1b[A' if orientation=='vertical' else b'\x1b[D'
             parent_row=next(y for y,line in enumerate(r.client.screen.display) if 'SCRATCH>' in line)
             parent_x=next(line.index('SCRATCH>') for line in r.client.screen.display if 'SCRATCH>' in line)+len('SCRATCH> ')
+            def focus_gate():
+                active=r.active();assert active['id']==parent['id'];return active
             r.action('focus_'+orientation,b'\x1ba'+direction,
                      lambda:r.client.screen.cursor.y==parent_row and r.client.screen.cursor.x==parent_x,
-                     lambda:r.count_gate(2))
+                     focus_gate)
             r.choose(child)
             old=list(r.client.screen.display)
             resize=b'\x1b[1;5A' if orientation=='vertical' else b'\x1b[1;5D'
             old_dims=[(p['cols'],p['rows']) for p in r.panes()]
             def resized():
                 p=r.panes();assert [(x['cols'],x['rows']) for x in p]!=old_dims;return p
-            r.action('resize_'+orientation,b'\x1ba'+resize,lambda:r.client.screen.display!=old,resized)
+            old_prompt_positions=[(y,line.index(tag)) for tag in ('SCRATCH>','CHILD>') for y,line in enumerate(old) if tag in line]
+            def visibly_resized():
+                positions=[(y,line.index(tag)) for tag in ('SCRATCH>','CHILD>') for y,line in enumerate(r.client.screen.display) if tag in line]
+                return len(positions)==2 and positions!=old_prompt_positions
+            r.action('resize_'+orientation,b'\x1ba'+resize,visibly_resized,resized)
             # mux retains leader after resize. Cancel equally outside timing.
             if variant=='mux':r.keys(b'\x1b')
             r.action('zoom',b'\x1bf',lambda:not r.client.contains('SCRATCH>') and r.client.contains('CHILD>'))
@@ -229,9 +235,9 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         r.window(scratch)
         # Swap into previous slot; visible sidebar/status index is checked post endpoint.
         before=list(r.client.screen.display)
-        r.action('reorder_window_left',b'\x1ba<',lambda:r.client.screen.display!=before,lambda:r.windows())
+        r.action('reorder_window_left',b'\x1ba<',lambda: ([line[:5] for line in r.client.screen.display] if variant=='mux' else r.client.screen.display[-1:]) != ([line[:5] for line in before] if variant=='mux' else before[-1:]),lambda:r.windows())
         before=list(r.client.screen.display)
-        r.action('reorder_window_right',b'\x1ba>',lambda:r.client.screen.display!=before,lambda:r.windows())
+        r.action('reorder_window_right',b'\x1ba>',lambda: ([line[:5] for line in r.client.screen.display] if variant=='mux' else r.client.screen.display[-1:]) != ([line[:5] for line in before] if variant=='mux' else before[-1:]),lambda:r.windows())
         # New session lifecycle and previous-session switching.
         r.action('create_session',b'\x1bT',lambda:r.client.contains('BENCH_READY>'))
         r.shell_marker('SECOND_SESSION',history_rows)
@@ -297,7 +303,7 @@ def main():
     (a.output/'environment.json').write_text(json.dumps(env,indent=2))
     with (a.output/'build.log').open('w') as log:subprocess.run(['cargo','build','--locked','--release'],cwd=SOURCE_ROOT,stdout=log,stderr=subprocess.STDOUT,check=True)
     samples=[];rng=random.Random(20260930)
-    scales=SCALES if not a.smoke else ((1,1),)
+    scales=SCALES
     for w,panes in scales:
         for load in ('idle','busy'):
             for n in range(1 if a.smoke else a.trials+1):
