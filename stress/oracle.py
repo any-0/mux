@@ -173,10 +173,11 @@ class Terminal:
                     pass  # XTerm modifyOtherKeys is not graphic rendition.
                 elif raw == '?1049' and final in 'hl':
                     self.screen.alternate(final == 'h')
-                elif raw == '?2026' and final in 'hl':
+                elif raw.startswith('?') and '2026' in raw[1:].split(';') and final in 'hl':
                     # Logical buffer still advances. Generic comparisons cannot
                     # infer presentation or an emulator-specific expiry timer.
                     self.synchronized_output_pending = final == 'h'
+                    self.stream.feed(seq)  # Other modes can share this CSI.
                 else:
                     self.stream.feed(seq)
                 self.pending = self.pending[len(seq):]

@@ -17,3 +17,8 @@ class SynchronizedBoundary(unittest.TestCase):
         self.assertEqual(terminal.snapshot()['cells'][1][2][0],'N')
         terminal.feed(b'\x1b[?2026h\x1bc')
         self.assertEqual(terminal.snapshot()['cells'][0][0][0],' ')
+        terminal.feed(b'\x1b[?2026;25h')
+        with self.assertRaisesRegex(AssertionError,'in-progress or timed'):
+            terminal.snapshot()
+        terminal.feed(b'\x1b[?2026;25l')
+        self.assertTrue(terminal.snapshot()['hidden'])
