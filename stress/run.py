@@ -261,6 +261,10 @@ class Session:
         deadline = time.monotonic() + 1.5
         while time.monotonic() < deadline:
             self.pump(.02)
+        evidence = self.root / ('pre-crash-journals' if crash else 'pre-graceful-journals')
+        evidence.mkdir()
+        for path in (self.root / 'state/mux').glob('*.ansi'):
+            shutil.copy2(path, evidence / path.name)
         self.capture_excluded.update(p.name for p in (self.root / 'capture').glob('*.jsonl'))
         for client in self.clients:
             client['process'].terminate()
@@ -274,6 +278,10 @@ class Session:
         else:
             self.command('kill-server')
         self.daemon.wait(timeout=10)
+        stopped = self.root / ('stopped-crash-journals' if crash else 'stopped-graceful-journals')
+        stopped.mkdir()
+        for path in (self.root / 'state/mux').glob('*.ansi'):
+            shutil.copy2(path, stopped / path.name)
         socket = self.root / 'runtime/mux.sock'
         self.daemon = subprocess.Popen([self.binary, '__server', str(socket)],
                                        env=self.env, cwd=self.root / 'work', stderr=self.stderr)
