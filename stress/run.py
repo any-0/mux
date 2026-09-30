@@ -61,7 +61,11 @@ class Session:
         self.capture_path = None
         self.checkpoints = 0
         self.proxied = proxied
-        self.wait_text('READY>')
+        try:
+            self.wait_text('READY>')
+        except Exception:
+            self.close()
+            raise
 
     def profile(self):
         # Fixed path/time labels, real embedded LF, styles inside zero-width
@@ -89,7 +93,7 @@ class Session:
                                    env=self.env, cwd=self.root / 'work', stdin=slave, stdout=slave, stderr=slave,
                                    preexec_fn=controlling_terminal)
         os.close(slave)
-        client = {'fd': master, 'process': process, 'terminal': Terminal(self.rows, self.cols),
+        client = {'name': name, 'fd': master, 'process': process, 'terminal': Terminal(self.rows, self.cols),
                   'raw': (self.root / f'{name}.ansi').open('wb'),
                   'events': (self.root / f'{name}.events.jsonl').open('w', buffering=1), 'offset': 0}
         client['events'].write(json.dumps({'event': 'resize', 'offset': 0, 'rows': self.rows, 'cols': self.cols}) + '\n')
@@ -172,7 +176,9 @@ class Session:
     def checkpoint(self, name):
         self.settle()
         expected = self.expected.snapshot()
-        self.action('checkpoint', name=name)
+        self.action('checkpoint', name=name, capture_file=self.capture_path.name,
+                    capture_offset=self.capture_offset, bar=self.bar, rows=self.rows, cols=self.cols,
+                    clients=[{'name': c['name'], 'offset': c['offset']} for c in self.clients])
         errors = []
         for index, client in enumerate(self.clients):
             actual = client['terminal'].snapshot(self.bar, self.cols - self.bar)
