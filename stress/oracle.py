@@ -1,0 +1,231 @@
+"""Independent pyte cell oracle, extended for ECMA-48 SGR and DEC 1049.
+
+No mux modules, formatted-screen snapshots, or implementation expectations.
+Resize clips at the top left; callers compare only after explicit repaint.
+"""
+import codecs
+import copy
+import re
+from collections import namedtuple
+
+import pyte
+from pyte import graphics, modes
+from wcwidth import wcwidth
+
+
+def viewport(snapshot, rows, cols):
+    """Top-left viewport of the shared PTY, with default blank outside it.
+
+    This is a scenario contract for unequal-size clients, not a second terminal
+    resize: only the most recent client resize changes the source PTY.
+    """
+    blank = [' ', 'default', 'default', False, False, False, False, 0, 'default']
+    cells = []
+    for y in range(rows):
+        source = snapshot['cells'][y] if y < len(snapshot['cells']) else []
+        cells.append([list(source[x]) if x < len(source) else list(blank) for x in range(cols)])
+    return dict(snapshot, cells=cells,
+                cursor=[min(snapshot['cursor'][0], rows - 1), min(snapshot['cursor'][1], cols - 1)])
+
+Char = namedtuple('Char', pyte.screens.Char._fields + ('dim', 'underline_style', 'underline_color'),
+                  defaults=pyte.screens.Char.__new__.__defaults__ + (False, 0, 'default'))
+
+
+class Screen(pyte.Screen):
+    def draw(self, data):
+        # libvterm's upstream 61screen_unicode.test requires a double-width
+        # glyph at the final column to wrap intact. pyte 0.8.2 instead paints
+        # half the glyph there. Apply that external contract before its draw.
+        for char in data:
+            if wcwidth(char) == 2 and self.cursor.x == self.columns - 1 and modes.DECAWM in self.mode:
+                self.carriage_return()
+                self.linefeed()
+            super().draw(char)
+
+    @property
+    def default_char(self):
+        return Char(' ', reverse=modes.DECSCNM in self.mode)
+
+    def reset(self):
+        super().reset()
+        self.cursor.attrs = self.default_char
+
+    def report_device_attributes(self, *args, **kwargs):
+        pass  # Client capability negotiation is outside the cell oracle.
+
+    def report_device_status(self, *args, **kwargs):
+        pass  # The pane's actual recorded response is the source of truth.
+
+    def sgr(self, parameters):
+        # Preserve colon subparameters; pyte's parser otherwise discards them.
+        tokens = parameters.split(';') if parameters else ['0']
+        i = 0
+        while i < len(tokens):
+            fields = tokens[i].split(':')
+            n = int(fields[0] or 0)
+            i += 1
+            attrs = self.cursor.attrs
+            changes = {}
+            if n == 0:
+                self.cursor.attrs = self.default_char
+                continue
+            if n == 2:
+                changes['dim'] = True
+            elif n == 22:
+                changes.update(dim=False, bold=False)
+            elif n in (4, 21, 24):
+                style = (int(fields[1] or 0) if len(fields) > 1 else 1) if n == 4 else (2 if n == 21 else 0)
+                changes.update(underscore=bool(style), underline_style=style)
+            elif n == 59:
+                changes['underline_color'] = 'default'
+            elif n in (38, 48, 58):
+                key = {38: 'fg', 48: 'bg', 58: 'underline_color'}[n]
+                if len(fields) > 1:
+                    values = fields[1:]
+                    mode = int(values.pop(0))
+                    if mode == 2 and len(values) == 4:
+                        values.pop(0)  # omitted/zero color-space identifier
+                else:
+                    mode = int(tokens[i])
+                    i += 1
+                    count = 3 if mode == 2 else 1
+                    values = tokens[i:i + count]
+                    i += count
+                if mode == 2:
+                    changes[key] = ''.join(f'{int(v):02x}' for v in values)
+                elif mode == 5:
+                    changes[key] = graphics.FG_BG_256[int(values[0])]
+            else:
+                super().select_graphic_rendition(n)
+                continue
+            self.cursor.attrs = attrs._replace(**changes)
+
+    def alternate(self, enabled):
+        if enabled and not hasattr(self, 'primary'):
+            self.primary = (copy.deepcopy(self.buffer), copy.deepcopy(self.cursor), self.margins)
+            self.buffer.clear()
+            self.cursor_position()
+            self.margins = None
+        elif not enabled and hasattr(self, 'primary'):
+            self.buffer, self.cursor, self.margins = self.primary
+            del self.primary
+
+    def scroll_up(self, count=1):
+        saved = self.cursor.y
+        top, bottom = self.margins or (0, self.lines - 1)
+        self.cursor.y = bottom
+        for _ in range(count or 1):
+            self.index()
+        self.cursor.y = saved
+
+    def scroll_down(self, count=1):
+        saved = self.cursor.y
+        top, bottom = self.margins or (0, self.lines - 1)
+        self.cursor.y = top
+        for _ in range(count or 1):
+            self.reverse_index()
+        self.cursor.y = saved
+
+
+class Stream(pyte.Stream):
+    csi = pyte.Stream.csi | {'S': 'scroll_up', 'T': 'scroll_down'}
+    events = pyte.Stream.events | {'scroll_up', 'scroll_down'}
+
+
+class Terminal:
+    def __init__(self, rows, cols, default_cursor_shape='bar'):
+        self.default_cursor_shape = default_cursor_shape
+        self.cursor_shape = default_cursor_shape
+        self.screen = Screen(cols, rows)
+        self.stream = Stream(self.screen)
+        self.decoder = codecs.getincrementaldecoder('utf8')('strict')
+        self.pending = ''
+        self.synchronized_output_pending = False
+
+    def feed(self, data):
+        self.pending += self.decoder.decode(data)
+        # Separate complete control strings before feeding pyte. Keep partial
+        # strings, including UTF-8, across arbitrary PTY read boundaries.
+        while self.pending:
+            start = self.pending.find('\x1b')
+            if start < 0:
+                self.stream.feed(self.pending)
+                self.pending = ''
+                break
+            if start:
+                self.stream.feed(self.pending[:start])
+                self.pending = self.pending[start:]
+            if len(self.pending) < 2:
+                break
+            if self.pending[1] == '[':
+                match = re.match(r'\x1b\[([0-?]*)([ -/]*)([@-~])', self.pending)
+                if not match:
+                    break
+                raw, intermediate, final = match.groups()
+                seq = match.group(0)
+                if final == 'q' and intermediate == ' ':
+                    value = int(raw or 0)
+                    if value in range(7):
+                        self.cursor_shape = ('block', 'block', 'block', 'underline', 'underline', 'bar', 'bar')[value]
+                elif final == 'm' and not intermediate and not raw.startswith(('?', '>', '<', '=')):
+                    self.screen.sgr(raw)
+                elif final == 'm':
+                    pass  # XTerm modifyOtherKeys is not graphic rendition.
+                elif raw == '?1049' and final in 'hl':
+                    self.screen.alternate(final == 'h')
+                elif raw.startswith('?') and '2026' in raw[1:].split(';') and final in 'hl':
+                    # Logical buffer still advances. Generic comparisons cannot
+                    # infer presentation or an emulator-specific expiry timer.
+                    self.synchronized_output_pending = final == 'h'
+                    self.stream.feed(seq)  # Other modes can share this CSI.
+                else:
+                    self.stream.feed(seq)
+                self.pending = self.pending[len(seq):]
+            elif self.pending[1] in ']P^_':
+                match = re.search(r'\x07|\x1b\\', self.pending[2:])
+                if not match:
+                    break
+                end = 2 + match.end()
+                if self.pending[1] == ']':
+                    self.stream.feed(self.pending[:end])
+                self.pending = self.pending[end:]
+            else:
+                end = 3 if self.pending[1] in '()*+#%' else 2
+                if len(self.pending) < end:
+                    break
+                if self.pending[:end] == '\x1bc':
+                    self.cursor_shape = self.default_cursor_shape
+                    self.synchronized_output_pending = False
+                self.stream.feed(self.pending[:end])
+                self.pending = self.pending[end:]
+
+    def resize(self, rows, cols):
+        self.screen.resize(lines=rows, columns=cols)
+
+    def snapshot(self, left=0, width=None, allow_uncommitted=False):
+        if self.synchronized_output_pending and not allow_uncommitted:
+            raise AssertionError('generic oracle unsupported: in-progress or timed synchronized output; use explicit presentation fixture')
+        screen = self.screen
+        width = screen.columns - left if width is None else width
+        fields = ('data', 'fg', 'bg', 'bold', 'dim', 'italics', 'reverse', 'underline_style', 'underline_color')
+        cells = []
+        for y in range(screen.lines):
+            row = []
+            for x in range(left, left + width):
+                cell = screen.buffer[y][x]
+                values = [getattr(cell, f) for f in fields]
+                # pyte normalizes combining marks to NFC; compare consistently.
+                import unicodedata
+                values[0] = unicodedata.normalize('NFC', values[0])
+                # SGR 36 and SGR 38;5;6 name the same indexed color. pyte
+                # represents the first as 'cyan' and the latter as RGB hex.
+                palette = {name: graphics.FG_BG_256[code - 30]
+                           for code, name in graphics.FG_ANSI.items() if 30 <= code <= 37}
+                palette.update({name: graphics.FG_BG_256[code - 90 + 8]
+                                for code, name in graphics.FG_AIXTERM.items() if 90 <= code <= 97})
+                for color_index in (1, 2, 8):
+                    values[color_index] = palette.get(values[color_index], values[color_index])
+                row.append(values)
+            cells.append(row)
+        return {'cells': cells, 'cursor': [screen.cursor.y, min(screen.cursor.x, screen.columns - 1) - left],
+                'hidden': screen.cursor.hidden, 'cursor_shape': self.cursor_shape}
