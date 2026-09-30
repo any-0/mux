@@ -49,6 +49,9 @@ impl Session {
             directory,
             output_number: 0,
         };
+        // Keep readline redraws out of byte-stream fixtures; daemon lifecycle
+        // tests also use /bin/sh, while input still travels over a real PTY.
+        session.pane().writer.send(b"exec /bin/sh\r").unwrap();
         session.output(b"\x1bcREADY", "READY");
         session
     }
@@ -219,13 +222,21 @@ fn pty_undercurl_clear_alt_screen_zoom_and_window_switch_restore_sidebar() {
     session.command(MuxCommand::ZoomPane);
     session.bar(&[(5, " • ")]);
     session.output(b"\x1b[?1049l\x1b[10;1HRETURNED", "RETURNED");
-    assert!(session.capture().contents().contains("WAVEPLAIN"));
+    let pane_contents = session.pane().parser.screen().contents();
+    assert!(
+        session.capture().contents().contains("WAVEPLAIN"),
+        "main screen missing after interaction: {pane_contents:?}"
+    );
     session.command(MuxCommand::NewWindow);
     session.output(b"\x1bcSECOND", "SECOND");
     session.bar(&[(4, " 1 "), (7, " • ")]);
     session.command(MuxCommand::SelectWindow(1));
     session.bar(&[(4, " • "), (7, " 2 ")]);
-    assert!(session.capture().contents().contains("WAVEPLAIN"));
+    let pane_contents = session.pane().parser.screen().contents();
+    assert!(
+        session.capture().contents().contains("WAVEPLAIN"),
+        "main screen missing after interaction: {pane_contents:?}"
+    );
 }
 
 #[test]
@@ -333,7 +344,8 @@ fn resizing_through_a_wide_cell_then_erasing_does_not_panic() {
     // erase tried to clear its now-missing continuation and indexed past it.
     parser.process(b"\x1b[H\x1b[XOK");
     assert!(!parser.screen().cell(0, 0).unwrap().is_wide());
-    assert_eq!(parser.screen().contents(), "O\nK");
+    assert_eq!(parser.screen().cell(0, 0).unwrap().contents(), "O");
+    assert_eq!(parser.screen().cell(1, 0).unwrap().contents(), "K");
     parser.screen_mut().set_size(3, 8);
     parser.process(b"\x1b[H\x1b[2KALIVE");
     assert!(parser.screen().contents().starts_with("ALIVE"));
@@ -408,4 +420,38 @@ fn background_pty_bell_cannot_overwrite_the_mode_tile_after_narrow_resize() {
     // The tile remains the normal-mode dot. The pending-bell badge belongs
     // on a separate bottom row, and must not overwrite it when none exists.
     assert_eq!(session.capture().cell(0, 1).unwrap().contents(), "●");
+}
+
+#[test]
+fn tree_keeps_the_selected_session_when_an_earlier_background_shell_exits() {
+    let mut session = Session::new();
+    session.command(MuxCommand::NewSession(Some("other".into())));
+    session.output(b"\x1bcOTHER", "OTHER");
+    session.command(MuxCommand::NewSession(Some("third".into())));
+    session.output(b"\x1bcTHIRD", "THIRD");
+    session.command(MuxCommand::ChooseTree);
+    session
+        .server
+        .handle_key(1, crate::protocol::parse_for_test("Up"))
+        .unwrap();
+    assert!(session.capture().contents().contains("OTHER"));
+
+    session.server.sessions[0].windows[0].panes[0]
+        .writer
+        .send(b"exit\r")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while session.server.sessions.len() != 2 {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(!remaining.is_zero(), "background shell did not exit");
+        let event = session.events.recv_timeout(remaining).unwrap();
+        session.server.handle_event(event).unwrap();
+    }
+    let selected_background = crate::frame::rgb(session.server.clients[&1].theme.panel_selected);
+    let screen = session.capture();
+    assert!(
+        screen.contents().contains("OTHER"),
+        "preview changed after unrelated exit"
+    );
+    assert_eq!(screen.cell(1, 0).unwrap().bgcolor(), selected_background);
 }
