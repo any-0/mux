@@ -377,7 +377,8 @@ fn malformed_persisted_history_is_rejected_before_render_or_reflow() {
         (17, 255),
         (18, 2),
         (22, 3),
-        (34, 3),
+        // Bold+faint (3) is legal; underline styles 6/7 are not.
+        (34, 6 << 5),
         (34, 224),
     ] {
         let mut invalid = row.clone();
