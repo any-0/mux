@@ -422,3 +422,8 @@ Its runtime and Cargo inputs are identical to the tested PR #2 candidate
 labeled with the exact candidate revisions they actually validated. The final
 branch runs its own pinned-Nix project checks and benchmark correctness smoke.
 No new performance trials or performance statistics are implied by this update.
+
+Graceful stop dispatches shutdown, closes the attached client and then verifies
+the isolated server exits. `stop_ms` includes client teardown for every variant.
+The server-exit correctness gate still rejects a surviving daemon. Failed merged-main
+validation 36742370783 is preserved as a shutdown diagnostic, not performance data.
