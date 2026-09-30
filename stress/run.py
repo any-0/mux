@@ -436,9 +436,9 @@ def run_profile(binary, directory, shell, cycles, seed):
             session.sidebar(12, active)
         return {'shell': shell, 'cycles': cycles, 'checkpoints': session.checkpoints,
                 'actions': session.action_index, 'elapsed_seconds': round(time.monotonic() - started, 3),
-                'budget_seconds': 1800, 'large_output_requested_logical_rows': sum(c['requested_logical_rows'] for c in getattr(session,'output_coverage',[]) if c['kind']=='large'),
-                'large_output_observed_source_logical_rows': sum(c['observed_source_logical_rows'] for c in getattr(session,'output_coverage',[]) if c['kind']=='large'),
-                'head_output_observed_source_logical_rows': sum(c['observed_source_logical_rows'] for c in getattr(session,'output_coverage',[]) if c['kind']=='head'),
+                'budget_seconds': 1800, 'large_output_requested_logical_rows': sum(c['requested_logical_rows'] for c in getattr(session,'output_coverage',[]) if c['workload_kind']=='large'),
+                'large_output_observed_source_logical_rows': sum(c['observed_source_logical_rows'] for c in getattr(session,'output_coverage',[]) if c['workload_kind']=='large'),
+                'head_output_observed_source_logical_rows': sum(c['observed_source_logical_rows'] for c in getattr(session,'output_coverage',[]) if c['workload_kind']=='head'),
                 'passed': True}
     finally:
         session.close()

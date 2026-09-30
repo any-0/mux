@@ -34,7 +34,7 @@ def output_command(session, command, expected, kind, generation):
     count = normalized.count(expected)
     observed_rows = len(re.findall(rb'ROW\d{5} ',normalized)) if kind != 'sample' else (expected.count(b'\n') if count == 1 else 0)
     requested_rows = expected.count(b'\n')
-    coverage = dict(kind=kind,generation=generation,command=command,
+    coverage = dict(workload_kind=kind,generation=generation,command=command,
                     requested_logical_rows=requested_rows,observed_source_logical_rows=observed_rows,
                     expected_bytes=len(expected),expected_sha256=hashlib.sha256(expected).hexdigest(),
                     expected_body_occurrences=count,completion_hex=completion.hex(),
