@@ -1,0 +1,103 @@
+{
+  "clean/0.00/tmux": {
+    "trials": 30,
+    "failed_trials": 0,
+    "recovery_supported": false,
+    "fidelity_failures": [],
+    "observed_loss_rows": {
+      "n": 30,
+      "median": 600.0,
+      "p95": 600
+    },
+    "observed_loss_tagged_utf8_bytes": {
+      "n": 30,
+      "median": 37200.0,
+      "p95": 37200
+    },
+    "loss_samples_missing": 0,
+    "restore": "unsupported; no successful-restore time reported"
+  },
+  "clean/0.00/mux": {
+    "trials": 30,
+    "failed_trials": 0,
+    "recovery_supported": true,
+    "fidelity_failures": [],
+    "observed_loss_rows": {
+      "n": 30,
+      "median": 0.0,
+      "p95": 0
+    },
+    "observed_loss_tagged_utf8_bytes": {
+      "n": 30,
+      "median": 0.0,
+      "p95": 0
+    },
+    "loss_samples_missing": 0,
+    "timings": {
+      "save_shutdown_ms": {
+        "n": 30,
+        "median": 4.1089055000000005,
+        "p95": 23.220202
+      },
+      "stop_ms": {
+        "n": 30,
+        "median": 4.1089055000000005,
+        "p95": 23.220202
+      },
+      "restart_attach_live_ms": {
+        "n": 30,
+        "median": 253.8434435,
+        "p95": 258.021188
+      },
+      "verification_ms": {
+        "n": 30,
+        "median": 4040.712982,
+        "p95": 4050.67706
+      }
+    }
+  },
+  "clean/0.00/tmux-persistence": {
+    "trials": 30,
+    "failed_trials": 0,
+    "recovery_supported": true,
+    "fidelity_failures": [],
+    "observed_loss_rows": {
+      "n": 30,
+      "median": 0.0,
+      "p95": 0
+    },
+    "observed_loss_tagged_utf8_bytes": {
+      "n": 30,
+      "median": 0.0,
+      "p95": 0
+    },
+    "loss_samples_missing": 0,
+    "timings": {
+      "save_ms": {
+        "n": 30,
+        "median": 262.15821400000004,
+        "p95": 263.49081
+      },
+      "stop_ms": {
+        "n": 30,
+        "median": 7.0953185,
+        "p95": 7.312711
+      },
+      "restart_attach_live_ms": {
+        "n": 30,
+        "median": 826.8095940000001,
+        "p95": 834.535475
+      },
+      "restore_script_ms": {
+        "n": 30,
+        "median": 368.7344075,
+        "p95": 370.126431
+      },
+      "verification_ms": {
+        "n": 30,
+        "median": 3403.9817045,
+        "p95": 3407.87037
+      }
+    }
+  }
+}

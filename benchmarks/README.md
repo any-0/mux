@@ -1,9 +1,138 @@
-# Benchmark draft: execution blocked, no performance results
+# Hosted-CI paired benchmark results
 
-This is an **unvalidated benchmark harness**, not a completed comparison.
-Microbenchmark and recovery code are implemented; no mux/tmux benchmark has
-executed. Do not cite performance numbers until the correctness gates pass in
-the pinned Nix environment.
+[Run 36744338567](https://github.com/any-0/mux/actions/runs/36744338567)
+measured all three variants sequentially on one hosted Ubuntu VM using the
+project's pinned Nix development toolchain and mux main commit `d6dd228`.
+All 30 paired trials per variant passed correctness gates and an independent
+raw-data audit. Values below are **median / p95**.
+
+| Variant | Scroll viewport latency (ms) | PSS (MiB) | RSS (MiB) |
+| --- | ---: | ---: | ---: |
+| mux | 2.388 / 2.652 | 8.867 / 8.900 | 14.693 / 14.727 |
+| tmux | 2.300 / 2.834 | 13.235 / 13.239 | 19.617 / 19.621 |
+| tmux + resurrect + continuum | 2.433 / 3.507 | 13.259 / 13.298 | 19.641 / 19.680 |
+
+Each trial used the same Bash shell, 100×40 pane, 20,000-row history capacity
+and 10,000 numbered output rows. Scroll timings cover 600 actual attached-PTY
+PageUp events per variant, ending at the correct decoded viewport; they include
+harness scheduling/emulation, not physical display latency. RAM sums daemon,
+client and live descendants after output. One warm-up per variant is excluded.
+Hosted VM caches and shared physical compute limit generalization to other machines.
+
+Thirty clean recovery trials per variant also passed: mux and the plugin stack
+preserved all 600 tagged rows, sampled formatting, layout, cwd and selection,
+and confirmed fresh live shells. Median / p95 restart-to-live times were
+**253.843 / 258.021 ms** for mux and **826.810 / 834.535 ms** for the stack.
+Baseline tmux lost all 600 rows as expected. These are clean-save results;
+**default-period crash recovery remains unmeasured**.
+
+[Raw hosted dataset](results/hosted-ci/36744338567/raw.zip) include
+startup, output, CPU, storage and save timings with their limits. Reproduce with:
+
+```sh
+./scripts/benchmark-nix python3 benchmarks/run.py \
+  --output /tmp/mux-benchmark-run-1 --trials 30 --rows 10000 \
+  --scroll-samples 20 --idle-seconds 3
+./scripts/benchmark-nix python3 benchmarks/recovery.py \
+  --output /tmp/mux-recovery-clean-1 --trials 30 --mode clean
+```
+
+The selected cloud machine's dependency downloads remain policy-blocked;
+these results are explicitly hosted CI, not measurements of Julian's hardware.
+
+## Detailed accepted results (2026-09-30)
+
+The runner reported AMD EPYC 7763, four logical CPUs, 16,373,452 KiB total RAM,
+kernel `6.17.0-1022-azure`, image `ubuntu24 / 20260927.320.1` and ext4 storage.
+This records a VM allocation, not exclusive physical hardware. Runtime was
+`d6dd228054231e77772bd17a412d8f0d07871835`; executed harness checkout was GitHub's
+PR merge `4a7223d4c16628d17d00f7294edb7570bb32103b`, corresponding to branch
+`1c1f9417d742d4b0e67e8fe4ffde8941c28f779c`. The three variants ran serially in
+seeded shuffled order on this one runner, after compilation and correctness checks.
+
+All entries below are median / nearest-rank p95, with 30 samples unless noted.
+Higher throughput percentiles represent higher rates, not worst-case latency.
+
+| Metric | mux | tmux | tmux + persistence |
+| --- | ---: | ---: | ---: |
+| Startup to decoded prompt (ms) | 37.724 / 39.929 | 17.895 / 19.312 | 188.943 / 203.487 |
+| Output to decoded end marker (ms) | 113.108 / 118.186 | 142.301 / 159.338 | 145.211 / 162.216 |
+| Output throughput (MiB/s) | 6.914 / 7.251 | 5.496 / 5.665 | 5.385 / 5.595 |
+| Output CPU lower bound (s) | 0.100 / 0.100 | 0.050 / 0.070 | 0.060 / 0.070 |
+| Idle CPU (% of one CPU, 3 s window) | 0.992 / 1.323 | 0.000 / 0.331 | 0.330 / 0.661 |
+| State logical bytes | 839243.500 / 843921.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+| State allocated bytes | 851968.000 / 856064.000 | 0.000 / 0.000 | 0.000 / 0.000 |
+
+Output is 820,019 bytes of low-entropy ASCII including the end marker. These
+are fresh-process trials with warm filesystem caches, not cold boot or maximum
+sustained output tests. CPU tick accounting misses exited helpers; it is a lower
+bound. Storage was sampled before copy mode: mux had a continuous journal,
+whereas continuum's 15-minute scheduler had not saved any files. The zero plugin
+storage observation is **not** equal durable-snapshot storage or a storage advantage.
+PSS is post-output resident proportional memory, not peak memory or disk cache.
+
+Pooled scroll events are correlated within each process. Independently computed
+per-trial median latency and within-block differences are:
+
+| Variant | Trial-median latency, median / p95 (ms) | Paired difference from tmux, median / p95 (ms) | Paired PSS difference, median / p95 (KiB) |
+| --- | ---: | ---: | ---: |
+| mux | 2.382 / 2.578 | 0.085 / 0.314 | -4473.000 / -4435.000 |
+| tmux | 2.297 / 2.806 | 0.000 / 0.000 | 0.000 / 0.000 |
+| tmux-persistence | 2.420 / 2.809 | 0.088 / 0.558 | 26.000 / 68.000 |
+
+These paired differences describe this run; no confidence interval or universal
+speed ranking is claimed. mux's median scroll latency was slightly higher than
+tmux's here, while its measured post-output PSS was lower.
+
+### Clean recovery measurements
+
+Each variant has 30 accepted trials plus one retained excluded warm-up. Both
+persistence variants lost zero of the 600 tagged rows / 37,200 tagged UTF-8 bytes,
+and passed full history, wrap, metadata, sampled ANSI-style and fresh-shell gates.
+Baseline tmux lost all 600 rows / 37,200 bytes in every trial; restore is unsupported.
+
+| Operation (ms, median / p95) | mux | tmux + persistence |
+| --- | ---: | ---: |
+| Save + shutdown (mux); explicit save only (stack) | 4.109 / 23.220 | 262.158 / 263.491 |
+| Stop, including attached client teardown | 4.109 / 23.220 | 7.095 / 7.313 |
+| Restart + attach + live shell nonce | 253.843 / 258.021 | 826.810 / 834.535 |
+| Explicit restore script | included in restart | 368.734 / 370.126 |
+| Subsequent fidelity verification | 4040.713 / 4050.677 | 3403.982 / 3407.870 |
+
+The save columns describe different operations: mux flushes its journal during
+shutdown; the stack explicitly saves before a separate stop. Restart-to-live
+includes startup, restoration and fresh-shell confirmation; verification happens
+afterward and includes harness waits. Clean recovery is not process-crash or
+power-loss recovery. The real default-period crash suite has not executed.
+
+### Retained evidence and independent audit
+
+[Manifest](results/hosted-ci/36744338567/manifest.json),
+[micro summary](results/hosted-ci/36744338567/micro-summary.json),
+[clean summary](results/hosted-ci/36744338567/clean-summary.json), and
+[audit](results/hosted-ci/36744338567/audit.json) accompany the
+[complete raw ZIP](results/hosted-ci/36744338567/raw.zip), retained in git beyond
+GitHub artifact expiration. ZIP SHA-256:
+`4f31c3751d35df6a8b1a87657b244c484370ca210aadaaf9c7c7e636e4193683`.
+It contains 93 micro and 93 clean samples, including three warm-ups per suite,
+all command/input logs, attached client ANSI streams, full captured histories,
+recovery archives, environments, lockfiles and build logs. Socket filesystem
+entries are not portable ZIP content and were skipped by the artifact uploader;
+all sample evidence required by the audit is present. CI cleanup reported no
+orphan-process termination entries.
+
+```sh
+unzip benchmarks/results/hosted-ci/36744338567/raw.zip -d /tmp/hosted-mux-data
+./scripts/benchmark-nix python3 benchmarks/audit_hosted.py /tmp/hosted-mux-data
+```
+
+The audit independently rechecks all 10,000 numbered records in each retained
+history, viewport transitions, PageUp input timestamps and elapsed time math,
+process-memory sums, shuffled serial trial order, warm-up exclusion and every
+published aggregate. It also rejects clean fidelity failures. Offline auditing
+needs only Python's standard library; no host-built backend produced these data.
+The run's preflight passed 44 Nix tests and six actual PTY integration gates;
+the separate project Tests and benchmark correctness workflows also passed.
 
 ## Reproducible environment
 
@@ -23,15 +152,16 @@ Evaluation of that revision on x86_64-linux produced:
 | tmux-continuum | unstable-2022-01-25, `fc2f31d79537a5b349f55b74c8ca69abaac1ddbb` |
 
 The plugin revisions and source hashes are part of the locked nixpkgs package
-expressions. These are Nix-evaluated versions, **not versions successfully run**
-on this machine. Python's pyte emulator and all other benchmark dependencies are
+expressions. These versions actually executed on the hosted runner; the selected cloud
+machine still cannot realize the dependency closure. Python's pyte emulator and all other benchmark dependencies are
 also provided by that revision.
 
 Run directly on a quiet Linux machine with working Nix:
 
 ```sh
 ./scripts/benchmark-nix python3 benchmarks/run.py \
-  --output /tmp/mux-benchmark-run-1 --trials 30
+  --output /tmp/mux-benchmark-run-1 --trials 30 --rows 10000 \
+  --scroll-samples 20 --idle-seconds 3
 ```
 
 Output must be a new directory. Do not run tests/builds concurrently. The wrapper creates a detached temporary checkout of the exact runtime pin
@@ -39,8 +169,8 @@ without changing either PR branch; CI supplies its own separate pinned checkout.
 The runner builds mux once with `cargo build --locked --release` inside the Nix shell and
 then runs each variant sequentially. It rejects changes to runtime sources or
 Cargo inputs relative to mux commit
-`d19f0dc8ab4d7f4a5d2accb3bbbdac7acd2b33cb`. The source pin is tracked in `benchmarks/mux-revision`
-and selects the upstream main merge of PR #2. Benchmark documentation
+`d6dd228054231e77772bd17a412d8f0d07871835`. The source pin is tracked in `benchmarks/mux-revision`
+and selects upstream main after both original PRs merged. Benchmark documentation
 and harness changes do not change that runtime pin. If the test/fix task produces a new
 runtime commit, explicitly update the pin and rerun all three variants.
 
@@ -81,9 +211,9 @@ runtime commit, explicitly update the pin and rerun all three variants.
   need not trigger a periodic save. This storage result therefore does **not**
   compare equivalent durable snapshots.
 - One retained warm-up plus 30 trials per variant, with deterministic shuffled
-  variant order (seed 20260930), 50 scroll samples per trial. Nearest-rank p95
-  and median are emitted. Scroll aggregates pool 1,500 samples; they are not
-  1,500 independent process launches. All measured trials must pass gates;
+  variant order (seed 20260930), 20 scroll samples per trial in this measured run (CLI default: 50). Nearest-rank p95
+  and median are emitted. Scroll aggregates pool 600 samples; they are not
+  600 independent process launches. All measured trials must pass gates;
   failures remain in raw samples and suppress that variant's aggregates.
 
 Each trial retains `sample.json`, `commands.json`, and binary `client.ansi`.
@@ -298,8 +428,8 @@ ptrace/user namespaces is not required for the supported native-store path with
 sandboxing disabled. This cannot be achieved by a repository-only Nix setting;
 there is no authorization to bypass the proxy denial. No move to Neo was made.
 
-**Performance samples remain 0.** No benchmark median/p95 or advantage has been
-measured, and the actual-results README requirement remains open.
+At this historical local-cloud checkpoint, performance samples were zero.
+The later hosted paired run above supplies measured results in a separate context.
 
 ## Hosted CI feasibility assessment (separate context)
 
@@ -325,7 +455,7 @@ A hosted VM does not establish stable hardware, exclusive physical compute,
 local disk durability, physical terminal latency or reproducibility on Julian's
 machine. Runner image labels and physical hosts can vary; pin software with
 Nix and record the actual image/hardware rather than implying the runner label
-pins hardware. Hosted-CI pilot data, if later requested/run, belongs in a separate
+pins hardware. Hosted-CI data belongs in a separate
 README table and artifact directory and cannot fulfill the selected-cloud or
 user-hardware measurements by relabeling it.
 
@@ -337,7 +467,7 @@ runners; analyze per-runner triplets and runner variation rather than pooling
 those samples as one identical-machine experiment. No shortened continuum
 period, synthetic save timestamp or checkpoint handoff makes it equivalent to
 the specified real default-period crash suite. The dedicated cloud/local-machine
-run remains pending. No hosted-CI performance numbers have been accepted.
+run remains pending. The micro and clean hosted run above is accepted; default-period crash measurements remain pending.
 
 
 ## CI correctness evidence
@@ -386,7 +516,7 @@ layout, cwd, selection and live fresh shells. This is one smoke trial per
 variant, with `performance_comparison: false`, not a median/p95 sample set.
 Default-period crash integration and full repeated measurements remain pending.
 PR #2's final tested handoff advanced to
-`6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`; the explicit runtime pin now selects
+`6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`; the historical runtime pin selected
 that head. Its separate validation is recorded below.
 
 
@@ -399,8 +529,8 @@ passed **44 Nix tests and all six serial real integration gates** at harness
 checksums in `checksums.json`. The plugins were actually loaded; the clean
 snapshot archive, restored complete tagged histories, sampled ANSI styling,
 metadata and fresh shells passed. Six correctness smoke trials contain actual
-diagnostic timings, but there are **0 accepted performance trials**, no
-median/p95 comparison, and no default-period crash integration result.
+diagnostic timings, but that smoke dataset contains no accepted performance trials or
+median/p95 comparison. The separate repeated dataset above supplies performance results.
 
 Cloud access was rechecked at **2026-09-30 15:55 UTC**. Both the standard Nix
 cache and GNU Bash source URLs still return proxy `CONNECT ... 403`; see
@@ -415,8 +545,8 @@ It cannot stand in for Julian's selected cloud hardware. No network-policy
 bypass, environment move or merge was performed.
 
 
-The benchmark branch incorporates upstream main merge
-`d19f0dc8ab4d7f4a5d2accb3bbbdac7acd2b33cb` and now pins that merged revision.
+Historical merge update: the benchmark branch incorporated upstream main merge
+`d19f0dc8ab4d7f4a5d2accb3bbbdac7acd2b33cb` and then pinned that merged revision.
 Its runtime and Cargo inputs are identical to the tested PR #2 candidate
 `6da51cf7a776a81b8be6d8dbf16ea498e7f8385c`; previous ZIP artifacts remain
 labeled with the exact candidate revisions they actually validated. The final
