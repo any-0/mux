@@ -42,7 +42,8 @@ def action(self, *args, **kwargs):
         cmd = (['sudo', perf, 'record', '-F', '199', '-g', '--call-graph', 'dwarf',
                 '-o', str(a.output / 'perf.data'),
                 '-p', f'{self.server},{self.client.process.pid}'] if a.mode == 'perf' else
-               ['sudo', 'strace', '-f', '-ttt', '-T', '-o', str(a.output / 'strace.log'),
+               ['sudo', 'strace', '-ttt', '-T', '-e',
+                'trace=sendto,recvfrom,sendmsg,recvmsg,futex,epoll_wait,poll,ppoll,read,write,writev', '-o', str(a.output / 'strace.log'),
                 '-p', str(self.server), '-p', str(self.client.process.pid)])
         log = (a.output / (a.mode + '.log')).open('w')
         profilers.append((subprocess.Popen(cmd, stdout=log, stderr=log), log))
