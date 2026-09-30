@@ -89,7 +89,17 @@ def run(binary, directory):
             session.settle()
             # A FIFO write releases precisely one worker generation. No timer
             # substitutes for job completion or prompt callback completion.
-            descriptor = os.open(session.fifo, os.O_WRONLY | os.O_NONBLOCK)
+            deadline = time.monotonic()+10
+            while True:
+                try:
+                    descriptor = os.open(session.fifo, os.O_WRONLY | os.O_NONBLOCK)
+                    break
+                except OSError as error:
+                    import errno
+                    if error.errno != errno.ENXIO:
+                        raise
+                    session.pump(.005)
+                    assert time.monotonic() < deadline, 'async worker never opened release FIFO'
             try:
                 os.write(descriptor, f'{generation}\n'.encode())
             finally:

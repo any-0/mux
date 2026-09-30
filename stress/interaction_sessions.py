@@ -77,7 +77,7 @@ with open(control) as commands:
             stalled['paused'] = True
             session.action('client-stop', name=stalled['name'])
             started = time.monotonic()
-            baseline = client_transport(stalled['process'].pid)
+            baseline = client_transport(stalled['process'].pid, session.daemon.pid)
             session.action('transport-before', **baseline)
             n = 3
             def pulse():
@@ -91,13 +91,13 @@ with open(control) as commands:
                 n += 1
             while True:
                 pulse()
-                measured = client_transport(stalled['process'].pid)
+                measured = client_transport(stalled['process'].pid, session.daemon.pid)
                 session.action('transport-measurement', generation=n-1, **measured)
                 if measured['saturated']:
                     break
                 assert time.monotonic()-started < 3, 'transport never saturated within suspension budget'
             session.checkpoint('active-at-saturation')
-            full = client_transport(stalled['process'].pid)
+            full = client_transport(stalled['process'].pid, session.daemon.pid)
             assert full['saturated'] and full['receiver']['receive_bytes'] > 0
             # Hold the same full receive queue while distinct new frames and
             # an action-owned input effect continue through the active client.
@@ -106,7 +106,7 @@ with open(control) as commands:
             session.input(b"\x0cprintf '%s\\n' 'live-under-pressure' > pressure-proof.txt\r")
             file_equals(session, directory / 'work/pressure-proof.txt', b'live-under-pressure\n')
             session.checkpoint('active-during-stall')
-            after = client_transport(stalled['process'].pid)
+            after = client_transport(stalled['process'].pid, session.daemon.pid)
             assert after['saturated'], 'sender left saturation while reader remained stopped'
             assert after['receiver']['receive_bytes'] == full['receiver']['receive_bytes'], 'stopped receive queue did not plateau'
             session.action('transport-plateau', before=full, after=after,
