@@ -3,7 +3,7 @@
 import argparse
 import json
 from pathlib import Path
-from oracle import Terminal
+from oracle import Terminal, viewport
 
 
 class PaneReplay:
@@ -54,7 +54,7 @@ class ClientReplay:
             self.event_index += 1
         self.terminal.feed(self.data[self.position:offset])
         self.position = offset
-        return self.terminal.snapshot(checkpoint['bar'], checkpoint['cols'] - checkpoint['bar'])
+        return self.terminal.snapshot(checkpoint['bar'], self.terminal.screen.columns - checkpoint['bar'])
 
 
 def replay(root):
@@ -72,7 +72,9 @@ def replay(root):
             if name not in clients:
                 clients[name] = ClientReplay(root, name)
             actual = clients[name].advance(event, client['offset'])
-            results.append({'checkpoint': event['name'], 'client': name, 'passed': actual == expected})
+            projected = viewport(expected, client.get('rows', event['rows']),
+                                 client.get('cols', event['cols']) - event['bar'])
+            results.append({'checkpoint': event['name'], 'client': name, 'passed': actual == projected})
     return results
 
 

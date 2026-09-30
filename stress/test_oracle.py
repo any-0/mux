@@ -1,9 +1,31 @@
 """Protocol vectors make the oracle extensions accountable independently."""
 import unittest
+import json
+from pathlib import Path
 from oracle import Terminal
 
 
 class OracleVectors(unittest.TestCase):
+    def test_external_protocol_fixtures_with_every_chunk_boundary(self):
+        fixtures = json.loads((Path(__file__).parent / 'fixtures/protocol.json').read_text())
+        fields = ['text', 'fg', 'bg', 'bold', 'dim', 'italic', 'inverse', 'underline_style', 'underline_color']
+        for fixture in fixtures['fixtures']:
+            data = fixture['sequence'].encode()
+            for split in range(len(data) + 1):
+                with self.subTest(fixture=fixture['name'], split=split):
+                    terminal = Terminal(3, 20)
+                    terminal.feed(data[:split])
+                    terminal.feed(data[split:])
+                    snapshot = terminal.snapshot()
+                    for cell in fixture['cells']:
+                        actual = snapshot['cells'][cell['row']][cell['col']]
+                        for field, expected in cell.items():
+                            if field in fields:
+                                self.assertEqual(actual[fields.index(field)], expected)
+                    for key in ('cursor', 'cursor_shape', 'hidden'):
+                        if key in fixture:
+                            self.assertEqual(snapshot[key], fixture[key])
+
     def test_sgr_transitions_and_chunk_boundaries(self):
         terminal = Terminal(3, 20)
         data = b'\x1b[1;2;3;4:3;58:2::13:97:211;38;2;40;180;90mX\x1b[22;23;24;59;39mY'
