@@ -428,18 +428,18 @@ def exercise(variant, trial, windows, pane_count, load, output, history_rows):
         # Same target character, distinct prepared native find-key states.
         r.keys(b'0');r.keys(b'f')
         r.action('copy_find_character_commit',b'x',lambda:r.client.screen.cursor.x==x+15 and r.client.screen.cursor.y==y)
-        r.keys(b'0')
+        # Select payload cells outside the search highlight. Native selection
+        # starts are combined with one-cell extension for a visible two-cell
+        # result in both tools, rather than timing an invisible state change.
         selected_x=r.client.screen.cursor.x;selected_y=r.client.screen.cursor.y
-        original=tuple(r.client.screen.buffer[selected_y][selected_x])
-        following=tuple(r.client.screen.buffer[selected_y][selected_x+1])
-        probe=lambda:tuple(r.client.screen.buffer[selected_y][selected_x])
-        r.action('begin_character_selection',b'v' if variant=='mux' else b' ',
-            lambda:probe()!=original,style_probe=probe)
-        next_probe=lambda:tuple(r.client.screen.buffer[selected_y][selected_x+1])
+        original=[tuple(r.client.screen.buffer[selected_y][selected_x+i]) for i in range(3)]
+        probe=lambda:[tuple(r.client.screen.buffer[selected_y][selected_x+i]) for i in range(3)]
+        r.action('select_two_characters',b'vl' if variant=='mux' else b' l',
+            lambda:r.client.screen.cursor.x==selected_x+1 and all(probe()[i]!=original[i] for i in (0,1)),style_probe=probe)
         r.action('extend_character_selection',b'l',
-            lambda:r.client.screen.cursor.x==selected_x+1 and next_probe()!=following,style_probe=next_probe)
-        r.action('cancel_character_selection',b'\x1b' if variant=='mux' else b'\x07',
-            lambda:probe()==original and next_probe()==following,style_probe=probe)
+            lambda:r.client.screen.cursor.x==selected_x+2 and probe()[2]!=original[2],style_probe=probe)
+        r.action('cancel_character_selection',b'v' if variant=='mux' else b'\x07',
+            lambda:probe()==original,style_probe=probe)
         # Selection and receipt have explicit distinct endpoint labels.
         r.keys(b'0');r.keys(b'V')
         if r.capture.exists():r.capture.unlink()
