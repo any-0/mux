@@ -276,7 +276,10 @@ mod tests {
             }
             let before = self.bytes.len();
             self.bytes.extend(
-                buffers.iter().flat_map(|buffer| buffer.iter()).take(self.limit),
+                buffers
+                    .iter()
+                    .flat_map(|buffer| buffer.iter())
+                    .take(self.limit),
             );
             Ok(self.bytes.len() - before)
         }
@@ -315,7 +318,10 @@ mod tests {
                 interrupted: true,
                 calls: 0,
             };
-            let key = Key { code: KeyCode::Char('t'), modifiers: ALT };
+            let key = Key {
+                code: KeyCode::Char('t'),
+                modifiers: ALT,
+            };
             write_message(&mut writer, &ClientMessage::Key(key)).unwrap();
             assert_eq!(writer.bytes, golden);
             if limit == golden.len() {
@@ -323,10 +329,16 @@ mod tests {
             }
         }
         let mut writer = ShortWriter {
-            bytes: Vec::new(), limit: 0, interrupted: false, calls: 0,
+            bytes: Vec::new(),
+            limit: 0,
+            interrupted: false,
+            calls: 0,
         };
         let error = write_message(&mut writer, &ServerMessage::Done).unwrap_err();
-        assert_eq!(error.downcast_ref::<io::Error>().unwrap().kind(), io::ErrorKind::WriteZero);
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::WriteZero
+        );
     }
 
     #[test]
@@ -336,13 +348,24 @@ mod tests {
         let payload = "界\x1b[4:3mtext".as_bytes().to_vec();
         write_message(&mut bytes, &ServerMessage::Render(payload.clone())).unwrap();
         for limit in 1..=bytes.len() {
-            let mut reader = ShortReader { bytes: &bytes, limit, interrupted: true };
-            assert!(matches!(read_message(&mut reader).unwrap(), Some(ServerMessage::Done)));
+            let mut reader = ShortReader {
+                bytes: &bytes,
+                limit,
+                interrupted: true,
+            };
+            assert!(matches!(
+                read_message(&mut reader).unwrap(),
+                Some(ServerMessage::Done)
+            ));
             let Some(ServerMessage::Render(actual)) = read_message(&mut reader).unwrap() else {
                 panic!("lost the second frame");
             };
             assert_eq!(actual, payload);
-            assert!(read_message::<ServerMessage>(&mut reader).unwrap().is_none());
+            assert!(
+                read_message::<ServerMessage>(&mut reader)
+                    .unwrap()
+                    .is_none()
+            );
         }
         for end in 1..11 {
             assert!(read_message::<ServerMessage>(&mut &bytes[..end]).is_err());
@@ -352,9 +375,18 @@ mod tests {
     #[test]
     fn incompatible_prefix_is_rejected_without_waiting_for_remaining_header() {
         let wrong_magic = read_message::<ServerMessage>(&mut b"BAD!".as_slice()).unwrap_err();
-        assert!(wrong_magic.to_string().contains("incompatible mux protocol"));
-        let wrong_version = read_message::<ServerMessage>(&mut b"MUXP\0\x02".as_slice()).unwrap_err();
-        assert!(wrong_version.to_string().contains("incompatible mux protocol version"));
+        assert!(
+            wrong_magic
+                .to_string()
+                .contains("incompatible mux protocol")
+        );
+        let wrong_version =
+            read_message::<ServerMessage>(&mut b"MUXP\0\x02".as_slice()).unwrap_err();
+        assert!(
+            wrong_version
+                .to_string()
+                .contains("incompatible mux protocol version")
+        );
     }
 
     #[test]

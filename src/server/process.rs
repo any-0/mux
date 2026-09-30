@@ -338,12 +338,18 @@ mod tests {
             .unwrap();
         let pid = child.id() as i32;
         let snapshot = processes();
-        let group = snapshot.iter().find(|process| process.pid == pid).unwrap().group;
+        let group = snapshot
+            .iter()
+            .find(|process| process.pid == pid)
+            .unwrap()
+            .group;
         let filtered = processes_for_groups(&[group]);
         assert!(filtered.iter().all(|process| process.group == group));
-        assert!(filtered.iter().any(|process| {
-            process.pid == pid && process.program == expected_program
-        }));
+        assert!(
+            filtered
+                .iter()
+                .any(|process| { process.pid == pid && process.program == expected_program })
+        );
         assert!(processes_for_groups(&[]).is_empty());
         assert!(processes_for_groups(&[-1]).is_empty());
         child.kill().unwrap();
