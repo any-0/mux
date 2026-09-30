@@ -36,6 +36,8 @@
           BENCH_TMUX_VERSION = pkgs.tmux.version;
         };
         stress = pkgs.mkShell {
+          STRESS_NIXPKGS_REV = nixpkgs.rev;
+          STRESS_RUST_VERSION = pkgs.rustc.version;
           packages = with pkgs; [ cargo rustc rustfmt clippy bash zsh fish vim
             coreutils git util-linux
             (python3.withPackages (p: [ p.pyte ])) ];

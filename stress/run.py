@@ -8,9 +8,7 @@ from pathlib import Path
 import pty
 import random
 import select
-import shlex
 import shutil
-import signal
 import struct
 import subprocess
 import termios
@@ -59,7 +57,7 @@ class Session:
         self.attach('client')
         self.capture_offset = 0
         self.capture_pending = ''
-        self.expected = Terminal(self.rows, self.cols - self.bar)
+        self.expected = Terminal(self.rows, self.cols - self.bar, default_cursor_shape='underline')
         self.capture_path = None
         self.capture_excluded = set()
         self.checkpoints = 0
@@ -193,7 +191,8 @@ class Session:
                             differences.append({'row': y, 'col': x, 'expected': wanted, 'actual': got})
                 errors.append({'client': index, 'cells': differences[:50], 'total_cell_differences': len(differences),
                                'expected_cursor': expected['cursor'], 'actual_cursor': actual['cursor'],
-                               'expected_hidden': expected['hidden'], 'actual_hidden': actual['hidden']})
+                               'expected_hidden': expected['hidden'], 'actual_hidden': actual['hidden'],
+                               'expected_shape': expected['cursor_shape'], 'actual_shape': actual['cursor_shape']})
                 write_json(self.root / f'{name}-client{index}-actual.json', actual)
         write_json(self.root / f'{name}-expected.json', expected)
         self.checkpoints += 1
@@ -386,6 +385,16 @@ def main():
     parser.add_argument('--shells', nargs='+', default=['bash', 'zsh', 'fish'])
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
+    import hashlib
+    write_json(args.output / 'manifest.json', {
+        'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+        'binary_sha256': hashlib.sha256(args.binary.read_bytes()).hexdigest(),
+        'nixpkgs_revision': os.environ.get('STRESS_NIXPKGS_REV'),
+        'rust_version': os.environ.get('STRESS_RUST_VERSION'),
+        'seed': args.seed, 'cycles': args.cycles, 'shells': args.shells,
+        'cell_fields': ['text', 'fg', 'bg', 'bold', 'dim', 'italic', 'inverse', 'underline_style', 'underline_color'],
+        'cursor_fields': ['row', 'column', 'visibility', 'shape'],
+    })
     results = []
     for shell in args.shells:
         directory = args.output / shell

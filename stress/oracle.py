@@ -107,7 +107,9 @@ class Stream(pyte.Stream):
 
 
 class Terminal:
-    def __init__(self, rows, cols):
+    def __init__(self, rows, cols, default_cursor_shape='bar'):
+        self.default_cursor_shape = default_cursor_shape
+        self.cursor_shape = default_cursor_shape
         self.screen = Screen(cols, rows)
         self.stream = Stream(self.screen)
         self.decoder = codecs.getincrementaldecoder('utf8')('strict')
@@ -134,7 +136,11 @@ class Terminal:
                     break
                 raw, intermediate, final = match.groups()
                 seq = match.group(0)
-                if final == 'm' and not intermediate and not raw.startswith(('?', '>', '<', '=')):
+                if final == 'q' and intermediate == ' ':
+                    value = int(raw or 0)
+                    if value in range(7):
+                        self.cursor_shape = ('block', 'block', 'block', 'underline', 'underline', 'bar', 'bar')[value]
+                elif final == 'm' and not intermediate and not raw.startswith(('?', '>', '<', '=')):
                     self.screen.sgr(raw)
                 elif final == 'm':
                     pass  # XTerm modifyOtherKeys is not graphic rendition.
@@ -155,6 +161,8 @@ class Terminal:
                 end = 3 if self.pending[1] in '()*+#%' else 2
                 if len(self.pending) < end:
                     break
+                if self.pending[:end] == '\x1bc':
+                    self.cursor_shape = self.default_cursor_shape
                 self.stream.feed(self.pending[:end])
                 self.pending = self.pending[end:]
 
@@ -185,4 +193,4 @@ class Terminal:
                 row.append(values)
             cells.append(row)
         return {'cells': cells, 'cursor': [screen.cursor.y, min(screen.cursor.x, screen.columns - 1) - left],
-                'hidden': screen.cursor.hidden}
+                'hidden': screen.cursor.hidden, 'cursor_shape': self.cursor_shape}

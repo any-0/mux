@@ -7,8 +7,8 @@ from oracle import Terminal
 
 
 class PaneReplay:
-    def __init__(self):
-        self.terminal = Terminal(24, 80)
+    def __init__(self, cursor_shape):
+        self.terminal = Terminal(24, 80, default_cursor_shape=cursor_shape)
         self.offsets = {}
 
     def advance(self, path, offset):
@@ -31,6 +31,15 @@ class ClientReplay:
         self.terminal = Terminal(24, 85)
         self.data = (root / f'{name}.ansi').read_bytes()
         self.events = [json.loads(line) for line in (root / f'{name}.events.jsonl').read_text().splitlines()]
+        # Early artifacts recorded byte offsets but not action indices. A
+        # resize can share an offset with the preceding idle checkpoint;
+        # recover its ordering from the retained scenario action trace.
+        actions = [json.loads(line) for line in (root / 'actions.jsonl').read_text().splitlines()]
+        attach = next(a for a in actions if a['kind'] == 'attach' and a['name'] == name)
+        indices = [attach['index']] + [a['index'] for a in actions
+                                      if a['kind'] == 'resize' and a['index'] > attach['index']]
+        for event, index in zip(self.events, indices):
+            event.setdefault('action_index', index)
         self.event_index = 0
         self.position = 0
 
@@ -50,7 +59,9 @@ class ClientReplay:
 
 def replay(root):
     results, clients = [], {}
-    pane = PaneReplay()
+    import tomllib
+    config = tomllib.loads((root / 'config.toml').read_text())
+    pane = PaneReplay(config.get('default_cursor_shape', 'bar'))
     for line in (root / 'actions.jsonl').read_text().splitlines():
         event = json.loads(line)
         if event['kind'] != 'checkpoint':

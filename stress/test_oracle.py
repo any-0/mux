@@ -34,6 +34,15 @@ class OracleVectors(unittest.TestCase):
         self.assertEqual(cells[0], cells[1])
         self.assertEqual(cells[2], ['Y', *cells[1][1:]])
 
+    def test_cursor_shape_visibility_and_position_are_separate(self):
+        terminal = Terminal(3, 10, default_cursor_shape='underline')
+        terminal.feed(b'\x1b[6 q\x1b[?25l\x1b[2;4H')
+        self.assertEqual(terminal.snapshot()['cursor_shape'], 'bar')
+        self.assertEqual(terminal.snapshot()['cursor'], [1, 3])
+        self.assertTrue(terminal.snapshot()['hidden'])
+        terminal.feed(b'\x1bc')
+        self.assertEqual(terminal.snapshot()['cursor_shape'], 'underline')
+
     def test_all_underline_styles_reset_and_color(self):
         terminal = Terminal(3, 20)
         for style in range(6):
