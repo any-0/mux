@@ -41,7 +41,9 @@ impl Grid {
             scrollback_len,
             scrollback_offset: 0,
             history_continues: false,
-            reflow: false,
+            // A grid that keeps history is a normal screen; one without is
+            // cropped as before.
+            reflow: scrollback_len > 0,
             fill: crate::attrs::Attrs::default(),
         }
     }
@@ -146,7 +148,7 @@ impl Grid {
 
     /// Resizes the normal screen the way tmux does. A new width rewraps the
     /// history and the screen together, and the cursor keeps its place in the
-    /// text. A new height then gives up blank rows below the cursor before it
+    /// text. A new height then gives up the rows below the cursor before it
     /// sends rows off the top into the history, and a taller screen takes rows
     /// back out of the history, at most as many as it grew by.
     fn resize_reflowing(&mut self, size: Size) {
@@ -181,6 +183,9 @@ impl Grid {
                 let row = all.pop_front().unwrap();
                 self.push_history(row);
             }
+            self.saved_pos.row = self.saved_pos.row.saturating_sub(
+                u16::try_from(start).unwrap_or(u16::MAX),
+            );
             visible = all;
             cursor_row = row - start;
             cursor_col = col;
@@ -193,20 +198,17 @@ impl Grid {
         }
 
         let target = usize::from(size.rows);
-        let blank = crate::Cell::new();
-        let is_blank = |row: &crate::row::Row| {
-            !row.wrapped() && row.cells().all(|cell| cell == blank)
-        };
-        while visible.len() > target
-            && visible.len() > cursor_row + 1
-            && visible.back().is_some_and(is_blank)
-        {
+        // Rows below the cursor go first, as in tmux: they are blank under a
+        // shell, and a full-screen program redraws them anyway.
+        while visible.len() > target && visible.len() > cursor_row + 1 {
             visible.pop_back();
         }
         while visible.len() > target && cursor_row > 0 {
             let row = visible.pop_front().unwrap();
             self.push_history(row);
             cursor_row -= 1;
+            // The saved cursor stays on the same text.
+            self.saved_pos.row = self.saved_pos.row.saturating_sub(1);
         }
         // Text below the cursor that still does not fit is lost, as in tmux.
         visible.truncate(target);
@@ -225,6 +227,7 @@ impl Grid {
                     .is_some_and(crate::row::Row::wrapped);
                 visible.push_front(row);
                 cursor_row += 1;
+                self.saved_pos.row = self.saved_pos.row.saturating_add(1);
                 growth -= 1;
             }
         }
@@ -255,15 +258,20 @@ impl Grid {
             self.scrollback_offset.min(self.scrollback.len());
     }
 
-    fn push_history(&mut self, row: crate::row::Row) {
+    fn push_history(&mut self, mut row: crate::row::Row) {
         if self.scrollback_len == 0 {
             return;
         }
         self.history_continues = row.wrapped();
+        row.compact();
         if self.scrollback.len() >= self.scrollback_len {
             self.scrollback.pop_front();
         }
         self.scrollback.push_back(row);
+        if self.scrollback_offset > 0 {
+            self.scrollback_offset =
+                self.scrollback.len().min(self.scrollback_offset + 1);
+        }
     }
 
     /// Rewraps `rows` at `cols`, following the cell at row `cursor_row`,
@@ -1124,18 +1132,9 @@ impl Grid {
         for _ in 0..(count.min(self.scroll_bottom - self.scroll_top + 1)) {
             self.rows
                 .insert(usize::from(self.scroll_bottom) + 1, self.new_row());
-            let mut removed = self.rows.remove(usize::from(self.scroll_top));
+            let removed = self.rows.remove(usize::from(self.scroll_top));
             if self.scrollback_len > 0 && self.scroll_top == 0 {
-                self.history_continues = removed.wrapped();
-                removed.compact();
-                if self.scrollback.len() == self.scrollback_len {
-                    self.scrollback.pop_front();
-                }
-                self.scrollback.push_back(removed);
-                if self.scrollback_offset > 0 {
-                    self.scrollback_offset =
-                        self.scrollback.len().min(self.scrollback_offset + 1);
-                }
+                self.push_history(removed);
             }
         }
     }
@@ -1330,7 +1329,119 @@ pub struct Pos {
 
 #[cfg(test)]
 mod history_restore_tests {
-    use super::{Grid, Size};
+    use super::{Grid, Pos, Size};
+
+    fn labeled_grid(limit: usize) -> Grid {
+        let mut grid = Grid::new(Size { rows: 6, cols: 8 }, limit);
+        grid.allocate_rows();
+        for (index, row) in grid.rows.iter_mut().enumerate() {
+            row.get_mut(0)
+                .unwrap()
+                .set(char::from(b'A' + index as u8), crate::attrs::Attrs::default());
+        }
+        grid
+    }
+
+    fn labels(grid: &Grid) -> Vec<String> {
+        grid.all_rows()
+            .map(|row| row.get(0).unwrap().contents().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn shrink_only_moves_rows_when_the_live_cursor_overflows() {
+        let mut grid = labeled_grid(100);
+        grid.pos = Pos { row: 1, col: 2 };
+        grid.saved_pos = Pos { row: 5, col: 7 };
+        grid.set_size(Size { rows: 2, cols: 8 });
+        assert_eq!(labels(&grid), ["A", "B"]);
+        assert_eq!(grid.pos, Pos { row: 1, col: 2 });
+        assert_eq!(grid.saved_pos, Pos { row: 1, col: 7 });
+        assert_eq!(grid.scrollback.len(), 0);
+    }
+
+    #[test]
+    fn shrink_projects_saved_cursor_margins_and_history_offset() {
+        let mut grid = labeled_grid(100);
+        grid.pos = Pos { row: 5, col: 7 };
+        grid.saved_pos = Pos { row: 4, col: 3 };
+        grid.scroll_top = 2;
+        grid.scroll_bottom = 4;
+        grid.set_size(Size { rows: 2, cols: 8 });
+        assert_eq!(labels(&grid), ["A", "B", "C", "D", "E", "F"]);
+        assert_eq!(grid.pos, Pos { row: 1, col: 7 });
+        assert_eq!(grid.saved_pos, Pos { row: 0, col: 3 });
+        // The margins reset to the whole screen, as in tmux.
+        assert_eq!((grid.scroll_top, grid.scroll_bottom), (0, 1));
+        grid.set_scrollback(2);
+        grid.set_size(Size { rows: 1, cols: 8 });
+        assert_eq!(labels(&grid), ["A", "B", "C", "D", "E", "F"]);
+        assert_eq!(grid.scrollback(), 3);
+        assert_eq!(grid.visible_row(0).unwrap().get(0).unwrap().contents(), "C");
+        assert_eq!(grid.pos, Pos { row: 0, col: 7 });
+    }
+
+    #[test]
+    fn shrink_honors_history_capacity_and_disabled_history() {
+        let mut bounded = labeled_grid(2);
+        bounded.pos = Pos { row: 5, col: 0 };
+        bounded.set_size(Size { rows: 1, cols: 8 });
+        assert_eq!(labels(&bounded), ["D", "E", "F"]);
+        assert_eq!(bounded.scrollback.len(), 2);
+        let mut disabled = labeled_grid(0);
+        disabled.pos = Pos { row: 5, col: 0 };
+        disabled.set_size(Size { rows: 1, cols: 8 });
+        assert_eq!(labels(&disabled), ["A"]);
+        assert_eq!(disabled.scrollback.len(), 0);
+        assert_eq!(disabled.pos, Pos { row: 0, col: 0 });
+    }
+
+    #[test]
+    fn simultaneous_shrink_reflows_promoted_history_before_clipping_columns() {
+        let mut parser = crate::Parser::new(3, 8, 100);
+        parser.process(b"\x1b[1;2;4:3;38;2;1;2;3mABCDEFG\r\nHIJKLMN\r\nO");
+        parser.screen_mut().set_size(1, 4);
+        let rows: Vec<_> = parser.screen().all_rows().collect();
+        let text: Vec<_> = rows
+            .iter()
+            .map(|row| {
+                (0..4)
+                    .map(|x| row.get(x).unwrap().contents().to_string())
+                    .collect::<String>()
+            })
+            .collect();
+        assert_eq!(text, ["ABCD", "EFG", "HIJK", "LMN", "O"]);
+        for row in rows {
+            let first = row.get(0).unwrap();
+            assert!(first.bold() && first.dim());
+            assert_eq!(first.underline_style(), crate::UnderlineStyle::Curly);
+            assert_eq!(first.fgcolor(), crate::Color::Rgb(1, 2, 3));
+        }
+        parser.process(b"\x1b[?1049hALT");
+        parser.screen_mut().set_size(1, 2);
+        assert_eq!(parser.screen().all_rows().count(), 1);
+        parser.process(b"\x1b[?1049l");
+        assert!(parser.screen().all_rows().count() > 1);
+    }
+
+    #[test]
+    fn alternate_screen_shrink_clips_without_polluting_primary_history() {
+        let mut parser = crate::Parser::new(6, 8, 100);
+        parser.process(b"A\r\nB\r\nC\r\nD\r\nE\r\nF\x1b[?1049ha\r\nb\r\nc\r\nd\r\ne\r\nf");
+        parser.screen_mut().set_size(2, 8);
+        // ?1049h leaves the cursor where it was, as in xterm, so the
+        // alternate screen's text starts after the F.
+        assert_eq!(parser.screen().contents(), " a\nb");
+        assert_eq!(parser.screen().cursor_position(), (1, 1));
+        assert_eq!(parser.screen().all_rows().count(), 2);
+        parser.process(b"\x1b[?1049l");
+        let first_cells: Vec<_> = parser
+            .screen()
+            .all_rows()
+            .map(|row| row.get(0).unwrap().contents().to_string())
+            .collect();
+        assert_eq!(first_cells, ["A", "B", "C", "D", "E", "F"]);
+    }
 
     #[test]
     fn large_styled_history_streams_and_retains_only_the_configured_tail() {

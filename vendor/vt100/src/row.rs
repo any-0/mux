@@ -325,7 +325,7 @@ impl Row {
             .attrs
             .iter()
             .flat_map(|attrs| attrs.iter())
-            .any(|span| span.attrs.extra != 0 || span.attrs.mode & 3 == 3);
+            .any(|span| span.attrs.extra != 0);
         output.extend_from_slice(&self.cols.to_le_bytes());
         output.push(
             u8::from(self.wrapped)
@@ -417,7 +417,6 @@ impl Row {
                 || start >= end
                 || end > cells
                 || [span[4], span[8], span[12]].iter().any(|tag| *tag > 2)
-                || (mode & 3 == 3 && span_len == 17)
                 || mode >> 5 > 5
                 || extra & !crate::attrs::EXTRA_ALL != 0
             {

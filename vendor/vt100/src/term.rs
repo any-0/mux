@@ -305,6 +305,7 @@ impl BufWrite for Attrs {
                     write_param!(2);
                 }
                 Intensity::BoldDim => {
+                    write_param!(22);
                     write_param!(1);
                     write_param!(2);
                 }

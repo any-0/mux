@@ -2082,6 +2082,35 @@ fn pane_journal_replays_output_resizes_and_ignores_a_torn_tail() {
 }
 
 #[test]
+fn shrinking_a_pane_keeps_output_above_the_idle_cursor_in_history() {
+    let mut parser = vt100::Parser::new(6, 18, 100);
+    parser.process(b"\x1b[1;2;38;2;1;2;3mfirst\r\nsecond\r\nthird\r\nfourth\r\nfifth\r\nsixth");
+    parser.screen_mut().set_size(2, 18);
+    let (lines, cursor) = snapshot_screen(parser.screen_mut());
+    let text: Vec<_> = lines.lines().map(|line| line.text.as_str()).collect();
+    assert_eq!(
+        text,
+        ["first", "second", "third", "fourth", "fifth", "sixth"]
+    );
+    assert_eq!(cursor.row, 5);
+    assert_eq!(parser.screen().cursor_position(), (1, 5));
+
+    let journal = compacted_journal_records(parser.screen_mut()).unwrap();
+    let mut restored = vt100::Parser::new(2, 18, 100);
+    replay_pane_journal(&mut restored, journal.as_slice()).unwrap();
+    let (restored_lines, _) = snapshot_screen(restored.screen_mut());
+    let restored_text: Vec<_> = restored_lines
+        .lines()
+        .map(|line| line.text.as_str())
+        .collect();
+    assert_eq!(restored_text, text);
+    restored.screen_mut().set_scrollback(usize::MAX);
+    let first = restored.screen().cell(0, 0).unwrap();
+    assert!(first.bold() && first.dim());
+    assert_eq!(first.fgcolor(), vt100::Color::Rgb(1, 2, 3));
+}
+
+#[test]
 fn resized_scrollback_reflows_instead_of_truncating_lines() {
     let mut parser = vt100::Parser::new(2, 8, 100);
     parser.process(b"abcdefg\r\nhijklmn\r\nopqrstu");
@@ -2538,4 +2567,43 @@ fn detached_sessions_do_not_poll_process_icons() {
     server.sessions[0].windows[0].panes[0].child.kill().unwrap();
     drop(server);
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn two_digit_sidebar_process_tiles_keep_their_background_through_the_right_edge() {
+    let directory = env::temp_dir().join(format!("mux-wide-bar-{}", std::process::id()));
+    let (mut server, _events, _client) = server_with_pending_bell(&directory);
+    let (messages, received) = mpsc::sync_channel(1);
+    let client = server.clients.get_mut(&1).unwrap();
+    client.writer = ClientWriter {
+        messages,
+        thread: thread::spawn(|| {}),
+        stream: None,
+    };
+    client.initialized = true;
+    client.session_id = Some(server.sessions[0].id);
+    server.sessions[0].windows[0].bell = None;
+    for _ in 1..10 {
+        server.new_window(1).unwrap();
+    }
+    let theme = server.clients[&1].rendered_theme();
+    server.render_all();
+    let ServerMessage::Render(bytes) = received.recv().unwrap() else {
+        panic!("expected terminal output");
+    };
+    let mut terminal = vt100::Parser::new(24, 80, 0);
+    terminal.process(&bytes);
+    // Ten windows, the last selected, seven tiles visible: first tile is
+    // window 4 at row 2; last tile is window 10 at row 20 (one-based).
+    let inactive_edge = terminal.screen().cell(2, 3).unwrap().bgcolor();
+    let active_edge = terminal.screen().cell(20, 3).unwrap().bgcolor();
+    for window in &mut server.sessions[0].windows {
+        for pane in &mut window.panes {
+            pane.child.kill().unwrap();
+        }
+    }
+    drop(server);
+    fs::remove_dir_all(directory).unwrap();
+    assert_eq!(inactive_edge, rgb(theme.bar_inactive));
+    assert_eq!(active_edge, rgb(theme.bar_active));
 }

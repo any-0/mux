@@ -240,7 +240,8 @@ impl Attrs {
                 0 => crate::term::Intensity::Normal,
                 TEXT_MODE_BOLD => crate::term::Intensity::Bold,
                 TEXT_MODE_DIM => crate::term::Intensity::Dim,
-                _ => crate::term::Intensity::BoldDim,
+                TEXT_MODE_INTENSITY => crate::term::Intensity::BoldDim,
+                _ => unreachable!(),
             })
         };
         let attrs = if self.italic() == other.italic() {
@@ -280,5 +281,57 @@ impl Attrs {
         };
 
         attrs.write_buf(contents);
+    }
+}
+
+#[cfg(test)]
+mod intensity_tests {
+    #[test]
+    fn persisted_scrollback_accepts_simultaneous_bold_and_faint() {
+        let mut parser = crate::Parser::new(2, 20, 10);
+        parser.process(b"\x1b[1;2;4:3;58;5;45mBOTH\r\nNEXT\r\n");
+        let packed = parser.screen().encode_history();
+        let mut restored = crate::Parser::new(2, 20, 10);
+        assert!(restored.screen_mut().restore_history(&packed));
+        restored.screen_mut().set_scrollback(1);
+        let cell = restored.screen().cell(0, 0).unwrap();
+        assert_eq!(cell.contents(), "B");
+        assert!(cell.bold() && cell.dim());
+        assert_eq!(cell.underline_style(), crate::UnderlineStyle::Curly);
+        assert_eq!(cell.underline_color(), crate::Color::Idx(45));
+    }
+
+    #[test]
+    fn bold_and_faint_are_independent_and_sgr_22_clears_both() {
+        let mut parser = crate::Parser::new(3, 20, 0);
+        parser.process(b"\x1b[1;2;4:3;58;5;45mX\x1b[22mY");
+        let x = parser.screen().cell(0, 0).unwrap();
+        assert!(x.bold() && x.dim());
+        assert_eq!(x.underline_style(), crate::UnderlineStyle::Curly);
+        assert_eq!(x.underline_color(), crate::Color::Idx(45));
+        let y = parser.screen().cell(0, 1).unwrap();
+        assert!(!y.bold() && !y.dim());
+    }
+
+    #[test]
+    fn formatted_intensity_transitions_clear_old_bits_before_setting_new_ones() {
+        // Every pair is needed: emitting only SGR 2 after SGR 1 accumulates
+        // bold+faint on independent terminal emulators.
+        for old in [b"0".as_slice(), b"1", b"2", b"1;2"] {
+            for new in [b"0".as_slice(), b"1", b"2", b"1;2"] {
+                let mut parser = crate::Parser::new(3, 20, 0);
+                parser.process(b"\x1b[3m"); // avoid the all-default fast path
+                parser.process(b"\x1b[");
+                parser.process(old);
+                parser.process(b"mA\x1b[22;3m\x1b[");
+                parser.process(new);
+                parser.process(b"mB");
+                let mut decoded = crate::Parser::new(3, 20, 0);
+                decoded.process(&parser.screen().contents_formatted());
+                for col in 0..2 {
+                    assert_eq!(parser.screen().cell(0, col), decoded.screen().cell(0, col));
+                }
+            }
+        }
     }
 }
