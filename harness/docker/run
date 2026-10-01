@@ -19,5 +19,5 @@ docker run --rm --init \
         cargo build --release --locked
         cargo test --locked
         cargo test --manifest-path vendor/vt100/Cargo.toml --locked --lib
-        cd harness && cargo test --release "$@"
+        cd harness && cargo test --release --no-fail-fast "$@"
     ' sh "$@"

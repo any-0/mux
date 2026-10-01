@@ -38,7 +38,10 @@ class Session:
         self.env = {k: v for k, v in os.environ.items() if k not in ('MUX', 'MUX_PANE')}
         self.env.update(HOME=str(directory / 'home'), XDG_RUNTIME_DIR=str(directory / 'runtime'),
                         XDG_STATE_HOME=str(directory / 'state'), XDG_CONFIG_HOME=str(directory / 'home/.config'),
-                        TERM='xterm-256color', COLORTERM='truecolor', LC_ALL='C.UTF-8', TZ='UTC',
+                        TERM='xterm-256color', COLORTERM='truecolor',
+                        # The oracle draws styled underlines and underline
+                        # colours; mux sends plain underlines otherwise.
+                        MUX_STYLED_UNDERLINES='1', LC_ALL='C.UTF-8', TZ='UTC',
                         SHELL=str(ROOT / 'stress/proxy.py') if proxied else shutil.which(shell),
                         STRESS_REAL_SHELL=shutil.which(shell), STRESS_CAPTURE=str(directory / 'capture'),
                         STRESS_RC=str(directory / 'home/.bashrc'), ZDOTDIR=str(directory / 'home'))

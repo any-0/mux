@@ -291,6 +291,14 @@ fn truecolor_from(colorterm: Option<&OsStr>, term: Option<&OsStr>) -> bool {
 /// the colour's parameters read as unrelated attributes. `var` reads the
 /// environment.
 fn styled_underlines_from(var: impl Fn(&str) -> Option<String>) -> bool {
+    // An explicit answer, for a terminal (or a test oracle) that is capable
+    // but cannot be recognised. Unlike the configuration key, older mux
+    // versions simply ignore it.
+    match var("MUX_STYLED_UNDERLINES").as_deref() {
+        Some("1") => return true,
+        Some("0") => return false,
+        _ => {}
+    }
     // A client inside a mux pane draws into mux, which understands them and
     // passes them on as its own client's terminal allows.
     if var("MUX").is_some_and(|value| !value.is_empty()) {
@@ -698,6 +706,14 @@ mod tests {
         ]));
         assert!(with(&[("TERM", "xterm-256color"), ("VTE_VERSION", "7600")]));
         assert!(with(&[("MUX", "/run/user/1/mux.sock")]));
+        assert!(with(&[
+            ("TERM", "xterm-256color"),
+            ("MUX_STYLED_UNDERLINES", "1")
+        ]));
+        assert!(!with(&[
+            ("TERM", "xterm-kitty"),
+            ("MUX_STYLED_UNDERLINES", "0")
+        ]));
     }
 
     #[test]

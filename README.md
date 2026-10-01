@@ -417,7 +417,8 @@ glyphs = "font"
 `truecolor` and `styled_underlines` override what the client works out about
 its terminal from `TERM`, `COLORTERM`, `TERM_PROGRAM` and similar variables,
 for a terminal that is capable but does not say so (or says so wrongly). Left
-out, they are detected. `glyphs = "text"` draws the sidebar's separator and
+out, they are detected; `MUX_STYLED_UNDERLINES=1` (or `0`) in the environment
+does the same for underlines. `glyphs = "text"` draws the sidebar's separator and
 program icons with box drawing and short labels, for fonts without the
 private-use glyphs mux is designed with; the default is `"font"`.
 
