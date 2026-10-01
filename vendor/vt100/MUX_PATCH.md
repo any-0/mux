@@ -67,7 +67,7 @@ disagree, against xterm and tmux:
 The normal screen is resized the way tmux does it. A new width rewraps the
 history and the screen together, and the cursor keeps its place in the text,
 including just after a line that exactly fills the width. A new height gives up
-blank rows below the cursor before sending rows off the top into the history,
+the rows below the cursor (as tmux does) before sending rows off the top into the history,
 and a taller screen takes rows back out of it, at most as many as it grew by.
 Whether the newest history row continues onto the first screen row is tracked
 explicitly, because a wrap flag alone would join text printed after a `clear`
@@ -81,3 +81,12 @@ them again. Anything that splits a pair (an insertion, a deletion, a resize)
 blanks both halves, and no path assumes the invariant holds: a broken pair is
 blanked or skipped, never a reason to panic. A combining mark never attaches to
 a continuation half.
+
+Bold (SGR 1) and faint (SGR 2) are retained independently, matching xterm's
+attribute bits. SGR 22 clears both. Formatted output resets intensity before
+setting a changed combination so moving from bold to faint does not accumulate
+both attributes in the terminal receiving that output. Recorded real-shell
+cat/head stress exposed the original mutually-exclusive intensity assumption.
+Persisted compact rows also accept the combined bold/faint bits. The parser now
+produces that valid state, so rejecting it during history restore would discard
+the pane's journal after styled output had entered scrollback.
