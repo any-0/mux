@@ -563,6 +563,8 @@ mod tests {
             .unwrap();
         let stderr = child.stderr.take().unwrap();
         let stderr = thread::spawn(move || capture_stderr(stderr));
+        // This fixture tests an already failed daemon, not shell startup speed.
+        assert!(!child.wait().unwrap().success());
         let error = wait_for_daemon(
             &socket,
             child,
