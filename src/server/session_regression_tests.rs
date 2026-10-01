@@ -16,6 +16,8 @@ use crate::{
     },
 };
 
+const RENDER_BARRIER: &str = "mux-test-render-barrier";
+
 struct Session {
     server: Server,
     events: Receiver<Event>,
@@ -109,6 +111,11 @@ impl Session {
     /// terminal contents so missed incremental clears are observable.
     fn capture(&mut self) -> &vt100::Screen {
         self.server.render_all();
+        assert!(
+            self.server.clients[&1]
+                .writer
+                .send(ServerMessage::Listing(vec![RENDER_BARRIER.into()]))
+        );
         read_render(&mut self.client, &mut self.terminal);
         self.terminal.screen()
     }
@@ -178,6 +185,11 @@ impl Peer {
 
     fn capture(&mut self, server: &mut Server) -> &vt100::Screen {
         server.render_all();
+        assert!(
+            server.clients[&2]
+                .writer
+                .send(ServerMessage::Listing(vec![RENDER_BARRIER.into()]))
+        );
         read_render(&mut self.client, &mut self.terminal);
         self.terminal.screen()
     }
@@ -188,21 +200,36 @@ fn read_render(client: &mut UnixStream, terminal: &mut vt100::Parser) {
         match read_message::<ServerMessage>(client) {
             Ok(Some(ServerMessage::Render(bytes))) => terminal.process(&bytes),
             Ok(Some(ServerMessage::Error(error))) => panic!("render failed: {error}"),
+            // This marker shares the writer queue with the rendered frames.
+            Ok(Some(ServerMessage::Listing(lines))) if lines == [RENDER_BARRIER] => break,
             Ok(Some(_)) => {}
             Ok(None) => panic!("client disconnected"),
-            Err(error)
-                if error.downcast_ref::<std::io::Error>().is_some_and(|error| {
-                    matches!(
-                        error.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    )
-                }) =>
-            {
-                break;
-            }
             Err(error) => panic!("read client frame: {error:#}"),
         }
     }
+}
+
+#[test]
+fn render_capture_stops_at_the_queued_frame_barrier() {
+    let (mut writer, mut client) = UnixStream::pair().unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .unwrap();
+    for message in [
+        ServerMessage::Done,
+        ServerMessage::Render(b"BEFORE".to_vec()),
+        ServerMessage::Listing(vec![RENDER_BARRIER.into()]),
+        ServerMessage::Render(b"\r\x1b[2KAFTER".to_vec()),
+    ] {
+        crate::protocol::write_message(&mut writer, &message).unwrap();
+    }
+    let mut terminal = vt100::Parser::new(2, 20, 0);
+    read_render(&mut client, &mut terminal);
+    assert_eq!(terminal.screen().contents(), "BEFORE");
+    assert!(matches!(
+        read_message::<ServerMessage>(&mut client).unwrap(),
+        Some(ServerMessage::Render(bytes)) if bytes == b"\r\x1b[2KAFTER"
+    ));
 }
 
 impl Drop for Session {
