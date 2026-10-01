@@ -30,14 +30,31 @@ impl Server {
             let (rows, cols) = (client.rows.max(1), client.cols.max(1));
             let mut frame = std::mem::take(&mut client.scratch);
             frame.reset(rows, cols);
-            let result = self.render(id, &mut frame);
+            // A bug in painting one client must not end the daemon and every
+            // shell with it. It would recur on every frame, so that client is
+            // let go with the error; the panes keep running, ready for it to
+            // attach again.
+            let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.render(id, &mut frame)
+            })) {
+                Ok(result) => result,
+                Err(panic) => {
+                    if let Some(client) = self.clients.remove(&id) {
+                        client.writer.send(ServerMessage::Error(format!(
+                            "mux internal error while drawing: {}",
+                            panic_message(&*panic)
+                        )));
+                    }
+                    continue;
+                }
+            };
             let Some(client) = self.clients.get_mut(&id) else {
                 continue;
             };
             let message = match result {
                 Ok(()) => {
                     output.clear();
-                    frame.diff(&client.frame, client.colors, &mut output);
+                    frame.diff(&client.frame, client.terminal, &mut output);
                     client.scratch = std::mem::replace(&mut client.frame, frame);
                     if output.is_empty() {
                         continue;
@@ -165,7 +182,7 @@ impl Server {
         } else if client.leader {
             Some((
                 Popup::Status(
-                    "leader: $ session · , window · -/| split · b bell · x kill · d detach · arrows focus · ctrl-arrows resize"
+                    "leader: $ session · , window · -/| split · b bell · x kill · d detach · r redraw · arrows focus · ctrl-arrows resize"
                         .into(),
                 ),
                 PopupAnchor::Bottom,
@@ -230,7 +247,8 @@ impl Server {
                 .0
             })
             .unwrap_or(current_rgb);
-        render_bar_separator(frame, rows, bar_width, current_row, separator_rgb);
+        let glyphs = self.clients[&id].glyphs;
+        render_bar_separator(frame, rows, bar_width, current_row, separator_rgb, glyphs);
         let client = &self.clients[&id];
         let (tile, dot) = state_colors(client.literal, client.leader, vim_active, &theme);
         let icon = if client.literal { "──▶" } else { " ● " };
@@ -276,6 +294,11 @@ impl Server {
             let icon = session_index
                 .map(|session| self.sessions[session].windows[window].active_process_icon())
                 .unwrap_or(IDLE_ICON);
+            let icon = if glyphs == crate::config::Glyphs::Text {
+                text_icon(icon)
+            } else {
+                icon
+            };
             let icon_label = if icon.chars().count() == 3 {
                 icon.to_owned()
             } else {

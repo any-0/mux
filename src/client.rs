@@ -15,25 +15,35 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use crossterm::{
     cursor::{Hide, SetCursorStyle, Show},
     event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode as CrosstermKeyCode, KeyEventKind, KeyModifiers,
-        MouseButton as CrosstermMouseButton, MouseEvent, MouseEventKind,
+        self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+        EnableFocusChange, EnableMouseCapture, Event, KeyCode as CrosstermKeyCode, KeyEventKind,
+        KeyModifiers, MouseButton as CrosstermMouseButton, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{
         EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, size,
     },
 };
+use nix::sys::signal::{SigSet, Signal};
 
 use crate::{
     config::Settings,
+    frame::TerminalFeatures,
     protocol::{
         ALT, CTRL, ClientMessage, Hello, Key, KeyCode, Mouse, MouseButton, MouseKind, MuxCommand,
         MuxQuery, SHIFT, ServerMessage, read_message, write_message,
     },
 };
 
+/// Events the client holds while its terminal is busy writing a frame.
+const CLIENT_EVENT_QUEUE: usize = 16;
+
 enum ClientEvent {
+    /// A signal that ends the client: the terminal is put back first.
+    Terminate,
+    /// Job control asked the client to stop (SIGTSTP), or it was continued.
+    Suspend,
+    Resume,
     Server(ServerMessage),
     ServerDisconnected,
     Terminal(Event),
@@ -74,6 +84,13 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
         bail!("already inside this mux; run `env -u MUX mux` to attach a second client anyway");
     }
     let mut stream = connect_or_start(&socket_path)?;
+    // Signals are taken on a thread of their own, so that whatever ends or
+    // stops the client puts the terminal back the way it found it first. The
+    // mask must be in place before any thread starts, since they inherit it,
+    // and only after the daemon has been started: a blocked mask survives
+    // exec, and every shell the daemon ever spawns would inherit it.
+    let signals = client_signals();
+    signals.thread_block().context("block client signals")?;
     let (cols, rows) = terminal_size()?;
     let cwd = env::current_dir().context("read current directory")?;
     write_message(
@@ -91,13 +108,23 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
             theme_directory: settings.theme_directory,
             mouse: settings.mouse,
             bell_style: settings.bell_style,
-            truecolor: terminal_has_truecolor(),
+            terminal: TerminalFeatures {
+                truecolor: settings.truecolor.unwrap_or_else(terminal_has_truecolor),
+                styled_underlines: settings
+                    .styled_underlines
+                    .unwrap_or_else(|| styled_underlines_from(|name| env::var(name).ok())),
+            },
+            glyphs: settings.glyphs,
             default_cursor_shape: settings.default_cursor_shape,
         })),
     )?;
 
     let mut reader = stream.try_clone()?;
-    let (sender, receiver) = mpsc::channel();
+    // Bounded, so a terminal that stops reading stops this client reading
+    // the socket too. The daemon then skips the frames in between and paints
+    // the present in full once the terminal drains, instead of the client
+    // buffering and replaying everything it missed.
+    let (sender, receiver) = mpsc::sync_channel(CLIENT_EVENT_QUEUE);
     let server_sender = sender.clone();
     thread::spawn(move || {
         loop {
@@ -119,7 +146,20 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
         }
     });
 
-    let _terminal = TerminalGuard::enter(settings.mouse)?;
+    let mut terminal = TerminalGuard::enter(settings.mouse)?;
+    let signal_sender = sender.clone();
+    thread::spawn(move || {
+        while let Ok(signal) = signals.wait() {
+            let event = match signal {
+                Signal::SIGTSTP => ClientEvent::Suspend,
+                Signal::SIGCONT => ClientEvent::Resume,
+                _ => ClientEvent::Terminate,
+            };
+            if signal_sender.send(event).is_err() {
+                return;
+            }
+        }
+    });
     let input_sender = sender.clone();
     thread::spawn(move || {
         loop {
@@ -175,6 +215,27 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
                 let (cols, rows) = usable_terminal_size(cols, rows);
                 write_message(&mut stream, &ClientMessage::Resize { cols, rows })?
             }
+            Ok(ClientEvent::Terminal(Event::FocusGained)) => {
+                write_message(&mut stream, &ClientMessage::Focus(true))?
+            }
+            Ok(ClientEvent::Terminal(Event::FocusLost)) => {
+                write_message(&mut stream, &ClientMessage::Focus(false))?
+            }
+            Ok(ClientEvent::Terminate) => return Ok(()),
+            Ok(ClientEvent::Suspend) => {
+                terminal.leave();
+                // SIGSTOP cannot be caught or blocked, so this really stops;
+                // SIGCONT then arrives as Resume.
+                let _ = nix::sys::signal::raise(Signal::SIGSTOP);
+            }
+            Ok(ClientEvent::Resume) => {
+                terminal.reenter()?;
+                // Whatever ran in the meantime drew over the screen, and the
+                // terminal may have been resized: a resize, even to the same
+                // size, makes the daemon repaint everything.
+                let (cols, rows) = terminal_size()?;
+                write_message(&mut stream, &ClientMessage::Resize { cols, rows })?
+            }
             Ok(ClientEvent::Terminal(_)) => {}
             Ok(ClientEvent::TerminalError(error)) => bail!("terminal input: {error}"),
         }
@@ -223,6 +284,56 @@ fn truecolor_from(colorterm: Option<&OsStr>, term: Option<&OsStr>) -> bool {
     term.and_then(OsStr::to_str).is_some_and(|term| {
         term == "xterm-kitty" || term.contains("direct") || term.contains("truecolor")
     })
+}
+
+/// Whether the terminal draws curly, dotted and dashed underlines and SGR 58
+/// underline colours. Only terminals known to are sent them: to any other,
+/// the colour's parameters read as unrelated attributes. `var` reads the
+/// environment.
+fn styled_underlines_from(var: impl Fn(&str) -> Option<String>) -> bool {
+    // A client inside a mux pane draws into mux, which understands them and
+    // passes them on as its own client's terminal allows.
+    if var("MUX").is_some_and(|value| !value.is_empty()) {
+        return true;
+    }
+    let term = var("TERM").unwrap_or_default();
+    if [
+        "kitty",
+        "wezterm",
+        "foot",
+        "ghostty",
+        "alacritty",
+        "contour",
+        "rio",
+    ]
+    .iter()
+    .any(|name| term.contains(name))
+    {
+        return true;
+    }
+    if var("TERM_PROGRAM").is_some_and(|program| {
+        matches!(
+            program.as_str(),
+            "WezTerm" | "ghostty" | "iTerm.app" | "vscode" | "rio"
+        )
+    }) {
+        return true;
+    }
+    if [
+        "KITTY_WINDOW_ID",
+        "WEZTERM_EXECUTABLE",
+        "GHOSTTY_RESOURCES_DIR",
+        "ALACRITTY_WINDOW_ID",
+    ]
+    .iter()
+    .any(|name| var(name).is_some())
+    {
+        return true;
+    }
+    // VTE (GNOME Terminal, Tilix, ...) has had both since 0.52.
+    var("VTE_VERSION")
+        .and_then(|version| version.parse::<u32>().ok())
+        .is_some_and(|version| version >= 5200)
 }
 
 /// Connects to a daemon that is already running. Unlike attaching, a one-shot
@@ -382,6 +493,19 @@ fn convert_key(code: CrosstermKeyCode, modifiers: KeyModifiers) -> Option<Key> {
             modifier_bits &= !(CTRL | SHIFT);
             KeyCode::Escape
         }
+        // A terminal sends 0x1c through 0x1f for Ctrl-\, Ctrl-], Ctrl-^ and
+        // Ctrl-_ (or Ctrl-/), and crossterm names those bytes Ctrl-4 through
+        // Ctrl-7 after the digits that also produce them on a US keyboard. The
+        // daemon encodes the key it is given, so give it the one the byte means.
+        CrosstermKeyCode::Char(digit @ '4'..='7') if modifier_bits & CTRL != 0 => {
+            modifier_bits &= !SHIFT;
+            KeyCode::Char(match digit {
+                '4' => '\\',
+                '5' => ']',
+                '6' => '^',
+                _ => '_',
+            })
+        }
         CrosstermKeyCode::Char(mut character) => {
             if modifier_bits & (ALT | CTRL) != 0
                 && modifier_bits & SHIFT != 0
@@ -451,31 +575,71 @@ fn convert_mouse(event: MouseEvent) -> Option<Mouse> {
     })
 }
 
+/// The signals the client handles itself rather than dying of.
+fn client_signals() -> SigSet {
+    let mut signals = SigSet::empty();
+    for signal in [
+        Signal::SIGTERM,
+        Signal::SIGHUP,
+        Signal::SIGINT,
+        Signal::SIGQUIT,
+        Signal::SIGTSTP,
+        Signal::SIGCONT,
+    ] {
+        signals.add(signal);
+    }
+    signals
+}
+
+/// The terminal set up for mux, and put back when the client ends or stops.
 struct TerminalGuard {
     mouse: bool,
+    entered: bool,
 }
 
 impl TerminalGuard {
     fn enter(mouse: bool) -> Result<Self> {
-        enable_raw_mode()?;
-        let guard = Self { mouse };
-        execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste, Hide)?;
-        if mouse {
-            execute!(stdout(), EnableMouseCapture)?;
-        }
+        let mut guard = Self {
+            mouse,
+            entered: false,
+        };
+        guard.reenter()?;
         Ok(guard)
     }
-}
 
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
+    fn reenter(&mut self) -> Result<()> {
+        enable_raw_mode()?;
+        self.entered = true;
+        execute!(
+            stdout(),
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            EnableFocusChange,
+            Hide
+        )?;
+        // Every frame positions its own text; autowrap could only ever make a
+        // glyph at the right edge wrap or scroll the screen.
+        stdout().write_all(b"\x1b[?7l")?;
+        stdout().flush()?;
+        if self.mouse {
+            execute!(stdout(), EnableMouseCapture)?;
+        }
+        Ok(())
+    }
+
+    fn leave(&mut self) {
+        if !std::mem::take(&mut self.entered) {
+            return;
+        }
         if self.mouse {
             let _ = execute!(stdout(), DisableMouseCapture);
         }
+        let _ = stdout().write_all(b"\x1b[?7h");
         let _ = execute!(
             stdout(),
             SetCursorStyle::DefaultUserShape,
             Show,
+            DisableFocusChange,
             DisableBracketedPaste,
             LeaveAlternateScreen
         );
@@ -483,9 +647,58 @@ impl Drop for TerminalGuard {
     }
 }
 
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        self.leave();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_digits_from_crossterm_are_the_punctuation_that_sent_them() {
+        let control =
+            |character| convert_key(CrosstermKeyCode::Char(character), KeyModifiers::CONTROL);
+        for (digit, meant) in [('4', '\\'), ('5', ']'), ('6', '^'), ('7', '_')] {
+            assert_eq!(
+                control(digit),
+                Some(Key {
+                    code: KeyCode::Char(meant),
+                    modifiers: CTRL,
+                }),
+                "Ctrl-{digit}"
+            );
+        }
+    }
+
+    #[test]
+    fn styled_underlines_are_detected_only_for_terminals_known_to_draw_them() {
+        let with = |pairs: &[(&str, &str)]| {
+            let pairs: Vec<(String, String)> = pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect();
+            styled_underlines_from(move |name| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.clone())
+            })
+        };
+        assert!(!with(&[("TERM", "xterm-256color")]));
+        assert!(!with(&[("TERM", "screen-256color"), ("TMUX", "/tmp/x")]));
+        assert!(!with(&[("TERM_PROGRAM", "Apple_Terminal")]));
+        assert!(!with(&[("VTE_VERSION", "5000")]));
+        assert!(with(&[("TERM", "xterm-kitty")]));
+        assert!(with(&[
+            ("TERM", "xterm-256color"),
+            ("TERM_PROGRAM", "WezTerm")
+        ]));
+        assert!(with(&[("TERM", "xterm-256color"), ("VTE_VERSION", "7600")]));
+        assert!(with(&[("MUX", "/run/user/1/mux.sock")]));
+    }
 
     #[test]
     fn shifted_alt_letters_are_canonicalized_for_bindings() {

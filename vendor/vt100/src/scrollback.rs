@@ -165,6 +165,26 @@ impl Scrollback {
         }
     }
 
+    /// Drops every row, keeping the backing file for rows to come.
+    pub(crate) fn clear(&mut self) {
+        self.blocks.clear();
+        self.tail.clear();
+        self.len = 0;
+    }
+
+    /// Takes the newest row back out, as a terminal growing taller pulls
+    /// history back onto the screen.
+    pub(crate) fn pop_back(&mut self) -> Option<crate::row::Row> {
+        if self.tail.is_empty() {
+            let block = self.blocks.pop_back()?;
+            let first = block.first;
+            self.tail = block.into_rows().into_iter().skip(first).collect();
+        }
+        let row = self.tail.pop()?;
+        self.len -= 1;
+        Some(row)
+    }
+
     pub(crate) fn iter(&self) -> Iter<'_> {
         Iter {
             scrollback: self,
@@ -327,7 +347,10 @@ impl StoredBytes {
                     let count = allocation
                         .allocator
                         .file
-                        .read_at(&mut bytes[read..], allocation.offset + read as u64)
+                        .read_at(
+                            &mut bytes[read..],
+                            allocation.offset + read as u64,
+                        )
                         .expect("read internal scrollback block");
                     assert!(count > 0, "internal scrollback file ended early");
                     read += count;
@@ -394,9 +417,10 @@ impl SpillWriter {
             allocation,
             pending_bytes: self.pending_bytes.clone(),
         };
-        if let Err(TrySendError::Full(SpillCommand::Write(_))
-            | TrySendError::Disconnected(SpillCommand::Write(_))) =
-            self.sender.try_send(SpillCommand::Write(job))
+        if let Err(
+            TrySendError::Full(SpillCommand::Write(_))
+            | TrySendError::Disconnected(SpillCommand::Write(_)),
+        ) = self.sender.try_send(SpillCommand::Write(job))
         {
             *storage.backing.write().expect("lock scrollback storage") = Backing::Heap(bytes);
             self.pending_bytes.fetch_sub(len, Ordering::Relaxed);

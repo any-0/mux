@@ -91,6 +91,29 @@ do not sample process icons, and the daemon sleeps when no work is pending.
 mux sends exact colors. mux sends the nearest color of the 256-color palette to a
 client without 24-bit color. mux reads `COLORTERM` and `TERM` to find out.
 
+The client tells the daemon what its terminal supports. mux sends curly
+underlines and underline colors only to a terminal that draws them. Other
+terminals get a plain underline. The configuration can override each answer.
+
+Terminals do not agree on the width of each character. After a character of
+uncertain width, mux moves the cursor to the next cell explicitly. Thus one
+wrong width does not move the rest of the line. mux turns autowrap off in the
+terminal of each client. Thus a character at the right edge cannot scroll the
+screen.
+
+A resize of a client makes the next frame a full repaint. This is also true for a
+resize back to the same size, because the terminal can crop its screen in
+between.
+
+The client reads frames only as fast as its terminal takes them. If the terminal
+stops, the queue of the daemon for that client fills. The daemon then skips
+frames and paints the full screen when the client reads again. The daemon does
+not disconnect a slow client.
+
+A panic while the daemon handles one event becomes an error message on the
+screen. A panic while the daemon paints one client detaches that client. In both
+cases the shells continue.
+
 ## The source files
 
 | File | Content |

@@ -108,6 +108,7 @@ impl Server {
                 self.select_window(id, number as usize)?;
             }
             MuxCommand::EnterVim => self.enter_vim(id),
+            MuxCommand::RefreshClient => self.refresh_client(id),
             MuxCommand::SetTheme(theme) => {
                 self.theme = theme;
                 for client in self

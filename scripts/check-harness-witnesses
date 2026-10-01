@@ -1,0 +1,53 @@
+#!/bin/sh
+# Show that the harness's end-to-end tests catch what they were written for:
+# each witness must fail against the baseline's binary and pass against the
+# current one. A witness that passes on the baseline proves nothing.
+# Usage: scripts/check-harness-witnesses BASELINE-COMMIT
+set -eu
+
+repository=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repository"
+baseline=$(git rev-parse --verify --end-of-options "${1:?supply the baseline commit}^{commit}")
+directory=$(mktemp -d "${TMPDIR:-/tmp}/mux-harness-witness.XXXXXX")
+cleanup() {
+    rm -rf "$directory"
+}
+trap cleanup 0 HUP INT TERM
+
+git archive "$baseline" | tar -x -C "$directory"
+(cd "$directory" && CARGO_TARGET_DIR="$directory/target" cargo build --release --locked)
+cargo build --release --locked
+
+cd "$repository/harness"
+cargo test --release --locked --no-run
+for witness in \
+    e2e_render:a_focused_pane_shows_exactly_what_its_program_drew \
+    e2e_render:a_resize_that_returns_to_the_same_size_repaints_everything \
+    e2e_render:a_terminal_that_disagrees_about_widths_stays_aligned \
+    e2e_render:a_long_stall_under_continuous_output_neither_bloats_nor_lags_the_client \
+    e2e_input:keys_reach_the_pane_as_the_terminal_sent_them \
+    e2e_features:splitting_keeps_the_prompt_and_the_newest_output_in_view \
+    e2e_features:styled_underlines_are_only_sent_to_terminals_that_draw_them \
+    e2e_features:programs_that_ask_are_told_about_focus; do
+    suite=${witness%%:*}
+    name=${witness#*:}
+    log="$directory/$name.log"
+    if MUX_BIN="$directory/target/release/mux" \
+        cargo test --release --locked --test "$suite" "$name" -- --exact > "$log" 2>&1; then
+        cat "$log"
+        echo "Harness witness unexpectedly passed on $baseline: $name" >&2
+        exit 1
+    fi
+    if ! grep -F 'test result: FAILED.' "$log" >/dev/null; then
+        cat "$log"
+        echo "Harness witness did not reach a failing test on $baseline: $name" >&2
+        exit 1
+    fi
+    if ! cargo test --release --locked --test "$suite" "$name" -- --exact > "$log" 2>&1 \
+        || ! grep -F 'test result: ok. 1 passed' "$log" >/dev/null; then
+        cat "$log"
+        echo "Harness witness does not pass on the current build: $name" >&2
+        exit 1
+    fi
+    echo "witness ok: $name"
+done

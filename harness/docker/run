@@ -1,0 +1,23 @@
+#!/bin/sh
+# Runs mux's test suite and the harness in a Linux container.
+# Usage: harness/docker/run [cargo test arguments for the harness, e.g. --test e2e_apps]
+set -eu
+repository=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+image=mux-harness:linux
+docker build --quiet --tag "$image" "$repository/harness/docker" >/dev/null
+docker volume create mux-harness-target >/dev/null
+docker volume create mux-harness-registry >/dev/null
+docker run --rm --init \
+    --volume "$repository:/workspace" \
+    --volume mux-harness-target:/target \
+    --volume mux-harness-registry:/usr/local/cargo/registry \
+    --env CARGO_TARGET_DIR=/target \
+    --env MUX_BIN=/target/release/mux \
+    "$image" \
+    sh -c '
+        set -eu
+        cargo build --release --locked
+        cargo test --locked
+        cargo test --manifest-path vendor/vt100/Cargo.toml --locked --lib
+        cd harness && cargo test --release "$@"
+    ' sh "$@"

@@ -373,44 +373,13 @@ fn legacy_idle_prompt_correction(screen: &vt100::Screen) -> Option<Vec<u8>> {
     Some(correction)
 }
 
+/// Feeds a pane's output to its terminal emulator. Sequences split across
+/// reads are completed by the parser itself.
 pub(super) fn process_terminal_bytes<CB: vt100::Callbacks>(
     parser: &mut vt100::Parser<CB>,
-    prefix: &mut Vec<u8>,
     bytes: &[u8],
 ) {
-    prefix.extend_from_slice(bytes);
-    let mut output = Vec::with_capacity(prefix.len());
-    let mut consumed = 0;
-    while consumed < prefix.len() {
-        if prefix[consumed] != 0x1b {
-            output.push(prefix[consumed]);
-            consumed += 1;
-            continue;
-        }
-        let remaining = prefix.len() - consumed;
-        if remaining == 1 || (remaining == 2 && prefix[consumed + 1] == b'[') {
-            break;
-        }
-        if remaining >= 3 && prefix[consumed + 1] == b'[' {
-            match prefix[consumed + 2] {
-                b's' => {
-                    output.extend_from_slice(b"\x1b7");
-                    consumed += 3;
-                    continue;
-                }
-                b'u' => {
-                    output.extend_from_slice(b"\x1b8");
-                    consumed += 3;
-                    continue;
-                }
-                _ => {}
-            }
-        }
-        output.push(prefix[consumed]);
-        consumed += 1;
-    }
-    prefix.drain(..consumed);
-    parser.process(&output);
+    parser.process(bytes);
 }
 
 /// What a program running in a pane is told when it asks the terminal about
@@ -458,8 +427,10 @@ pub(super) fn terminal_key_bytes(key: &Key, application_cursor: bool) -> Vec<u8>
         bytes.push(0x1b);
     }
     match key.code {
-        KeyCode::Char(character) if key.modifiers & CTRL != 0 && character.is_ascii() => {
-            bytes.push((character.to_ascii_lowercase() as u8) & 0x1f);
+        KeyCode::Char(character)
+            if key.modifiers & CTRL != 0 && control_byte(character).is_some() =>
+        {
+            bytes.extend(control_byte(character));
         }
         KeyCode::Char(character) => {
             // Alt-Shift-a is looked up as a lowercase binding, so the shift
@@ -485,8 +456,12 @@ pub(super) fn terminal_key_bytes(key: &Key, application_cursor: bool) -> Vec<u8>
             .extend_from_slice(cursor_sequence(b'C', key.modifiers, application_cursor).as_bytes()),
         KeyCode::Left => bytes
             .extend_from_slice(cursor_sequence(b'D', key.modifiers, application_cursor).as_bytes()),
-        KeyCode::Home => bytes.extend_from_slice(modified_csi(b'H', key.modifiers).as_bytes()),
-        KeyCode::End => bytes.extend_from_slice(modified_csi(b'F', key.modifiers).as_bytes()),
+        // Home and End follow the cursor keys: SS3 in application cursor mode,
+        // which is what terminfo's khome and kend expect once curses sends smkx.
+        KeyCode::Home => bytes
+            .extend_from_slice(cursor_sequence(b'H', key.modifiers, application_cursor).as_bytes()),
+        KeyCode::End => bytes
+            .extend_from_slice(cursor_sequence(b'F', key.modifiers, application_cursor).as_bytes()),
         KeyCode::Delete => bytes.extend_from_slice(tilde_sequence(3, key.modifiers).as_bytes()),
         KeyCode::Insert => bytes.extend_from_slice(tilde_sequence(2, key.modifiers).as_bytes()),
         KeyCode::PageUp => bytes.extend_from_slice(tilde_sequence(5, key.modifiers).as_bytes()),
@@ -503,6 +478,22 @@ pub(super) fn terminal_key_bytes(key: &Key, application_cursor: bool) -> Vec<u8>
         }
     }
     bytes
+}
+
+/// The byte xterm sends for Ctrl and `character`, or `None` when Ctrl does
+/// nothing to it and the character is sent as is.
+fn control_byte(character: char) -> Option<u8> {
+    Some(match character {
+        'a'..='z' | 'A'..='Z' => (character as u8) & 0x1f,
+        '@' | ' ' | '2' | '`' => 0x00,
+        '[' | '3' | '{' => 0x1b,
+        '\\' | '4' | '|' => 0x1c,
+        ']' | '5' | '}' => 0x1d,
+        '^' | '6' | '~' => 0x1e,
+        '_' | '7' | '/' | '-' => 0x1f,
+        '8' | '?' => 0x7f,
+        _ => return None,
+    })
 }
 
 fn cursor_sequence(final_byte: u8, modifiers: u8, application_cursor: bool) -> String {
@@ -590,6 +581,37 @@ mod key_sequence_tests {
         assert_eq!(
             terminal_key_bytes(&key(KeyCode::PageDown, ALT), false),
             b"\x1b[6;3~"
+        );
+    }
+
+    #[test]
+    fn control_keys_use_the_bytes_xterm_sends() {
+        let ctrl = |character| terminal_key_bytes(&key(KeyCode::Char(character), CTRL), false);
+        assert_eq!(ctrl('a'), b"\x01");
+        assert_eq!(ctrl(' '), b"\x00");
+        assert_eq!(ctrl('\\'), b"\x1c");
+        assert_eq!(ctrl(']'), b"\x1d");
+        assert_eq!(ctrl('^'), b"\x1e");
+        assert_eq!(ctrl('_'), b"\x1f");
+        assert_eq!(ctrl('/'), b"\x1f");
+        assert_eq!(ctrl('2'), b"\x00");
+        assert_eq!(ctrl('8'), b"\x7f");
+        // Ctrl does nothing to characters it has no code for.
+        assert_eq!(ctrl('1'), b"1");
+        assert_eq!(
+            terminal_key_bytes(&key(KeyCode::Char(']'), CTRL | ALT), false),
+            b"\x1b\x1d"
+        );
+    }
+
+    #[test]
+    fn home_and_end_follow_application_cursor_mode() {
+        assert_eq!(terminal_key_bytes(&key(KeyCode::Home, 0), false), b"\x1b[H");
+        assert_eq!(terminal_key_bytes(&key(KeyCode::Home, 0), true), b"\x1bOH");
+        assert_eq!(terminal_key_bytes(&key(KeyCode::End, 0), true), b"\x1bOF");
+        assert_eq!(
+            terminal_key_bytes(&key(KeyCode::End, SHIFT), true),
+            b"\x1b[1;2F"
         );
     }
 }

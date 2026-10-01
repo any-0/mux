@@ -109,6 +109,7 @@ pub enum Intensity {
     Normal,
     Bold,
     Dim,
+    BoldDim,
 }
 
 #[derive(Default, Debug)]
@@ -121,6 +122,10 @@ pub struct Attrs {
     italic: Option<bool>,
     underline: Option<crate::attrs::UnderlineStyle>,
     inverse: Option<bool>,
+    blink: Option<bool>,
+    hidden: Option<bool>,
+    strikethrough: Option<bool>,
+    overline: Option<bool>,
 }
 
 impl Attrs {
@@ -149,13 +154,36 @@ impl Attrs {
         self
     }
 
-    pub fn underline(mut self, underline: crate::attrs::UnderlineStyle) -> Self {
+    pub fn underline(
+        mut self,
+        underline: crate::attrs::UnderlineStyle,
+    ) -> Self {
         self.underline = Some(underline);
         self
     }
 
     pub fn inverse(mut self, inverse: bool) -> Self {
         self.inverse = Some(inverse);
+        self
+    }
+
+    pub fn blink(mut self, blink: bool) -> Self {
+        self.blink = Some(blink);
+        self
+    }
+
+    pub fn hidden(mut self, hidden: bool) -> Self {
+        self.hidden = Some(hidden);
+        self
+    }
+
+    pub fn strikethrough(mut self, strikethrough: bool) -> Self {
+        self.strikethrough = Some(strikethrough);
+        self
+    }
+
+    pub fn overline(mut self, overline: bool) -> Self {
+        self.overline = Some(overline);
         self
     }
 }
@@ -171,6 +199,10 @@ impl BufWrite for Attrs {
             && self.italic.is_none()
             && self.underline.is_none()
             && self.inverse.is_none()
+            && self.blink.is_none()
+            && self.hidden.is_none()
+            && self.strikethrough.is_none()
+            && self.overline.is_none()
         {
             return;
         }
@@ -261,9 +293,21 @@ impl BufWrite for Attrs {
 
         if let Some(intensity) = self.intensity {
             match intensity {
+                // Bold and faint are independent, so each state is written
+                // from a clean slate.
                 Intensity::Normal => write_param!(22),
-                Intensity::Bold => write_param!(1),
-                Intensity::Dim => write_param!(2),
+                Intensity::Bold => {
+                    write_param!(22);
+                    write_param!(1);
+                }
+                Intensity::Dim => {
+                    write_param!(22);
+                    write_param!(2);
+                }
+                Intensity::BoldDim => {
+                    write_param!(1);
+                    write_param!(2);
+                }
             }
         }
 
@@ -296,6 +340,17 @@ impl BufWrite for Attrs {
                 write_param!(7);
             } else {
                 write_param!(27);
+            }
+        }
+
+        for (value, on, off) in [
+            (self.blink, 5, 25),
+            (self.hidden, 8, 28),
+            (self.strikethrough, 9, 29),
+            (self.overline, 53, 55),
+        ] {
+            if let Some(value) = value {
+                write_param!(if value { on } else { off });
             }
         }
 

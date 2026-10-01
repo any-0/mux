@@ -123,3 +123,30 @@ by one row's format (at most 65535 cells), not the declared total size.
 The style persistence oracle also checks double, dotted and dashed underline,
 RGB foreground/background/underline colors, bold, dim, italic, inverse and
 resets; output appended after compaction inherits the saved active attributes.
+
+## Emulation, drawing and input (harness)
+
+`harness/` drives the real binary through pseudo-terminals and reads what the
+client writes with an independent emulator (alacritty's). Its differential
+fuzzer compares vt100 with that emulator on random streams of the sequences real
+programs send; its end-to-end suites compare what a terminal attached to mux
+shows with what the program drew, and with a fresh client's full paint. See
+[`harness/README.md`](../harness/README.md). `scripts/check-harness-witnesses`
+confirms the end-to-end witnesses fail on the build before these fixes.
+
+| Failure | Consequence | Test |
+| --- | --- | --- |
+| DEC Special Graphics (`ESC ( 0`), REP, IRM, tab stops, IND/NEL, DECSTR, ED 3 and SGR 5/8/9/21/53 were not implemented | curses borders drawn as `lqqk`; `rep` (used by ncurses on Linux) lost repeated characters; insert mode overwrote; strikethrough and friends vanished | `emulator_diff`, `e2e_apps::dialog_boxes_look_the_same`, `emulation_tests` |
+| Cursor movement kept a pending wrap; VPA ignored origin mode; RI above the region scrolled it; an invalid DECSTBM reset the region; margins and cursor were per buffer | text printed one row low or into the wrong region | `emulator_diff`, `emulation_tests` |
+| Bold and faint replaced each other; scrolled-in lines ignored the background; a split wide character's other half took the new character's colours | wrong colours and weights | `emulator_diff`, `emulation_tests` |
+| `CSI 65535 @` inserted one cell at a time | the daemon froze for seconds, with every pane | `panic_fuzz::no_sequence_stalls_the_emulator` |
+| Wide characters at one column: `col - 1` and `cols - 2` underflowed; a combining mark could attach to a continuation | daemon panic (every shell killed); history that no longer restores | `panic_fuzz::nothing_panics_the_emulator`, `emulation_tests::one_column_screens_never_panic` |
+| Shrinking a pane dropped its bottom rows; widths were cropped, not rewrapped; a same-size resize cleared wrap flags | splitting lost the prompt and newest output; text lost on narrow-then-wide | `resize_invariants`, `e2e_features::splitting_keeps_the_prompt_and_the_newest_output_in_view` |
+| RIS discarded the scrollback and its backing file | `reset` in a pane erased its history | `emulation_tests::a_full_reset_keeps_the_scrollback` |
+| A resize back to the same size before the next frame was painted incrementally | the terminal kept whatever it cropped or cleared | `e2e_render::a_resize_that_returns_to_the_same_size_repaints_everything` |
+| The client queued every frame while its terminal was stalled, and the daemon disconnected clients slower than 5 s | memory growing ~250 KiB/s and a replay of stale frames after an SSH hiccup; disconnects | `e2e_render::a_long_stall_under_continuous_output_neither_bloats_nor_lags_the_client` |
+| A character the terminal drew wider than mux shifted the rest of its run, and could scroll the screen at the bottom right | misaligned lines; every later incremental frame wrong | `e2e_render::a_terminal_that_disagrees_about_widths_stays_aligned` |
+| Ctrl-\\, Ctrl-], Ctrl-^ and Ctrl-_ reached panes as Ctrl-T, Ctrl-U, Ctrl-V and Ctrl-W; Home/End ignored application cursor mode | wrong keys (SIGQUIT and undo broken, Ctrl-V swallowed input) | `e2e_input::keys_reach_the_pane_as_the_terminal_sent_them` |
+| Styled underlines and SGR 58 went to every terminal, in the semicolon form | faint text and stray attributes on terminals without SGR 58 | `e2e_features::styled_underlines_are_only_sent_to_terminals_that_draw_them` |
+| Focus events were never forwarded | editors could not react to focus | `e2e_features::programs_that_ask_are_told_about_focus` |
+| Pasted text carrying `ESC [201~` ended a bracketed paste | the rest of the paste ran as typed input | `session_regression_tests::pasted_paste_delimiters_cannot_end_a_bracketed_paste_early` |

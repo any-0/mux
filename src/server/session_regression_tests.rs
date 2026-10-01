@@ -8,12 +8,8 @@ use std::{
 };
 
 use super::*;
-use crate::{
-    frame::ColorDepth,
-    protocol::{
-        ClientMessage, Hello, Mouse, MouseButton, MouseKind, MuxCommand, ServerMessage,
-        read_message,
-    },
+use crate::protocol::{
+    ClientMessage, Hello, Mouse, MouseButton, MouseKind, MuxCommand, ServerMessage, read_message,
 };
 
 struct Session {
@@ -38,7 +34,7 @@ impl Session {
         attached.session_id = Some(0);
         attached.rows = 12;
         attached.cols = 40;
-        attached.colors = ColorDepth::TrueColor;
+        attached.terminal = crate::frame::TerminalFeatures::FULL;
         server.sessions[0].windows[0].bell = None;
         server.resize_active(1).unwrap();
         client
@@ -162,7 +158,8 @@ impl Peer {
                     theme_directory: settings.theme_directory,
                     mouse: true,
                     bell_style: settings.bell_style,
-                    truecolor: true,
+                    terminal: crate::frame::TerminalFeatures::FULL,
+                    glyphs: crate::config::Glyphs::Font,
                     default_cursor_shape: settings.default_cursor_shape,
                 })),
             ))
@@ -310,8 +307,7 @@ fn every_torn_journal_boundary_replays_only_complete_records() {
     records.extend(encode_journal_record(JOURNAL_OUTPUT, b"\r\nSECOND").unwrap());
     for cut in 0..=records.len() {
         let mut parser = new_parser(7, 17);
-        let consumed =
-            replay_pane_journal(&mut parser, &mut Vec::new(), &records[..cut]).unwrap() as usize;
+        let consumed = replay_pane_journal(&mut parser, &records[..cut]).unwrap() as usize;
         let expected = if cut == records.len() {
             records.len()
         } else if cut >= second {
@@ -393,7 +389,7 @@ fn malformed_persisted_history_is_rejected_before_render_or_reflow() {
     huge[4..12].copy_from_slice(&u64::MAX.to_le_bytes());
     assert!(!parser.screen_mut().restore_history(&huge));
     let bad_journal = encode_journal_record(JOURNAL_HISTORY, &packed_row(&[0])).unwrap();
-    assert!(replay_pane_journal(&mut parser, &mut Vec::new(), bad_journal.as_slice()).is_err());
+    assert!(replay_pane_journal(&mut parser, bad_journal.as_slice()).is_err());
     parser.screen_mut().set_size(3, 2);
     parser.screen_mut().set_scrollback(1);
     assert!(parser.screen().contents().contains('A'));
@@ -452,7 +448,7 @@ fn generated_scrollback_keeps_text_and_styles_through_resize_and_compaction() {
         parser.screen_mut().set_size(3, cols);
         let records = compacted_journal_records(parser.screen_mut()).unwrap();
         let mut restored = new_parser(3, cols);
-        replay_pane_journal(&mut restored, &mut Vec::new(), records.as_slice()).unwrap();
+        replay_pane_journal(&mut restored, records.as_slice()).unwrap();
         let actual: Vec<_> = restored.screen().all_rows().cloned().collect();
         assert_eq!(
             text(&actual),
@@ -810,7 +806,7 @@ fn supported_style_transitions_and_active_attributes_survive_journal_compaction(
     parser.process(b"\x1b[1;3;7;38;2;12;34;56;48;2;65;43;21;58;2;9;8;7m\x1b[4:2mD\x1b[4:4mO\x1b[4:5mS\x1b[2;23;27mI\x1b[0mP\x1b[3;4:4;58;2;1;2;3m");
     let records = compacted_journal_records(parser.screen_mut()).unwrap();
     let mut restored = new_parser(4, 24);
-    replay_pane_journal(&mut restored, &mut Vec::new(), records.as_slice()).unwrap();
+    replay_pane_journal(&mut restored, records.as_slice()).unwrap();
     let screen = restored.screen();
     for (col, style) in [
         (0, vt100::UnderlineStyle::Double),
@@ -824,8 +820,10 @@ fn supported_style_transitions_and_active_attributes_survive_journal_compaction(
         assert_eq!(cell.underline_color(), vt100::Color::Rgb(9, 8, 7));
         assert_eq!(cell.underline_style(), style);
     }
+    // Faint adds to bold rather than replacing it, as in xterm; both have to
+    // survive compaction.
     let dim = screen.cell(0, 3).unwrap();
-    assert!(dim.dim() && !dim.bold() && !dim.italic() && !dim.inverse());
+    assert!(dim.dim() && dim.bold() && !dim.italic() && !dim.inverse());
     let plain = screen.cell(0, 4).unwrap();
     assert_eq!(plain.underline_style(), vt100::UnderlineStyle::None);
     assert_eq!(plain.fgcolor(), vt100::Color::Default);
@@ -840,4 +838,46 @@ fn supported_style_transitions_and_active_attributes_survive_journal_compaction(
         restored.screen().cell(0, 6).unwrap().underline_style(),
         vt100::UnderlineStyle::None
     );
+}
+
+#[test]
+fn pasted_paste_delimiters_cannot_end_a_bracketed_paste_early() {
+    let mut session = Session::new();
+    let setup = session.directory.join("paste-setup");
+    let captured = session.directory.join("paste-input");
+    fs::write(&setup, b"\x1b[?2004h\r\nPASTE-READY").unwrap();
+    let expected = b"\x1b[200~ab\ncd\x1b[201~";
+    session.pane().writer.send(format!("stty raw -echo; cat '{}'; dd bs=1 count={} of='{}' 2>/dev/null; stty -raw -echo; echo; echo PASTE-DONE\r", setup.display(), expected.len(), captured.display()).as_bytes()).unwrap();
+    session.wait_output("PASTE-READY");
+    session
+        .server
+        .handle_event(Event::Client(
+            1,
+            ClientMessage::Paste("a\x1b[201~b\ncd\x1b[200~".into()),
+        ))
+        .unwrap();
+    session.wait_output("PASTE-DONE");
+    assert_eq!(fs::read(&captured).unwrap(), expected);
+}
+
+#[test]
+fn a_resize_or_refresh_forgets_what_the_terminal_showed() {
+    let mut session = Session::new();
+    session.capture();
+    assert_eq!(session.server.clients[&1].frame.rows(), 12);
+    // Back to the same size: the terminal may still have cropped or cleared
+    // its screen in between, so the next frame is a full repaint.
+    session
+        .server
+        .handle_event(Event::Client(
+            1,
+            ClientMessage::Resize { rows: 12, cols: 40 },
+        ))
+        .unwrap();
+    assert_eq!(session.server.clients[&1].frame.rows(), 0);
+    session.capture();
+    assert_eq!(session.server.clients[&1].frame.rows(), 12);
+    session.command(MuxCommand::RefreshClient);
+    assert_eq!(session.server.clients[&1].frame.rows(), 0);
+    assert!(session.capture().contents().contains("READY"));
 }

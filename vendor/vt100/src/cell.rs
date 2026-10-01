@@ -42,7 +42,11 @@ impl Cell {
         self.len
     }
 
-    pub(crate) fn from_compact(contents: &[u8], len: u8, attrs: crate::attrs::Attrs) -> Self {
+    pub(crate) fn from_compact(
+        contents: &[u8],
+        len: u8,
+        attrs: crate::attrs::Attrs,
+    ) -> Self {
         let content_len = usize::from(len & LEN_BITS);
         let mut compact = Self {
             contents: [0; CONTENT_BYTES],
@@ -202,5 +206,29 @@ impl Cell {
     #[must_use]
     pub fn inverse(&self) -> bool {
         self.attrs.inverse()
+    }
+
+    /// Returns whether the cell is struck through (SGR 9).
+    #[must_use]
+    pub fn strikethrough(&self) -> bool {
+        self.attrs.strikethrough()
+    }
+
+    /// Returns whether the cell blinks (SGR 5 or 6).
+    #[must_use]
+    pub fn blink(&self) -> bool {
+        self.attrs.blink()
+    }
+
+    /// Returns whether the cell is concealed (SGR 8).
+    #[must_use]
+    pub fn hidden(&self) -> bool {
+        self.attrs.hidden()
+    }
+
+    /// Returns whether the cell is overlined (SGR 53).
+    #[must_use]
+    pub fn overline(&self) -> bool {
+        self.attrs.overline()
     }
 }

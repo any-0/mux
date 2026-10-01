@@ -54,6 +54,32 @@ a repeated frame costs nothing. Repaints are coalesced into at most one frame
 every 8 ms, and the daemon blocks until an event or the next process sample,
 bell animation, or expiring message is due.
 
+Terminals disagree about how wide some characters are: emoji, East Asian
+ambiguous characters such as box drawing, and characters followed by a
+variation selector. After drawing any of those, mux positions the next cell
+explicitly, so a terminal that draws one wider than mux expects cannot shift
+the rest of the line. Autowrap is off while a client is attached, so nothing
+drawn at the right edge can wrap or scroll the screen. Any resize, even back to
+the same size, repaints the whole screen, since terminals crop or clear their
+contents when resized; `mux refresh-client` (or `Alt-a r`) does the same on
+demand.
+
+A terminal that stops reading (a frozen SSH link, output paused while text is
+selected) is never disconnected for it. Its client stops taking frames, the
+daemon skips the ones it misses, and once the terminal reads again it gets
+the current screen rather than a replay of everything that happened.
+
+Curly, dotted and dashed underlines and underline colours are only sent to
+terminals known to draw them (kitty, WezTerm, foot, Ghostty, alacritty, iTerm2,
+VS Code, VTE-based terminals, and mux itself); every other terminal gets a plain
+underline instead of sequences it would misread. Programs that ask for focus
+reports (mode 1004) are told when the terminal gains or loses focus and when mux
+moves to or from their pane.
+
+Resizing a pane rewraps its text the way tmux does: lines rejoin when the pane
+widens, a pane that gets shorter sends its oldest rows into the scrollback
+rather than losing its newest ones, and a pane that grows takes them back.
+
 ## Documentation
 
 - [`docs/cli.md`](docs/cli.md) — every command, argument, and alias
@@ -252,6 +278,7 @@ the screen, from the moment leader is pressed:
 | `b` | Jump to the first pending bell, including its session and pane |
 | `x` | Kill the active pane after confirmation |
 | `d` | Detach this client while its sessions keep running |
+| `r` | Repaint the whole screen, for when something else drew over it |
 | `Alt-a` | Send the leader key to the active pane |
 | Arrow keys | Focus the pane in that direction |
 | `Ctrl` + arrow keys | Move the divider next to the active pane; leader stays held so this repeats |
@@ -363,6 +390,9 @@ theme_directory = "/home/j/.config/theme/themes"
 mouse = false
 bell_style = "shimmer"
 default_cursor_shape = "bar"
+# truecolor = true
+# styled_underlines = true
+glyphs = "font"
 
 [normal]
 "Alt-s" = "unbind"
@@ -384,6 +414,13 @@ default_cursor_shape = "bar"
 "g" = "theme-select-1"
 ```
 
+`truecolor` and `styled_underlines` override what the client works out about
+its terminal from `TERM`, `COLORTERM`, `TERM_PROGRAM` and similar variables,
+for a terminal that is capable but does not say so (or says so wrongly). Left
+out, they are detected. `glyphs = "text"` draws the sidebar's separator and
+program icons with box drawing and short labels, for fonts without the
+private-use glyphs mux is designed with; the default is `"font"`.
+
 Key names use character keys or `Enter`, `Escape`, `Backspace`, `Tab`, `Up`,
 `Down`, `Left`, `Right`, `Home`, `End`, `Delete`, `Insert`, `PageUp`,
 `PageDown`, or `F1` through `F12`. Prefix modifiers with `Ctrl-`, `Alt-`, or `Shift-`. Character case
@@ -391,14 +428,14 @@ is meaningful: `w` and `W` are distinct.
 
 Available normal actions are `session-tree`, `new-window`, `new-session`,
 `set-session-root`, `select-window-1` through `select-window-9`, `enter-vim`,
-`focus-mode`, `leader`, and `detach`.
+`focus-mode`, `leader`, `detach`, and `refresh-client`.
 
 Available leader actions are `rename-session`, `rename-window`,
 `split-horizontal`, `split-vertical`, `focus-pane-left`, `focus-pane-down`,
 `focus-pane-up`, `focus-pane-right`, `resize-pane-left`, `resize-pane-down`,
 `resize-pane-up`, `resize-pane-right`, `break-pane`,
 `swap-window-left`, `swap-window-right`, `jump-to-bell`, `kill-pane`, `detach`,
-`leader-cancel`, and `theme-picker`.
+`refresh-client`, `leader-cancel`, and `theme-picker`.
 
 Available tree actions are `tree-down`, `tree-up`, `tree-choose`, `tree-cancel`,
 `tree-expand`, `tree-collapse`, `tree-toggle`, `kill-session`, and

@@ -71,7 +71,11 @@ impl CompactCells {
             .flat_map(|attrs| attrs.iter())
             .find(|span| col >= span.start && col < span.end)
             .map_or_else(crate::attrs::Attrs::default, |span| span.attrs);
-        crate::Cell::from_compact(&self.data[shape_len + start..shape_len + end], len, attrs)
+        crate::Cell::from_compact(
+            &self.data[shape_len + start..shape_len + end],
+            len,
+            attrs,
+        )
     }
 }
 
@@ -84,7 +88,7 @@ impl Row {
         }
     }
 
-    fn cols(&self) -> u16 {
+    pub(crate) fn cols(&self) -> u16 {
         self.cols
     }
 
@@ -198,7 +202,11 @@ impl Row {
         (cells, wrapped)
     }
 
-    pub(crate) fn from_reflow_cells(mut cells: Vec<crate::Cell>, cols: u16, wrapped: bool) -> Self {
+    pub(crate) fn from_reflow_cells(
+        mut cells: Vec<crate::Cell>,
+        cols: u16,
+        wrapped: bool,
+    ) -> Self {
         cells.resize(usize::from(cols), crate::Cell::new());
         let mut row = Self {
             cells: RowCells::Active(cells),
@@ -209,17 +217,36 @@ impl Row {
         row
     }
 
+    /// Blanks any half of a wide character whose other half is not beside
+    /// it. A row too narrow for a wide character (one column) can be left
+    /// holding one by a resize; nothing may ever see such a half.
+    ///
+    /// A one-column row keeps them: it stores a wide character as its two
+    /// halves on consecutive rows, so that widening joins them again.
+    pub(crate) fn repair_wide(&mut self) {
+        if self.cols > 1 {
+            repair_wide_cells(self.active_cells());
+        }
+    }
+
     pub(crate) fn clear_wide(&mut self, col: u16) {
-        let cell = self.get(col).unwrap();
+        let Some(cell) = self.get(col) else {
+            return;
+        };
+        // A one-column row holds only one half of a wide character, with the
+        // other on the row before or after it.
         let other_col = if cell.is_wide() {
-            col + 1
+            col.checked_add(1)
         } else if cell.is_wide_continuation() {
-            col - 1
+            col.checked_sub(1)
         } else {
             return;
         };
-        let other = &mut self.active_cells()[usize::from(other_col)];
-        other.clear(*other.attrs());
+        if let Some(other) = other_col
+            .and_then(|col| self.active_cells().get_mut(usize::from(col)))
+        {
+            other.clear(*other.attrs());
+        }
     }
 
     pub(crate) fn compact(&mut self) {
@@ -249,10 +276,9 @@ impl Row {
             if *cell.attrs() == crate::attrs::Attrs::default() {
                 continue;
             }
-            if attrs
-                .last()
-                .is_none_or(|span: &AttrSpan| span.end != index || span.attrs != *cell.attrs())
-            {
+            if attrs.last().is_none_or(|span: &AttrSpan| {
+                span.end != index || span.attrs != *cell.attrs()
+            }) {
                 attrs.push(AttrSpan {
                     start: index,
                     end: index + 1,
@@ -275,7 +301,9 @@ impl Row {
 
     pub(crate) fn heap_bytes(&self) -> usize {
         match &self.cells {
-            RowCells::Active(cells) => cells.capacity() * std::mem::size_of::<crate::Cell>(),
+            RowCells::Active(cells) => {
+                cells.capacity() * std::mem::size_of::<crate::Cell>()
+            }
             RowCells::Compact(cells) => {
                 cells.data.len()
                     + cells.attrs.as_ref().map_or(0, |attrs| {
@@ -290,23 +318,39 @@ impl Row {
         let RowCells::Compact(cells) = &self.cells else {
             unreachable!("only compact rows enter scrollback blocks")
         };
+        // Spans that carry the extended rendition byte are one byte longer.
+        // Rows that use none of it keep the original layout, so history
+        // written by older versions and history read by them stay compatible.
+        let extended = cells
+            .attrs
+            .iter()
+            .flat_map(|attrs| attrs.iter())
+            .any(|span| span.attrs.extra != 0 || span.attrs.mode & 3 == 3);
         output.extend_from_slice(&self.cols.to_le_bytes());
-        output.push(u8::from(self.wrapped));
+        output.push(
+            u8::from(self.wrapped)
+                | if extended { EXTENDED_SPANS } else { 0 },
+        );
         output.extend_from_slice(&cells.shape_len.to_le_bytes());
         output.extend_from_slice(&cells.cells.to_le_bytes());
         output.extend_from_slice(
             &u32::try_from(cells.data.len()).unwrap().to_le_bytes(),
         );
         output.extend_from_slice(
-            &u16::try_from(cells.attrs.as_ref().map_or(0, |attrs| attrs.len()))
-                .unwrap()
-                .to_le_bytes(),
+            &u16::try_from(
+                cells.attrs.as_ref().map_or(0, |attrs| attrs.len()),
+            )
+            .unwrap()
+            .to_le_bytes(),
         );
         output.extend_from_slice(&cells.data);
         for span in cells.attrs.iter().flat_map(|attrs| attrs.iter()) {
             output.extend_from_slice(&span.start.to_le_bytes());
             output.extend_from_slice(&span.end.to_le_bytes());
             encode_attrs(output, span.attrs);
+            if extended {
+                output.push(span.attrs.extra);
+            }
         }
     }
 
@@ -317,13 +361,20 @@ impl Row {
         let cols = u16::from_le_bytes(header[..2].try_into().ok()?);
         let shape_len = u32::from_le_bytes(header[3..7].try_into().ok()?) as usize;
         let cells = u16::from_le_bytes(header[7..9].try_into().ok()?);
-        let data_len = u32::from_le_bytes(header[9..13].try_into().ok()?) as usize;
-        let attrs_len = usize::from(u16::from_le_bytes(header[13..15].try_into().ok()?));
-        if cols == 0 || cells > cols || header[2] > 1 || shape_len % 2 != 0 {
+        let data_len =
+            u32::from_le_bytes(header[9..13].try_into().ok()?) as usize;
+        let attrs_len =
+            usize::from(u16::from_le_bytes(header[13..15].try_into().ok()?));
+        if cols == 0
+            || cells > cols
+            || header[2] & !(1 | EXTENDED_SPANS) != 0
+            || shape_len % 2 != 0
+        {
             return None;
         }
+        let span_len = span_length(header[2]);
         let data_end = 15usize.checked_add(data_len)?;
-        let end = data_end.checked_add(attrs_len.checked_mul(17)?)?;
+        let end = data_end.checked_add(attrs_len.checked_mul(span_len)?)?;
         let record = input.get(..end)?;
         let data = &record[15..data_end];
         let shape = data.get(..shape_len)?;
@@ -357,13 +408,18 @@ impl Row {
             return None;
         }
         let mut last_end = 0;
-        for span in record[data_end..].chunks_exact(17) {
+        for span in record[data_end..].chunks_exact(span_len) {
             let start = u16::from_le_bytes(span[..2].try_into().ok()?);
             let end = u16::from_le_bytes(span[2..4].try_into().ok()?);
             let mode = span[16];
-            if start < last_end || start >= end || end > cells
+            let extra = span.get(17).copied().unwrap_or(0);
+            if start < last_end
+                || start >= end
+                || end > cells
                 || [span[4], span[8], span[12]].iter().any(|tag| *tag > 2)
-                || mode & 3 == 3 || mode >> 5 > 5
+                || (mode & 3 == 3 && span_len == 17)
+                || mode >> 5 > 5
+                || extra & !crate::attrs::EXTRA_ALL != 0
             {
                 return None;
             }
@@ -374,7 +430,9 @@ impl Row {
 
     pub(crate) fn decode(input: &mut &[u8]) -> Self {
         let cols = read_u16(input);
-        let wrapped = take(input, 1)[0] != 0;
+        let flags = take(input, 1)[0];
+        let wrapped = flags & 1 != 0;
+        let extended = flags & EXTENDED_SPANS != 0;
         let shape_len = read_u32(input);
         let cells = read_u16(input);
         let data_len = usize::try_from(read_u32(input)).unwrap();
@@ -386,7 +444,13 @@ impl Row {
                 attrs.push(AttrSpan {
                     start: read_u16(input),
                     end: read_u16(input),
-                    attrs: decode_attrs(input),
+                    attrs: {
+                        let mut attrs = decode_attrs(input);
+                        if extended {
+                            attrs.extra = take(input, 1)[0];
+                        }
+                        attrs
+                    },
                 });
             }
             Box::new(attrs)
@@ -414,7 +478,13 @@ impl Row {
         cells
     }
 
-    pub(crate) fn write_contents(&self, contents: &mut String, start: u16, width: u16, wrapping: bool) {
+    pub(crate) fn write_contents(
+        &self,
+        contents: &mut String,
+        start: u16,
+        width: u16,
+        wrapping: bool,
+    ) {
         let mut prev_was_wide = false;
 
         let mut prev_col = start;
@@ -507,7 +577,10 @@ impl Row {
                     let new_pos = crate::grid::Pos { row, col: prev_col };
                     if wrapping && prev_pos.row + 1 == new_pos.row && prev_pos.col >= self.cols() {
                         if new_pos.col > 0 {
-                            contents.extend(" ".repeat(usize::from(new_pos.col)).as_bytes());
+                            contents.extend(
+                                " ".repeat(usize::from(new_pos.col))
+                                    .as_bytes(),
+                            );
                         } else {
                             contents.extend(b" ");
                             crate::term::Backspace.write_buf(contents);
@@ -556,7 +629,9 @@ impl Row {
             let new_pos = crate::grid::Pos { row, col: prev_col };
             if wrapping && prev_pos.row + 1 == new_pos.row && prev_pos.col >= self.cols() {
                 if new_pos.col > 0 {
-                    contents.extend(" ".repeat(usize::from(new_pos.col)).as_bytes());
+                    contents.extend(
+                        " ".repeat(usize::from(new_pos.col)).as_bytes(),
+                    );
                 } else {
                     contents.extend(b" ");
                     crate::term::Backspace.write_buf(contents);
@@ -646,7 +721,10 @@ impl Row {
                     let new_pos = crate::grid::Pos { row, col: prev_col };
                     if wrapping && prev_pos.row + 1 == new_pos.row && prev_pos.col >= self.cols() {
                         if new_pos.col > 0 {
-                            contents.extend(" ".repeat(usize::from(new_pos.col)).as_bytes());
+                            contents.extend(
+                                " ".repeat(usize::from(new_pos.col))
+                                    .as_bytes(),
+                            );
                         } else {
                             contents.extend(b" ");
                             crate::term::Backspace.write_buf(contents);
@@ -694,7 +772,9 @@ impl Row {
             let new_pos = crate::grid::Pos { row, col: prev_col };
             if wrapping && prev_pos.row + 1 == new_pos.row && prev_pos.col >= self.cols() {
                 if new_pos.col > 0 {
-                    contents.extend(" ".repeat(usize::from(new_pos.col)).as_bytes());
+                    contents.extend(
+                        " ".repeat(usize::from(new_pos.col)).as_bytes(),
+                    );
                 } else {
                     contents.extend(b" ");
                     crate::term::Backspace.write_buf(contents);
@@ -757,7 +837,9 @@ impl Iterator for Cells<'_> {
         }
         let cell = match &self.row.cells {
             RowCells::Active(cells) => cells[usize::from(self.col)].clone(),
-            RowCells::Compact(cells) if self.col >= cells.cells => crate::Cell::new(),
+            RowCells::Compact(cells) if self.col >= cells.cells => {
+                crate::Cell::new()
+            }
             RowCells::Compact(cells) => {
                 if self.run_remaining == 0 {
                     let shape = &cells.data[..usize::try_from(cells.shape_len).unwrap()];
@@ -774,7 +856,9 @@ impl Iterator for Cells<'_> {
                 let attrs = spans
                     .get(self.attr_index)
                     .filter(|span| self.col >= span.start)
-                    .map_or_else(crate::attrs::Attrs::default, |span| span.attrs);
+                    .map_or_else(crate::attrs::Attrs::default, |span| {
+                        span.attrs
+                    });
                 let cell = crate::Cell::from_compact(
                     &cells.data[usize::try_from(cells.shape_len).unwrap() + self.content_start
                         ..usize::try_from(cells.shape_len).unwrap() + content_end],
@@ -811,13 +895,31 @@ fn decode_attrs(input: &mut &[u8]) -> crate::attrs::Attrs {
         bgcolor: decode_color(input),
         underline_color: decode_color(input),
         mode: take(input, 1)[0],
+        extra: 0,
+    }
+}
+
+/// Set in a packed row's flag byte when its attribute spans carry the
+/// extended rendition byte.
+pub(crate) const EXTENDED_SPANS: u8 = 0b10;
+
+/// Bytes per attribute span for a packed row with these flags.
+pub(crate) fn span_length(flags: u8) -> usize {
+    if flags & EXTENDED_SPANS != 0 {
+        18
+    } else {
+        17
     }
 }
 
 fn encode_color(output: &mut Vec<u8>, color: crate::attrs::Color) {
     match color {
-        crate::attrs::Color::Default => output.extend_from_slice(&[0, 0, 0, 0]),
-        crate::attrs::Color::Idx(index) => output.extend_from_slice(&[1, index, 0, 0]),
+        crate::attrs::Color::Default => {
+            output.extend_from_slice(&[0, 0, 0, 0])
+        }
+        crate::attrs::Color::Idx(index) => {
+            output.extend_from_slice(&[1, index, 0, 0])
+        }
         crate::attrs::Color::Rgb(red, green, blue) => {
             output.extend_from_slice(&[2, red, green, blue]);
         }
@@ -846,4 +948,23 @@ fn take<'a>(input: &mut &'a [u8], len: usize) -> &'a [u8] {
     let (value, rest) = input.split_at(len);
     *input = rest;
     value
+}
+
+/// Blanks each half of a wide character whose other half is not beside it.
+pub(crate) fn repair_wide_cells(cells: &mut [crate::Cell]) {
+    for index in 0..cells.len() {
+        let orphan = if cells[index].is_wide_continuation() {
+            index == 0 || !cells[index - 1].is_wide()
+        } else if cells[index].is_wide() {
+            !cells
+                .get(index + 1)
+                .is_some_and(crate::Cell::is_wide_continuation)
+        } else {
+            false
+        };
+        if orphan {
+            let attrs = *cells[index].attrs();
+            cells[index].clear(attrs);
+        }
+    }
 }

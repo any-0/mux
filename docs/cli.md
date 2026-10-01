@@ -109,10 +109,16 @@ a top position or a bottom position.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `mux jump-to-bell` | None | Goes to the first pending bell |
+| `mux refresh-client` | None | Repaints the whole screen of the attached client |
 | `mux set-theme PATH` | Exactly one path | Applies the colors of that file |
 | `mux kill-server` | None | Stops the daemon and each of its panes |
 
-`mux stop` is an alias for `mux kill-server`.
+`mux stop` is an alias for `mux kill-server`, and `mux refresh` for `mux
+refresh-client`.
+
+`mux refresh-client` is for a screen that something other than mux has drawn
+over, such as a program writing to the terminal directly: mux forgets what the
+terminal shows and paints all of it again. `Alt-a r` does the same.
 
 ## Options
 
@@ -171,5 +177,6 @@ mux: already inside this mux; run `env -u MUX mux` to attach a second client any
 | `mux ls` | `mux list-sessions` |
 | `mux detach-client` | `mux detach` |
 | `mux stop` | `mux kill-server` |
+| `mux refresh` | `mux refresh-client` |
 | `mux resize-pane -Z` | `mux focus-mode` |
 | `mux split-window -v` | `mux split-window` |

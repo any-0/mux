@@ -95,7 +95,8 @@ fn hello(cwd: PathBuf) -> ClientMessage {
         theme_directory: settings.theme_directory,
         mouse: settings.mouse,
         bell_style: settings.bell_style,
-        truecolor: true,
+        terminal: crate::frame::TerminalFeatures::FULL,
+        glyphs: crate::config::Glyphs::Font,
         default_cursor_shape: settings.default_cursor_shape,
     }))
 }
@@ -240,12 +241,7 @@ fn real_pty_history_and_styles_survive_restart_and_a_corrupt_sibling() {
     let healthy = state.sessions[0].windows[1].panes[0].id;
     let healthy_path = state_home.join(format!("mux/pane-{healthy}.ansi"));
     let mut saved = super::new_parser(24, 80);
-    super::replay_pane_journal(
-        &mut saved,
-        &mut Vec::new(),
-        fs::File::open(&healthy_path).unwrap(),
-    )
-    .unwrap();
+    super::replay_pane_journal(&mut saved, fs::File::open(&healthy_path).unwrap()).unwrap();
     let (buffer, _) = super::snapshot_screen(saved.screen_mut());
     assert!(buffer.texts().any(|line| line.contains("HISTORY-00")));
 

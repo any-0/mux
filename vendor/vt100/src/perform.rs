@@ -48,14 +48,18 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
             11 => self.screen.vt(),
             12 => self.screen.ff(),
             13 => self.screen.cr(),
-            // we don't implement shift in/out alternate character sets, but
-            // it shouldn't count as an "error"
-            14 | 15 => {}
+            14 => self.screen.shift_out(),
+            15 => self.screen.shift_in(),
             _ => self.callbacks.unhandled_control(&mut self.screen, b),
         }
     }
 
     fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, b: u8) {
+        if let [slot @ (b'(' | b')')] = intermediates {
+            if self.screen.designate_charset(usize::from(*slot == b')'), b) {
+                return;
+            }
+        }
         if let Some(i) = intermediates.first() {
             self.callbacks.unhandled_escape(
                 &mut self.screen,
@@ -69,6 +73,9 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                 b'8' => self.screen.decrc(),
                 b'=' => self.screen.deckpam(),
                 b'>' => self.screen.deckpnm(),
+                b'D' => self.screen.ind(),
+                b'E' => self.screen.nel(),
+                b'H' => self.screen.hts(),
                 b'M' => self.screen.ri(),
                 b'c' => self.screen.ris(),
                 b'g' => self.callbacks.visual_bell(&mut self.screen),
@@ -110,7 +117,25 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                 'E' => self.screen.cnl(canonicalize_params_1(params, 1)),
                 'F' => self.screen.cpl(canonicalize_params_1(params, 1)),
                 'G' => self.screen.cha(canonicalize_params_1(params, 1)),
-                'H' => self.screen.cup(canonicalize_params_2(params, 1, 1)),
+                'H' | 'f' => {
+                    self.screen.cup(canonicalize_params_2(params, 1, 1));
+                }
+                'I' => self.screen.cht(canonicalize_params_1(params, 1)),
+                'Z' => self.screen.cbt(canonicalize_params_1(params, 1)),
+                '`' => self.screen.cha(canonicalize_params_1(params, 1)),
+                'a' => self.screen.cuf(canonicalize_params_1(params, 1)),
+                'b' => self.screen.rep(canonicalize_params_1(params, 1)),
+                'e' => self.screen.cud(canonicalize_params_1(params, 1)),
+                'g' => self.screen.tbc(
+                    params
+                        .iter()
+                        .next()
+                        .map_or(0, |x| *x.first().unwrap_or(&0)),
+                ),
+                'h' => self.screen.sm(params, true, unhandled),
+                'l' => self.screen.sm(params, false, unhandled),
+                's' if no_params(params) => self.screen.scosc(),
+                'u' if no_params(params) => self.screen.scorc(),
                 'J' => self
                     .screen
                     .ed(canonicalize_params_1(params, 0), unhandled),
@@ -183,6 +208,9 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                     );
                 }
             },
+            Some(b'!') if c == 'p' && intermediates.len() == 1 => {
+                self.screen.decstr();
+            }
             Some(i) => {
                 self.callbacks.unhandled_csi(
                     &mut self.screen,
@@ -207,35 +235,34 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
             [b"2", s] => {
                 self.callbacks.set_window_title(&mut self.screen, s);
             }
-            [b"52", ty, data] => {
-                match (
-                    ty.iter().all(|c| CLIPBOARD_SELECTOR.contains(c)),
-                    *data,
-                ) {
-                    (true, b"?") => {
-                        self.callbacks
-                            .paste_from_clipboard(&mut self.screen, ty);
-                    }
-                    (true, data)
-                        if data.iter().all(|c| BASE64.contains(c)) =>
-                    {
-                        self.callbacks.copy_to_clipboard(
-                            &mut self.screen,
-                            ty,
-                            data,
-                        );
-                    }
-                    _ => {
-                        self.callbacks
-                            .unhandled_osc(&mut self.screen, params);
-                    }
+            [b"52", ty, data] => match (
+                ty.iter().all(|c| CLIPBOARD_SELECTOR.contains(c)),
+                *data,
+            ) {
+                (true, b"?") => {
+                    self.callbacks.paste_from_clipboard(&mut self.screen, ty);
                 }
-            }
+                (true, data) if data.iter().all(|c| BASE64.contains(c)) => {
+                    self.callbacks.copy_to_clipboard(
+                        &mut self.screen,
+                        ty,
+                        data,
+                    );
+                }
+                _ => {
+                    self.callbacks.unhandled_osc(&mut self.screen, params);
+                }
+            },
             _ => {
                 self.callbacks.unhandled_osc(&mut self.screen, params);
             }
         }
     }
+}
+
+/// Whether a sequence carried no parameters at all (`CSI s`, not `CSI 1 s`).
+fn no_params(params: &vte::Params) -> bool {
+    params.iter().all(|param| param == [0]) && params.len() <= 1
 }
 
 fn canonicalize_params_1(params: &vte::Params, default: u16) -> u16 {
