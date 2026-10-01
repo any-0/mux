@@ -1,5 +1,5 @@
 use std::{
-    io::{Read, Write},
+    io::{self, IoSlice, Read, Write},
     path::PathBuf,
 };
 
@@ -190,35 +190,59 @@ pub fn write_message<T: Serialize>(writer: &mut impl Write, value: &T) -> Result
         bail!("protocol message exceeds 16 MiB");
     }
     let length = u32::try_from(bytes.len()).context("protocol message is too large")?;
-    writer.write_all(&WIRE_MAGIC)?;
-    writer.write_all(&WIRE_VERSION.to_be_bytes())?;
-    writer.write_all(&length.to_be_bytes())?;
-    writer.write_all(&bytes)?;
+    let mut header = [0; 10];
+    header[..4].copy_from_slice(&WIRE_MAGIC);
+    header[4..6].copy_from_slice(&WIRE_VERSION.to_be_bytes());
+    header[6..].copy_from_slice(&length.to_be_bytes());
+    // UnixStream gathers these slices into one send without copying the
+    // encoded payload. Generic writers can consume just the first slice.
+    let mut buffers = [IoSlice::new(&header), IoSlice::new(&bytes)];
+    let mut remaining = &mut buffers[..];
+    while !remaining.is_empty() {
+        match writer.write_vectored(remaining) {
+            Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero).into()),
+            Ok(written) => IoSlice::advance_slices(&mut remaining, written),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
     writer.flush()?;
     Ok(())
 }
 
 pub fn read_message<T: DeserializeOwned>(reader: &mut impl Read) -> Result<Option<T>> {
-    let mut magic = [0; 4];
-    match reader.read(&mut magic[..1]) {
-        Ok(0) => return Ok(None),
-        Ok(_) => reader.read_exact(&mut magic[1..])?,
-        Err(error) => return Err(error.into()),
+    let mut header = [0; 10];
+    let mut received = loop {
+        match reader.read(&mut header) {
+            Ok(0) => return Ok(None),
+            Ok(received) => break received,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    };
+    // Check each prefix as soon as it arrives, retaining early rejection of
+    // incompatible peers even if they stop sending before the complete header.
+    if received < 4 {
+        reader.read_exact(&mut header[received..4])?;
+        received = 4;
     }
-    if magic != WIRE_MAGIC {
+    if header[..4] != WIRE_MAGIC {
         bail!("incompatible mux protocol; client and daemon must use the same mux version");
     }
-    let mut version = [0; 2];
-    reader.read_exact(&mut version)?;
-    let version = u16::from_be_bytes(version);
+    if received < 6 {
+        reader.read_exact(&mut header[received..6])?;
+        received = 6;
+    }
+    let version = u16::from_be_bytes(header[4..6].try_into().unwrap());
     if version != WIRE_VERSION {
         bail!(
             "incompatible mux protocol version {version} (expected {WIRE_VERSION}); client and daemon must use the same mux version"
         );
     }
-    let mut length = [0; 4];
-    reader.read_exact(&mut length)?;
-    let length = u32::from_be_bytes(length) as usize;
+    if received < header.len() {
+        reader.read_exact(&mut header[received..])?;
+    }
+    let length = u32::from_be_bytes(header[6..].try_into().unwrap()) as usize;
     if length > MAX_MESSAGE_SIZE {
         bail!("protocol message exceeds 16 MiB");
     }
@@ -238,6 +262,141 @@ pub fn read_message<T: DeserializeOwned>(reader: &mut impl Read) -> Result<Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ShortWriter {
+        bytes: Vec<u8>,
+        limit: usize,
+        interrupted: bool,
+        calls: usize,
+    }
+
+    impl Write for ShortWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let count = bytes.len().min(self.limit);
+            self.bytes.extend_from_slice(&bytes[..count]);
+            Ok(count)
+        }
+
+        fn write_vectored(&mut self, buffers: &[IoSlice<'_>]) -> io::Result<usize> {
+            self.calls += 1;
+            if self.interrupted {
+                self.interrupted = false;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            let before = self.bytes.len();
+            self.bytes.extend(
+                buffers
+                    .iter()
+                    .flat_map(|buffer| buffer.iter())
+                    .take(self.limit),
+            );
+            Ok(self.bytes.len() - before)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct ShortReader<'a> {
+        bytes: &'a [u8],
+        limit: usize,
+        interrupted: bool,
+    }
+
+    impl Read for ShortReader<'_> {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            if self.interrupted {
+                self.interrupted = false;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            let count = self.bytes.len().min(output.len()).min(self.limit);
+            output[..count].copy_from_slice(&self.bytes[..count]);
+            self.bytes = &self.bytes[count..];
+            Ok(count)
+        }
+    }
+
+    #[test]
+    fn gathered_frame_keeps_wire_bytes_and_handles_short_interrupted_writes() {
+        let golden = b"MUXP\0\x01\0\0\0\x04\x01\0t\x02";
+        for limit in 1..=golden.len() {
+            let mut writer = ShortWriter {
+                bytes: Vec::new(),
+                limit,
+                interrupted: true,
+                calls: 0,
+            };
+            let key = Key {
+                code: KeyCode::Char('t'),
+                modifiers: ALT,
+            };
+            write_message(&mut writer, &ClientMessage::Key(key)).unwrap();
+            assert_eq!(writer.bytes, golden);
+            if limit == golden.len() {
+                assert_eq!(writer.calls, 2); // interrupted, then one gathered write
+            }
+        }
+        let mut writer = ShortWriter {
+            bytes: Vec::new(),
+            limit: 0,
+            interrupted: false,
+            calls: 0,
+        };
+        let error = write_message(&mut writer, &ServerMessage::Done).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::WriteZero
+        );
+    }
+
+    #[test]
+    fn every_short_header_read_preserves_concatenated_frame_boundaries() {
+        let mut bytes = Vec::new();
+        write_message(&mut bytes, &ServerMessage::Done).unwrap();
+        let payload = "界\x1b[4:3mtext".as_bytes().to_vec();
+        write_message(&mut bytes, &ServerMessage::Render(payload.clone())).unwrap();
+        for limit in 1..=bytes.len() {
+            let mut reader = ShortReader {
+                bytes: &bytes,
+                limit,
+                interrupted: true,
+            };
+            assert!(matches!(
+                read_message(&mut reader).unwrap(),
+                Some(ServerMessage::Done)
+            ));
+            let Some(ServerMessage::Render(actual)) = read_message(&mut reader).unwrap() else {
+                panic!("lost the second frame");
+            };
+            assert_eq!(actual, payload);
+            assert!(
+                read_message::<ServerMessage>(&mut reader)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        for end in 1..11 {
+            assert!(read_message::<ServerMessage>(&mut &bytes[..end]).is_err());
+        }
+    }
+
+    #[test]
+    fn incompatible_prefix_is_rejected_without_waiting_for_remaining_header() {
+        let wrong_magic = read_message::<ServerMessage>(&mut b"BAD!".as_slice()).unwrap_err();
+        assert!(
+            wrong_magic
+                .to_string()
+                .contains("incompatible mux protocol")
+        );
+        let wrong_version =
+            read_message::<ServerMessage>(&mut b"MUXP\0\x02".as_slice()).unwrap_err();
+        assert!(
+            wrong_version
+                .to_string()
+                .contains("incompatible mux protocol version")
+        );
+    }
 
     #[test]
     fn framed_message_round_trips() {

@@ -487,7 +487,8 @@ fn process_icon_sampler(events: mpsc::SyncSender<Event>) -> Sender<Vec<ProcessSa
     let (sender, receiver) = mpsc::channel::<Vec<ProcessSample>>();
     thread::spawn(move || {
         while let Ok(samples) = receiver.recv() {
-            let processes = processes();
+            let groups: Vec<_> = samples.iter().filter_map(|sample| sample.group).collect();
+            let processes = processes_for_groups(&groups);
             for sample in samples {
                 let icon = sample
                     .group
