@@ -475,7 +475,6 @@ pub(super) fn compacted_journal_records(screen: &mut vt100::Screen) -> Result<Ve
 
 pub(super) fn replay_pane_journal<CB: vt100::Callbacks>(
     parser: &mut vt100::Parser<CB>,
-    parser_prefix: &mut Vec<u8>,
     reader: impl Read,
 ) -> Result<u64> {
     let mut reader = BufReader::with_capacity(64 * 1024, reader);
@@ -505,7 +504,7 @@ pub(super) fn replay_pane_journal<CB: vt100::Callbacks>(
             };
         }
         match kind {
-            JOURNAL_OUTPUT => process_terminal_bytes(parser, parser_prefix, &payload),
+            JOURNAL_OUTPUT => process_terminal_bytes(parser, &payload),
             JOURNAL_HISTORY => {
                 if !parser.screen_mut().restore_history(&payload) {
                     bail!("pane journal contains an unreadable scrollback record");

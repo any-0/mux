@@ -364,6 +364,10 @@ fn parse_command(arguments: &[OsString]) -> Result<Option<MuxCommand>> {
             no_arguments("vim-mode")?;
             MuxCommand::EnterVim
         }
+        "refresh-client" | "refresh" => {
+            no_arguments("refresh-client")?;
+            MuxCommand::RefreshClient
+        }
         "set-theme" => match rest {
             [path] => MuxCommand::SetTheme(Theme::load(&PathBuf::from(path))?),
             _ => bail!("set-theme needs exactly one path"),

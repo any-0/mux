@@ -64,3 +64,6 @@ pub use cell::Cell;
 pub use parser::{MAX_OSC_BYTES, Parser};
 pub use row::{Cells, Row};
 pub use screen::{MouseProtocolEncoding, MouseProtocolMode, Screen};
+
+#[cfg(test)]
+mod emulation_tests;

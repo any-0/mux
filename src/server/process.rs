@@ -140,6 +140,30 @@ pub(super) fn foreground_program(processes: &[Process], group: i32) -> Option<&s
         .map(|process| process.program.as_str())
 }
 
+/// What each icon reads as for a font without mux's glyphs: three columns
+/// of text, or one character that is centred in them.
+const TEXT_ICONS: &[(&str, &str)] = &[
+    ("\u{e02b}\u{e02c}\u{e02d}", "opn"),
+    ("\u{e015}\u{e016}\u{e017}", "cdx"),
+    ("\u{e012}\u{e013}\u{e014}", "cld"),
+    ("\u{e019}\u{e01a}\u{e01b}", "nix"),
+    ("\u{e01c}\u{e01d}\u{e01e}", "wch"),
+    ("\u{e01f}\u{e020}\u{e021}", "vim"),
+    ("\u{e022}\u{e023}\u{e024}", "ssh"),
+    ("\u{e025}\u{e026}\u{e027}", "rs "),
+    ("\u{e028}\u{e029}\u{e02a}", "py "),
+    ("\u{e640}", "jj "),
+    ("❯", "%"),
+];
+
+/// The text form of a program icon, for [`crate::config::Glyphs::Text`].
+pub(super) fn text_icon(icon: &'static str) -> &'static str {
+    TEXT_ICONS
+        .iter()
+        .find(|(font, _)| *font == icon)
+        .map_or(icon, |(_, text)| *text)
+}
+
 /// Adding an icon only requires adding exact executable names here.
 const PROCESS_ICONS: &[(&[&str], &str)] = &[
     (&["opencode"], "\u{e02b}\u{e02c}\u{e02d}"),

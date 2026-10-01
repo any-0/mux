@@ -22,6 +22,14 @@ const TEXT_MODE_UNDERLINE: u8 = 0b0000_1000;
 const TEXT_MODE_INVERSE: u8 = 0b0001_0000;
 const TEXT_MODE_UNDERLINE_STYLE: u8 = 0b1110_0000;
 
+// Rendition flags that do not fit in `mode`. Kept in a separate byte so the
+// packed scrollback format only grows for rows that actually use them.
+pub(crate) const EXTRA_STRIKETHROUGH: u8 = 0b0000_0001;
+pub(crate) const EXTRA_BLINK: u8 = 0b0000_0010;
+pub(crate) const EXTRA_HIDDEN: u8 = 0b0000_0100;
+pub(crate) const EXTRA_OVERLINE: u8 = 0b0000_1000;
+pub(crate) const EXTRA_ALL: u8 = 0b0000_1111;
+
 /// The visual form of an underline.
 #[derive(Eq, PartialEq, Debug, Copy, Clone, Default)]
 #[repr(u8)]
@@ -61,9 +69,54 @@ pub struct Attrs {
     pub bgcolor: Color,
     pub underline_color: Color,
     pub mode: u8,
+    pub extra: u8,
 }
 
 impl Attrs {
+    fn extra_flag(&self, flag: u8) -> bool {
+        self.extra & flag != 0
+    }
+
+    fn set_extra_flag(&mut self, flag: u8, value: bool) {
+        if value {
+            self.extra |= flag;
+        } else {
+            self.extra &= !flag;
+        }
+    }
+
+    pub fn strikethrough(&self) -> bool {
+        self.extra_flag(EXTRA_STRIKETHROUGH)
+    }
+
+    pub fn set_strikethrough(&mut self, value: bool) {
+        self.set_extra_flag(EXTRA_STRIKETHROUGH, value);
+    }
+
+    pub fn blink(&self) -> bool {
+        self.extra_flag(EXTRA_BLINK)
+    }
+
+    pub fn set_blink(&mut self, value: bool) {
+        self.set_extra_flag(EXTRA_BLINK, value);
+    }
+
+    pub fn hidden(&self) -> bool {
+        self.extra_flag(EXTRA_HIDDEN)
+    }
+
+    pub fn set_hidden(&mut self, value: bool) {
+        self.set_extra_flag(EXTRA_HIDDEN, value);
+    }
+
+    pub fn overline(&self) -> bool {
+        self.extra_flag(EXTRA_OVERLINE)
+    }
+
+    pub fn set_overline(&mut self, value: bool) {
+        self.set_extra_flag(EXTRA_OVERLINE, value);
+    }
+
     pub fn bold(&self) -> bool {
         self.mode & TEXT_MODE_BOLD != 0
     }
@@ -76,13 +129,13 @@ impl Attrs {
         self.mode & TEXT_MODE_INTENSITY
     }
 
+    // Bold and faint are independent, as in xterm: SGR 1 and SGR 2 each add
+    // one, and only SGR 22 takes them away.
     pub fn set_bold(&mut self) {
-        self.mode &= !TEXT_MODE_INTENSITY;
         self.mode |= TEXT_MODE_BOLD;
     }
 
     pub fn set_dim(&mut self) {
-        self.mode &= !TEXT_MODE_INTENSITY;
         self.mode |= TEXT_MODE_DIM;
     }
 
@@ -187,7 +240,7 @@ impl Attrs {
                 0 => crate::term::Intensity::Normal,
                 TEXT_MODE_BOLD => crate::term::Intensity::Bold,
                 TEXT_MODE_DIM => crate::term::Intensity::Dim,
-                _ => unreachable!(),
+                _ => crate::term::Intensity::BoldDim,
             })
         };
         let attrs = if self.italic() == other.italic() {
@@ -204,6 +257,26 @@ impl Attrs {
             attrs
         } else {
             attrs.inverse(self.inverse())
+        };
+        let attrs = if self.blink() == other.blink() {
+            attrs
+        } else {
+            attrs.blink(self.blink())
+        };
+        let attrs = if self.hidden() == other.hidden() {
+            attrs
+        } else {
+            attrs.hidden(self.hidden())
+        };
+        let attrs = if self.strikethrough() == other.strikethrough() {
+            attrs
+        } else {
+            attrs.strikethrough(self.strikethrough())
+        };
+        let attrs = if self.overline() == other.overline() {
+            attrs
+        } else {
+            attrs.overline(self.overline())
         };
 
         attrs.write_buf(contents);

@@ -74,7 +74,7 @@ impl TerminalSession {
         command.env_remove("MUX_PANE");
         // Starting the client after bind avoids testing the separate auto-start
         // race and guarantees this guard owns the only daemon process.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(30);
         while !socket.exists() {
             assert!(Instant::now() < deadline, "daemon did not bind");
             thread::sleep(Duration::from_millis(10));
@@ -110,7 +110,10 @@ impl TerminalSession {
     }
 
     fn wait(&mut self, ready: impl Fn(&vt100::Screen) -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Generous: `cargo test` runs this beside hundreds of unit tests that
+        // spawn shells of their own, and a loaded machine starts a shell
+        // slowly. A healthy run finishes in well under a second.
+        let deadline = Instant::now() + Duration::from_secs(30);
         while !ready(self.terminal.screen()) {
             let remaining = deadline.saturating_duration_since(Instant::now());
             assert!(

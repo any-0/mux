@@ -577,11 +577,15 @@ pub(super) fn render_bar_separator(
     bar_width: u16,
     current_row: Option<u16>,
     color: Rgb,
+    glyphs: crate::config::Glyphs,
 ) {
     let attributes = CellAttributes::foreground(color);
+    let text = glyphs == crate::config::Glyphs::Text;
     for row in 1..=rows {
         let glyph = if Some(row) == current_row {
-            "\u{e010}"
+            if text { "┤" } else { "\u{e010}" }
+        } else if text {
+            "│"
         } else if current_row.is_some_and(|active_row| row == active_row + 1) {
             "\u{e018}"
         } else {

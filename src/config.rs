@@ -52,6 +52,7 @@ pub enum Action {
     EnterVim,
     EnterVimJump,
     Detach,
+    RefreshClient,
     TreeDown,
     TreeUp,
     TreeChoose,
@@ -130,6 +131,18 @@ pub enum BellStyle {
     None,
 }
 
+/// Which glyphs mux draws its sidebar with.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Glyphs {
+    /// The separator and program icons from the private-use code points of
+    /// the font mux was designed with.
+    #[default]
+    Font,
+    /// Box drawing and short text labels, which every terminal font has.
+    Text,
+}
+
 /// Everything the configuration file decides, which a client hands to the
 /// daemon when it attaches.
 #[derive(Clone, Debug)]
@@ -148,6 +161,11 @@ pub struct Settings {
     pub mouse: bool,
     pub bell_style: BellStyle,
     pub default_cursor_shape: CursorShape,
+    /// Overrides for what the client works out about its terminal from the
+    /// environment; `None` leaves it to the detection.
+    pub truecolor: Option<bool>,
+    pub styled_underlines: Option<bool>,
+    pub glyphs: Glyphs,
 }
 
 impl Default for Settings {
@@ -161,6 +179,9 @@ impl Default for Settings {
             mouse: false,
             bell_style: BellStyle::default(),
             default_cursor_shape: CursorShape::default(),
+            truecolor: None,
+            styled_underlines: None,
+            glyphs: Glyphs::default(),
         }
     }
 }
@@ -216,6 +237,9 @@ impl Settings {
             mouse: config.mouse,
             bell_style: config.bell_style,
             default_cursor_shape: config.default_cursor_shape,
+            truecolor: config.truecolor,
+            styled_underlines: config.styled_underlines,
+            glyphs: config.glyphs,
         })
     }
 }
@@ -410,6 +434,15 @@ struct FileConfig {
     bell_style: BellStyle,
     #[serde(default)]
     default_cursor_shape: CursorShape,
+    /// Whether the terminal renders 24-bit colour, when the environment
+    /// does not say so correctly.
+    truecolor: Option<bool>,
+    /// Whether the terminal renders curly, dotted and dashed underlines and
+    /// underline colours, when the environment does not say so correctly.
+    styled_underlines: Option<bool>,
+    /// `text` for terminals whose font lacks mux's private-use glyphs.
+    #[serde(default)]
+    glyphs: Glyphs,
     variant: Option<Variant>,
     #[serde(default)]
     palette: FilePalette,
@@ -483,6 +516,7 @@ impl Bindings {
         bind(Mode::Leader, "-", Action::SplitHorizontal);
         bind(Mode::Leader, "|", Action::SplitVertical);
         bind(Mode::Leader, "d", Action::Detach);
+        bind(Mode::Leader, "r", Action::RefreshClient);
         bind(Mode::Leader, "b", Action::JumpToBell);
         bind(Mode::Leader, "x", Action::KillPane);
         bind(Mode::Leader, "Left", Action::FocusPaneLeft);
@@ -736,6 +770,7 @@ impl Action {
                     | Self::EnterVim
                     | Self::EnterVimJump
                     | Self::Detach
+                    | Self::RefreshClient
                     | Self::ThemePicker
                     | Self::ZoomPane
             ),
@@ -759,6 +794,7 @@ impl Action {
                     | Self::JumpToBell
                     | Self::KillPane
                     | Self::Detach
+                    | Self::RefreshClient
                     | Self::LeaderCancel
                     | Self::ThemePicker
             ),
@@ -864,6 +900,7 @@ fn parse_action(value: &str) -> Result<Action> {
         "enter-vim" => Action::EnterVim,
         "enter-vim-jump" => Action::EnterVimJump,
         "detach" => Action::Detach,
+        "refresh-client" => Action::RefreshClient,
         "tree-down" => Action::TreeDown,
         "tree-up" => Action::TreeUp,
         "tree-choose" => Action::TreeChoose,

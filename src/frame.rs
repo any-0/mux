@@ -83,6 +83,10 @@ pub struct CellAttributes {
     pub italic: bool,
     pub underline: vt100::UnderlineStyle,
     pub inverse: bool,
+    pub strikethrough: bool,
+    pub blink: bool,
+    pub hidden: bool,
+    pub overline: bool,
 }
 
 impl CellAttributes {
@@ -128,6 +132,10 @@ impl From<&vt100::Cell> for CellAttributes {
             italic: cell.italic(),
             underline: cell.underline_style(),
             inverse: cell.inverse(),
+            strikethrough: cell.strikethrough(),
+            blink: cell.blink(),
+            hidden: cell.hidden(),
+            overline: cell.overline(),
         }
     }
 }
@@ -157,6 +165,39 @@ impl ColorDepth {
         } else {
             Self::Palette256
         }
+    }
+}
+
+/// What a client's terminal understands beyond what every xterm-compatible
+/// terminal does. Frames only use what the terminal has said it supports,
+/// so an older or simpler terminal gets a plainer picture rather than escape
+/// sequences it would misread.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TerminalFeatures {
+    /// 24-bit colour; otherwise colours go out as the nearest 256-colour entry.
+    pub truecolor: bool,
+    /// Curly, dotted, dashed and double underlines (`4:n`) and underline
+    /// colours (SGR 58). A terminal without them parses `58;2;r;g;b` as faint
+    /// and a string of unrelated attributes, so they are left out instead and
+    /// every styled underline becomes a plain one.
+    pub styled_underlines: bool,
+}
+
+impl TerminalFeatures {
+    /// Everything: what mux's own panes understand.
+    pub const FULL: Self = Self {
+        truecolor: true,
+        styled_underlines: true,
+    };
+
+    pub fn colors(self) -> ColorDepth {
+        ColorDepth::of(self.truecolor)
+    }
+}
+
+impl Default for TerminalFeatures {
+    fn default() -> Self {
+        Self::FULL
     }
 }
 
@@ -334,18 +375,22 @@ impl Frame {
     ///
     /// Nothing is appended when the two frames are identical, so an idle
     /// terminal receives no output at all.
-    pub fn diff(&mut self, previous: &Frame, colors: ColorDepth, output: &mut Vec<u8>) {
+    pub fn diff(&mut self, previous: &Frame, terminal: TerminalFeatures, output: &mut Vec<u8>) {
         let incremental = previous.rows == self.rows && previous.cols == self.cols;
         let start = output.len();
         output.extend_from_slice(b"\x1b[?2026h\x1b[?25l");
         if !incremental {
-            output.extend_from_slice(b"\x1b[0m\x1b[2J");
+            // Autowrap off first: then nothing drawn at the right edge can wrap,
+            // and the bottom right cell can never scroll the screen, even for a
+            // glyph the terminal thinks is wider than mux does. A full repaint
+            // asserts it again in case something reset the terminal.
+            output.extend_from_slice(b"\x1b[?7l\x1b[0m\x1b[2J");
         }
         let mut painted = !incremental;
         let mut attributes = None;
         for row in 1..=self.rows {
             self.mark_changed_cells(previous, row, incremental);
-            painted |= self.paint_row(output, row, colors, &mut attributes);
+            painted |= self.paint_row(output, row, terminal, &mut attributes);
         }
         // Repositioning matters only once something has painted over the old
         // spot, or once the cursor is on show. A pane that keeps moving a hidden
@@ -394,7 +439,7 @@ impl Frame {
         &self,
         output: &mut Vec<u8>,
         row: u16,
-        colors: ColorDepth,
+        terminal: TerminalFeatures,
         attributes: &mut Option<CellAttributes>,
     ) -> bool {
         let mut painted = false;
@@ -435,6 +480,7 @@ impl Frame {
                 run_start -= 1;
             }
             move_to(output, row, run_start);
+            let mut resync = false;
             for current in run_start..=end {
                 let Some(cell) = self.cell(row, current) else {
                     continue;
@@ -442,11 +488,20 @@ impl Frame {
                 if cell.continuation {
                     continue;
                 }
+                // The terminal and mux can disagree on how wide a character is
+                // (emoji presentation, ambiguous East Asian width, a different
+                // Unicode version). Placing the next cell explicitly after any
+                // non-ASCII one keeps a disagreement from shifting the rest.
+                if resync {
+                    move_to_column(output, current);
+                }
                 if *attributes != Some(cell.attributes) {
-                    write_cell_attributes(output, cell.attributes, colors);
+                    write_cell_attributes(output, cell.attributes, terminal);
                     *attributes = Some(cell.attributes);
                 }
-                output.extend_from_slice(cell.text.as_bytes());
+                let text = cell.text.as_bytes();
+                output.extend_from_slice(text);
+                resync = width_is_uncertain(text);
             }
             painted = true;
             col = end + 1;
@@ -459,6 +514,47 @@ fn move_to(output: &mut Vec<u8>, row: u16, col: u16) {
     output.extend_from_slice(format!("\x1b[{row};{col}H").as_bytes());
 }
 
+/// Whether terminals may disagree on how many columns `text` takes: a
+/// character with a variation selector, joiner or combining mark after it,
+/// an East Asian ambiguous one (box drawing, many symbols), or one that can
+/// be drawn as an emoji. Plain accented letters and CJK ideographs are the same
+/// width everywhere and need no help.
+fn width_is_uncertain(text: &[u8]) -> bool {
+    if text.is_ascii() {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(text) else {
+        return true;
+    };
+    let mut characters = text.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    if characters.next().is_some() {
+        return true;
+    }
+    use unicode_width::UnicodeWidthChar as _;
+    first.width() != first.width_cjk()
+        || matches!(
+            u32::from(first),
+            0x2190..=0x21FF
+                | 0x2300..=0x23FF
+                | 0x2460..=0x24FF
+                | 0x25A0..=0x27BF
+                | 0x2900..=0x297F
+                | 0x2B00..=0x2BFF
+                | 0x3030
+                | 0x303D
+                | 0x3297
+                | 0x3299
+                | 0x1F000..=0x1FAFF
+        )
+}
+
+fn move_to_column(output: &mut Vec<u8>, col: u16) {
+    output.extend_from_slice(format!("\x1b[{col}G").as_bytes());
+}
+
 fn write_steady_cursor_shape(output: &mut Vec<u8>, shape: CursorShape) {
     output.extend_from_slice(b"\x1b[?12l");
     output.extend_from_slice(match shape {
@@ -468,7 +564,12 @@ fn write_steady_cursor_shape(output: &mut Vec<u8>, shape: CursorShape) {
     });
 }
 
-pub fn write_cell_attributes(output: &mut Vec<u8>, attributes: CellAttributes, colors: ColorDepth) {
+pub fn write_cell_attributes(
+    output: &mut Vec<u8>,
+    attributes: CellAttributes,
+    terminal: TerminalFeatures,
+) {
+    let colors = terminal.colors();
     output.extend_from_slice(b"\x1b[0");
     if attributes.bold {
         output.extend_from_slice(b";1");
@@ -482,17 +583,33 @@ pub fn write_cell_attributes(output: &mut Vec<u8>, attributes: CellAttributes, c
     match attributes.underline {
         vt100::UnderlineStyle::None => {}
         vt100::UnderlineStyle::Straight => output.extend_from_slice(b";4"),
+        _ if !terminal.styled_underlines => output.extend_from_slice(b";4"),
         style => {
             output.extend_from_slice(b";4:");
             output.push(b'0' + style as u8);
         }
     }
+    if attributes.blink {
+        output.extend_from_slice(b";5");
+    }
     if attributes.inverse {
         output.extend_from_slice(b";7");
     }
+    if attributes.hidden {
+        output.extend_from_slice(b";8");
+    }
+    if attributes.strikethrough {
+        output.extend_from_slice(b";9");
+    }
+    if attributes.overline {
+        output.extend_from_slice(b";53");
+    }
     write_color(output, attributes.foreground, true, colors);
     write_color(output, attributes.background, false, colors);
-    if attributes.underline_color != vt100::Color::Default {
+    if attributes.underline_color != vt100::Color::Default
+        && attributes.underline != vt100::UnderlineStyle::None
+        && terminal.styled_underlines
+    {
         write_color_parameter(output, attributes.underline_color, 58, colors);
     }
     output.push(b'm');
@@ -509,6 +626,10 @@ fn write_color_parameter(
     parameter: u8,
     colors: ColorDepth,
 ) {
+    // The underline colour goes out in its colon form, which a terminal that
+    // does not know SGR 58 skips as one unit rather than reading the numbers
+    // after it as separate attributes.
+    let separator = if parameter == 58 { ':' } else { ';' };
     match color {
         vt100::Color::Default => output.extend_from_slice(match parameter {
             38 => b";39",
@@ -516,16 +637,31 @@ fn write_color_parameter(
             58 => b";59",
             _ => unreachable!(),
         }),
-        vt100::Color::Idx(index) => {
-            output.extend_from_slice(format!(";{parameter};5;{index}").as_bytes())
+        // The sixteen basic colours have their own codes, which every terminal
+        // understands, including ones without a 256-colour palette.
+        vt100::Color::Idx(index @ 0..=15) if parameter != 58 => {
+            let base = match (parameter, index < 8) {
+                (38, true) => 30,
+                (38, false) => 90 - 8,
+                (_, true) => 40,
+                (_, false) => 100 - 8,
+            };
+            output.extend_from_slice(format!(";{}", base + u16::from(index)).as_bytes())
         }
+        vt100::Color::Idx(index) => output
+            .extend_from_slice(format!(";{parameter}{separator}5{separator}{index}").as_bytes()),
         vt100::Color::Rgb(red, green, blue) => match colors {
+            ColorDepth::TrueColor if parameter == 58 => {
+                output.extend_from_slice(format!(";58:2::{red}:{green}:{blue}").as_bytes())
+            }
             ColorDepth::TrueColor => {
                 output.extend_from_slice(format!(";{parameter};2;{red};{green};{blue}").as_bytes())
             }
             ColorDepth::Palette256 => {
                 let index = nearest_palette_index(red, green, blue);
-                output.extend_from_slice(format!(";{parameter};5;{index}").as_bytes())
+                output.extend_from_slice(
+                    format!(";{parameter}{separator}5{separator}{index}").as_bytes(),
+                )
             }
         },
     }
@@ -584,7 +720,7 @@ mod tests {
 
     fn diff(current: &mut Frame, previous: &Frame) -> Vec<u8> {
         let mut output = Vec::new();
-        current.diff(previous, ColorDepth::TrueColor, &mut output);
+        current.diff(previous, TerminalFeatures::FULL, &mut output);
         output
     }
 
@@ -728,7 +864,14 @@ mod tests {
             CellAttributes::colors((203, 163, 210), (46, 39, 57)),
         );
         let mut output = Vec::new();
-        current.diff(&Frame::default(), ColorDepth::Palette256, &mut output);
+        current.diff(
+            &Frame::default(),
+            TerminalFeatures {
+                truecolor: false,
+                ..TerminalFeatures::FULL
+            },
+            &mut output,
+        );
         let output = String::from_utf8(output).unwrap();
         assert!(!output.contains(";2;"), "no 24-bit colour: {output:?}");
         assert!(output.contains(";38;5;182"), "{output:?}");
@@ -747,9 +890,17 @@ mod tests {
             },
         );
         let mut output = Vec::new();
-        current.diff(&Frame::default(), ColorDepth::Palette256, &mut output);
+        current.diff(
+            &Frame::default(),
+            TerminalFeatures {
+                truecolor: false,
+                ..TerminalFeatures::FULL
+            },
+            &mut output,
+        );
         let output = String::from_utf8(output).unwrap();
-        assert!(output.contains(";38;5;4;49"), "{output:?}");
+        // The sixteen basic colours use their own codes, understood everywhere.
+        assert!(output.contains(";34;49"), "{output:?}");
     }
 
     #[test]
@@ -939,7 +1090,7 @@ mod tests {
         current.set_text(1, 1, "wave", CellAttributes::from(&cell));
         let output = String::from_utf8(diff(&mut current, &Frame::default())).unwrap();
         assert!(output.contains("4:3"), "{output:?}");
-        assert!(output.contains("58;2;255;0;0"), "{output:?}");
+        assert!(output.contains("58:2::255:0:0"), "{output:?}");
     }
 
     #[test]
@@ -1005,5 +1156,64 @@ mod tests {
         let mut parser = vt100::Parser::new(1, 4, 0);
         parser.process(&diff(&mut current, &Frame::default()));
         assert_eq!(parser.screen().contents().trim_end(), "語");
+    }
+
+    #[test]
+    fn only_characters_of_uncertain_width_are_followed_by_a_reposition() {
+        assert!(!width_is_uncertain(b"a"));
+        assert!(!width_is_uncertain("é".as_bytes()));
+        assert!(!width_is_uncertain("中".as_bytes()));
+        assert!(width_is_uncertain("─".as_bytes()));
+        assert!(width_is_uncertain("•".as_bytes()));
+        assert!(width_is_uncertain("😀".as_bytes()));
+        assert!(width_is_uncertain("❤\u{fe0f}".as_bytes()));
+        assert!(width_is_uncertain("e\u{301}".as_bytes()));
+        assert!(width_is_uncertain("\u{e010}".as_bytes()));
+
+        let mut current = frame(1, 8);
+        current.set_text(1, 1, "a─b中c", CellAttributes::default());
+        let output = String::from_utf8(diff(&mut current, &Frame::default())).unwrap();
+        assert!(output.contains("─\x1b[3Gb"), "{output:?}");
+        assert!(output.contains("中c"), "{output:?}");
+    }
+
+    #[test]
+    fn a_full_repaint_turns_autowrap_off_first() {
+        let mut current = frame(2, 2);
+        current.set_text(2, 2, "x", CellAttributes::default());
+        let output = String::from_utf8(diff(&mut current, &Frame::default())).unwrap();
+        let autowrap = output.find("\x1b[?7l").expect("autowrap left on");
+        assert!(autowrap < output.find('x').unwrap(), "{output:?}");
+    }
+
+    #[test]
+    fn a_terminal_without_styled_underlines_gets_a_plain_one() {
+        let attributes = CellAttributes {
+            underline: vt100::UnderlineStyle::Curly,
+            underline_color: vt100::Color::Rgb(255, 0, 0),
+            ..CellAttributes::default()
+        };
+        let plain = TerminalFeatures {
+            styled_underlines: false,
+            ..TerminalFeatures::FULL
+        };
+        let mut output = Vec::new();
+        write_cell_attributes(&mut output, attributes, plain);
+        assert_eq!(output, b"\x1b[0;4;39;49m");
+        output.clear();
+        write_cell_attributes(&mut output, attributes, TerminalFeatures::FULL);
+        assert_eq!(output, b"\x1b[0;4:3;39;49;58:2::255:0:0m");
+    }
+
+    #[test]
+    fn the_basic_colours_use_their_own_codes() {
+        let mut output = Vec::new();
+        let attributes = CellAttributes {
+            foreground: vt100::Color::Idx(1),
+            background: vt100::Color::Idx(12),
+            ..CellAttributes::default()
+        };
+        write_cell_attributes(&mut output, attributes, TerminalFeatures::FULL);
+        assert_eq!(output, b"\x1b[0;31;104m");
     }
 }

@@ -6,11 +6,11 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::config::{BellStyle, Bindings, Theme};
-use crate::frame::CursorShape;
+use crate::config::{BellStyle, Bindings, Glyphs, Theme};
+use crate::frame::{CursorShape, TerminalFeatures};
 
 const WIRE_MAGIC: [u8; 4] = *b"MUXP";
-pub const WIRE_VERSION: u16 = 1;
+pub const WIRE_VERSION: u16 = 2;
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -34,7 +34,10 @@ pub enum MuxCommand {
     ResizeRight(u16),
     ZoomPane,
     BreakPane,
-    JoinPane { window: u8, axis_is_vertical: bool },
+    JoinPane {
+        window: u8,
+        axis_is_vertical: bool,
+    },
     SwapWindow(u8),
     JumpToBell,
     KillPane,
@@ -42,6 +45,8 @@ pub enum MuxCommand {
     SelectWindow(u8),
     EnterVim,
     SetTheme(Theme),
+    /// Repaint the whole screen of the attached client.
+    RefreshClient,
 }
 
 /// A read-only question for the daemon. Unlike a command, it needs no attached
@@ -131,8 +136,10 @@ pub struct Hello {
     pub theme_directory: Option<PathBuf>,
     pub mouse: bool,
     pub bell_style: BellStyle,
-    /// Whether this client's terminal renders 24-bit colour.
-    pub truecolor: bool,
+    /// What this client's terminal understands.
+    pub terminal: TerminalFeatures,
+    /// Which glyphs this client's font has for the sidebar.
+    pub glyphs: Glyphs,
     pub default_cursor_shape: CursorShape,
 }
 
@@ -149,6 +156,8 @@ pub enum ClientMessage {
         rows: u16,
     },
     Detach,
+    /// The client's terminal gained (`true`) or lost focus.
+    Focus(bool),
     Command {
         pane_id: Option<usize>,
         command: MuxCommand,

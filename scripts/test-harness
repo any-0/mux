@@ -1,0 +1,11 @@
+#!/bin/sh
+# Build mux and run the black-box harness against it in the pinned shell.
+set -eu
+
+repository=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repository"
+exec nix develop ./.nix --command sh -eu -c '
+    cargo build --release --locked
+    cd harness
+    cargo test --release --locked
+'

@@ -16,3 +16,7 @@ jobs:
         run: ./scripts/test-nix
       - name: Confirm the regression witnesses fail on the old implementation
         run: nix develop ./.nix --command ./scripts/check-regression-witnesses 9c74b7029e6112175d0914c0efc12d87317efccf
+      - name: Differential and end-to-end harness against the real binary
+        run: ./scripts/test-harness
+      - name: Confirm the harness witnesses fail on the build before them
+        run: nix develop ./.nix --command ./scripts/check-harness-witnesses d6dd228054231e77772bd17a412d8f0d07871835

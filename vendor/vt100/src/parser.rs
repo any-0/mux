@@ -14,7 +14,7 @@ impl Parser {
     #[must_use]
     pub fn new(rows: u16, cols: u16, scrollback_len: usize) -> Self {
         Self {
-            parser: vte::Parser::new_with_size(),
+            parser: vte::Parser::default(),
             screen: crate::perform::WrappedScreen::new(
                 rows,
                 cols,
@@ -36,7 +36,7 @@ impl<CB: crate::callbacks::Callbacks> Parser<CB> {
         callbacks: CB,
     ) -> Self {
         Self {
-            parser: vte::Parser::new_with_size(),
+            parser: vte::Parser::default(),
             screen: crate::perform::WrappedScreen::new_with_callbacks(
                 rows,
                 cols,

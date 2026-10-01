@@ -26,7 +26,11 @@ fn painted(rows: u16, cols: u16, paint: impl FnOnce(&mut Frame)) -> String {
     frame.reset(rows, cols);
     paint(&mut frame);
     let mut output = Vec::new();
-    frame.diff(&Frame::default(), ColorDepth::TrueColor, &mut output);
+    frame.diff(
+        &Frame::default(),
+        crate::frame::TerminalFeatures::FULL,
+        &mut output,
+    );
     String::from_utf8(output).unwrap()
 }
 
@@ -39,7 +43,7 @@ fn repainted(rows: u16, cols: u16, paint: impl FnOnce(&mut Frame)) -> String {
     frame.reset(rows, cols);
     paint(&mut frame);
     let mut output = Vec::new();
-    frame.diff(&previous, ColorDepth::TrueColor, &mut output);
+    frame.diff(&previous, crate::frame::TerminalFeatures::FULL, &mut output);
     String::from_utf8(output).unwrap()
 }
 
@@ -183,8 +187,7 @@ fn a_pane_reports_the_title_its_program_sets() {
 #[test]
 fn a_pane_reports_osc_52_clipboard_writes() {
     let mut parser = new_parser(4, 20);
-    let mut prefix = Vec::new();
-    process_terminal_bytes(&mut parser, &mut prefix, b"\x1b]52;c;Y29waWVkIHRleHQ=\x07");
+    process_terminal_bytes(&mut parser, b"\x1b]52;c;Y29waWVkIHRleHQ=\x07");
     assert_eq!(
         parser.callbacks().clipboard_writes,
         [ClipboardWrite {
@@ -419,39 +422,32 @@ fn pane_terminal_matches_the_emulator_and_backspace_matches_its_terminfo() {
 #[test]
 fn zle_cursor_save_restore_keeps_the_entered_command() {
     let mut parser = vt100::Parser::new(4, 40, 0);
-    let mut prefix = Vec::new();
-    process_terminal_bytes(
-        &mut parser,
-        &mut prefix,
-        b"header\r\n\xe2\x9d\xaf echo kept\x1b[",
-    );
-    process_terminal_bytes(&mut parser, &mut prefix, b"s\x1b[1A\x1b[30Gtime\x1b");
-    process_terminal_bytes(&mut parser, &mut prefix, b"[u\r\r\noutput");
+    process_terminal_bytes(&mut parser, b"header\r\n\xe2\x9d\xaf echo kept\x1b[");
+    process_terminal_bytes(&mut parser, b"s\x1b[1A\x1b[30Gtime\x1b");
+    process_terminal_bytes(&mut parser, b"[u\r\r\noutput");
     let rows: Vec<_> = parser.screen().rows(0, 40).collect();
     assert!(rows[1].contains("❯ echo kept"));
     assert_eq!(rows[2], "output");
-    assert!(prefix.is_empty());
 }
 
 #[test]
 fn synchronized_redraw_never_renders_an_intermediate_cursor() {
     let mut parser = new_parser(4, 40);
-    let mut prefix = Vec::new();
-    process_terminal_bytes(&mut parser, &mut prefix, b"\x1b[3;5Hprompt\x1b[6 q");
+    process_terminal_bytes(&mut parser, b"\x1b[3;5Hprompt\x1b[6 q");
     let before = parser.screen().contents();
     let cursor = parser.screen().cursor_position();
 
     // Simulate a PTY read ending at every byte, including inside the markers.
     // The application keeps its cursor visible while painting a status line.
     for byte in b"\x1b[?2026h\x1b[1;1Hstatus\x1b[2 q\x1b[3;11H\x1b[6 q\x1b[?2026" {
-        process_terminal_bytes(&mut parser, &mut prefix, &[*byte]);
+        process_terminal_bytes(&mut parser, &[*byte]);
         let (screen, shape) = rendered_terminal(&parser, CursorShape::Bar);
         assert_eq!(screen.contents(), before);
         assert_eq!(screen.cursor_position(), cursor);
         assert!(!screen.hide_cursor());
         assert_eq!(shape, CursorShape::Bar);
     }
-    process_terminal_bytes(&mut parser, &mut prefix, b"l");
+    process_terminal_bytes(&mut parser, b"l");
     let (screen, shape) = rendered_terminal(&parser, CursorShape::Bar);
     assert!(screen.contents().contains("status"));
     assert_eq!(screen.cursor_position(), cursor);
@@ -462,9 +458,8 @@ fn synchronized_redraw_never_renders_an_intermediate_cursor() {
 #[test]
 fn synchronized_output_queries_report_the_mode_at_the_query() {
     let mut parser = new_parser(2, 20);
-    let mut prefix = Vec::new();
     for byte in b"\x1b[?2026$p\x1b[?2026h\x1b[?2026$p\x1b[?2026l\x1b[?2026$p" {
-        process_terminal_bytes(&mut parser, &mut prefix, &[*byte]);
+        process_terminal_bytes(&mut parser, &[*byte]);
     }
     assert_eq!(
         parser.callbacks().responses,
@@ -646,10 +641,13 @@ fn popup_text_scrolls_to_keep_the_cursor_visible() {
             &Theme::default(),
         )
     });
-    assert!(output.contains("╭────────╮"), "{output:?}");
-    assert!(output.contains("leader"), "{output:?}");
-    assert!(output.contains("╰────────╯"), "{output:?}");
-    // Three rows tall, in the middle of nine.
+    // Three rows tall, in the middle of nine, as a terminal shows it.
+    let mut terminal = vt100::Parser::new(9, 30, 0);
+    terminal.process(output.as_bytes());
+    let rows: Vec<String> = terminal.screen().rows(0, 30).collect();
+    assert_eq!(rows[3].trim(), "╭────────╮", "{output:?}");
+    assert_eq!(rows[4].trim(), "│ leader │", "{output:?}");
+    assert_eq!(rows[5].trim(), "╰────────╯", "{output:?}");
     assert!(output.contains("\x1b[4;11H"), "{output:?}");
     assert!(output.contains("\x1b[6;11H╰"), "{output:?}");
 
@@ -973,7 +971,14 @@ fn bar_width_and_vertical_center_follow_window_count() {
     assert_eq!(tree_panel_width(30), 15);
 
     let separator = painted(3, 4, |frame| {
-        render_bar_separator(frame, 3, bar_width(1), Some(2), Theme::default().bar_active)
+        render_bar_separator(
+            frame,
+            3,
+            bar_width(1),
+            Some(2),
+            Theme::default().bar_active,
+            crate::config::Glyphs::Font,
+        )
     });
     assert!(separator.contains("38;2;203;163;210"), "{separator:?}");
     assert!(separator.contains(""), "{separator:?}");
@@ -1810,7 +1815,7 @@ fn compacting_a_journal_keeps_the_screen_and_recent_scrollback() {
     assert!(records.len() < 8 * 1024, "{} bytes", records.len());
 
     let mut restored = vt100::Parser::new(1, 1, SCROLLBACK_LINES);
-    replay_pane_journal(&mut restored, &mut Vec::new(), records.as_slice()).unwrap();
+    replay_pane_journal(&mut restored, records.as_slice()).unwrap();
     assert_eq!(restored.screen().size(), (4, 20));
     assert_eq!(restored.screen().contents(), before);
 
@@ -1897,6 +1902,7 @@ pub(super) fn server_with_pending_bell(directory: &Path) -> (Server, Receiver<Ev
         next_pane_id: 0,
         last_active_pane: None,
         theme: Theme::default(),
+        focused_panes: HashSet::new(),
         dirty: false,
         state_dirty: false,
     };
@@ -2068,7 +2074,7 @@ fn pane_journal_replays_output_resizes_and_ignores_a_torn_tail() {
 
     let mut parser = vt100::Parser::new(1, 1, SCROLLBACK_LINES);
     assert_eq!(
-        replay_pane_journal(&mut parser, &mut Vec::new(), journal.as_slice()).unwrap(),
+        replay_pane_journal(&mut parser, journal.as_slice()).unwrap(),
         valid_length as u64
     );
     assert_eq!(parser.screen().size(), (3, 12));
@@ -2492,6 +2498,7 @@ fn a_rejected_final_frame_stays_pending_until_the_client_catches_up() {
     client.writer = ClientWriter {
         messages,
         thread: thread::spawn(|| {}),
+        stream: None,
     };
     client.initialized = true;
     client.session_id = Some(server.sessions[0].id);

@@ -88,6 +88,7 @@ impl Server {
             Some(Action::EnterVimJump) => self.enter_vim_jump(id),
             Some(Action::ZoomPane) => self.zoom_pane(id)?,
             Some(Action::Detach) => self.detach(id)?,
+            Some(Action::RefreshClient) => self.refresh_client(id),
             Some(Action::ThemePicker) => self.open_theme_picker(id),
             None => self.send_key_to_pty(id, &key)?,
             _ => {}
@@ -154,6 +155,7 @@ impl Server {
             Some(Action::JumpToBell) => self.jump_to_bell(id)?,
             Some(Action::KillPane) => self.start_kill_pane(id),
             Some(Action::Detach) => self.detach(id)?,
+            Some(Action::RefreshClient) => self.refresh_client(id),
             Some(Action::ThemePicker) => self.open_theme_picker(id),
             // Anything else, including LeaderCancel, just leaves leader mode.
             _ => {}
@@ -489,11 +491,14 @@ impl Server {
             .is_some_and(|pane| pane.parser.screen().bracketed_paste());
         let mut bytes = Vec::new();
         if bracketed {
+            // Pasted text that carries the paste delimiters itself could end
+            // the paste early and have the rest run as typed input.
+            let text = text.replace("\x1b[201~", "").replace("\x1b[200~", "");
             bytes.extend_from_slice(b"\x1b[200~");
-        }
-        bytes.extend_from_slice(text.as_bytes());
-        if bracketed {
+            bytes.extend_from_slice(text.as_bytes());
             bytes.extend_from_slice(b"\x1b[201~");
+        } else {
+            bytes.extend_from_slice(text.as_bytes());
         }
         self.write_active(id, &bytes)
     }

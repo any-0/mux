@@ -73,7 +73,7 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 
 use crate::{
     config::{BellStyle, Bindings, Theme},
-    frame::{ColorDepth, Frame},
+    frame::{Frame, TerminalFeatures},
     protocol::{ClientMessage, Hello, ServerMessage, read_message, write_message},
     vim::{Position, VimMode, VimOutcome},
 };
@@ -93,7 +93,8 @@ const CLIENT_QUEUE_DEPTH: usize = 8;
 const EVENT_QUEUE_DEPTH: usize = 64;
 const STORAGE_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_TERMINAL_CELLS: usize = 1_000_000;
-/// How long one write to a client may take before it is considered gone.
+/// How long a daemon that is shutting down waits for a client to take its
+/// last messages.
 const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Cells one resize keystroke moves a divider.
 const RESIZE_STEP: u16 = 2;
@@ -145,7 +146,6 @@ struct Pane {
     child: Box<dyn Child + Send + Sync>,
     child_pid: Option<u32>,
     parser: vt100::Parser<TerminalCallbacks>,
-    parser_prefix: Vec<u8>,
     cwd: PathBuf,
     cwd_sampled: Instant,
     process_icon: &'static str,
@@ -231,14 +231,20 @@ struct Session {
 struct ClientWriter {
     messages: mpsc::SyncSender<ServerMessage>,
     thread: thread::JoinHandle<()>,
+    /// The connection itself, to cut a client off that never drains its
+    /// last messages while the daemon shuts down.
+    stream: Option<UnixStream>,
 }
 
 impl ClientWriter {
     fn spawn(mut stream: UnixStream) -> Self {
         let (messages, receiver) = mpsc::sync_channel(CLIENT_QUEUE_DEPTH);
-        // Without a timeout, a client that never reads again would hold its
-        // writer thread — and the daemon's exit — open forever.
-        let _ = stream.set_write_timeout(Some(CLIENT_WRITE_TIMEOUT));
+        // No write timeout: a client whose terminal has stalled (a frozen ssh
+        // link, output paused while text is selected) is slow, not gone. Its
+        // writer blocks, its queue fills, and the event loop drops frames for
+        // it and repaints in full once it drains. A client that really is gone
+        // closes its socket, which ends the write with an error.
+        let control = stream.try_clone().ok();
         let thread = thread::spawn(move || {
             while let Ok(message) = receiver.recv() {
                 if write_message(&mut stream, &message).is_err() {
@@ -249,7 +255,11 @@ impl ClientWriter {
             // with it, even when the queue was too full for a last message.
             let _ = stream.shutdown(std::net::Shutdown::Both);
         });
-        Self { messages, thread }
+        Self {
+            messages,
+            thread,
+            stream: control,
+        }
     }
 
     /// Waits for everything queued to reach the client, then closes it.
@@ -259,6 +269,16 @@ impl ClientWriter {
     /// shutdown, so it has to wait for that to happen.
     fn finish(self) {
         drop(self.messages);
+        let deadline = Instant::now() + CLIENT_WRITE_TIMEOUT;
+        while !self.thread.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        if !self.thread.is_finished()
+            && let Some(stream) = &self.stream
+        {
+            // Unblocks a write to a client that stopped reading for good.
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
         let _ = self.thread.join();
     }
 
@@ -290,8 +310,13 @@ struct Client {
     /// How this client shows a pending bell.
     bell_style: BellStyle,
     default_cursor_shape: crate::frame::CursorShape,
-    /// The colour depth this client's terminal is painted for.
-    colors: ColorDepth,
+    /// What this client's terminal is painted for.
+    terminal: TerminalFeatures,
+    /// Which glyphs this client's font has for the sidebar.
+    glyphs: crate::config::Glyphs,
+    /// Whether this client's terminal has focus, as it last reported. A
+    /// terminal that never reports focus is assumed to have it.
+    focused: bool,
     vim: HashMap<usize, VimState>,
     tree: Option<TreeState>,
     themes: Option<ThemePicker>,
@@ -338,6 +363,10 @@ struct Server {
     /// with, taken from the most recent client or `set-theme`.
     theme: Theme,
     dirty: bool,
+    /// The panes some focused client is showing as its active pane. Programs
+    /// that asked for focus reports (mode 1004) are told when they join or
+    /// leave it.
+    focused_panes: HashSet<usize>,
     /// Set when the session tree has changed and the copy on disk is stale.
     /// Writing it costs two fsyncs, so it is deferred until the daemon settles
     /// instead of running on every keystroke that moves the active pane.
@@ -396,6 +425,7 @@ pub fn run(socket_path: &Path) -> Result<()> {
         next_pane_id: 0,
         last_active_pane: None,
         theme: Theme::default(),
+        focused_panes: HashSet::new(),
         dirty: false,
         state_dirty: false,
     };
@@ -528,7 +558,6 @@ impl Server {
                         .context("a saved pane was not replayed")?;
                     let ReplayedPane {
                         parser,
-                        parser_prefix,
                         valid_length,
                         history_length,
                         replayed: had_history,
@@ -549,7 +578,6 @@ impl Server {
                         saved_pane.rows,
                         history,
                         parser,
-                        parser_prefix,
                         false,
                     )?;
                     pane.history.compact_soon();
@@ -558,11 +586,7 @@ impl Server {
                     }
                     if let Some(correction) = restored_prompt_correction(&pane.parser) {
                         let _ = pane.history.append_output(&correction, None);
-                        process_terminal_bytes(
-                            &mut pane.parser,
-                            &mut pane.parser_prefix,
-                            &correction,
-                        );
+                        process_terminal_bytes(&mut pane.parser, &correction);
                     }
                     panes.push(pane);
                 }
@@ -695,6 +719,7 @@ impl Server {
                         return Ok(());
                     }
                 }
+                self.report_focus();
             }
             self.dirty |= self.expire_messages();
             self.dirty |= self.advance_bell_animations();
@@ -711,6 +736,34 @@ impl Server {
                 self.dirty = false;
                 self.render_all();
                 last_render = Instant::now();
+            }
+        }
+    }
+
+    /// Tells programs that asked (mode 1004) when they gain or lose focus:
+    /// when the terminal showing them does, and when mux moves between panes
+    /// or windows, as tmux does with `focus-events` on.
+    fn report_focus(&mut self) {
+        let focused: HashSet<usize> = self
+            .clients
+            .iter()
+            .filter(|(_, client)| client.initialized && client.focused)
+            .filter_map(|(id, _)| self.active_pane(*id).map(|pane| pane.id))
+            .collect();
+        if focused == self.focused_panes {
+            return;
+        }
+        let gained: Vec<usize> = focused.difference(&self.focused_panes).copied().collect();
+        let lost: Vec<usize> = self.focused_panes.difference(&focused).copied().collect();
+        self.focused_panes = focused;
+        for (panes, report) in [(lost, b"\x1b[O"), (gained, b"\x1b[I")] {
+            for pane_id in panes {
+                if let Some(pane) = self.pane_mut(pane_id)
+                    && pane.parser.screen().focus_reporting()
+                {
+                    // A pane whose program just exited cannot take it.
+                    let _ = pane.writer.send(report);
+                }
             }
         }
     }
@@ -882,11 +935,24 @@ impl Server {
     ///
     /// Nothing an event can do is worth losing every running shell over, so a
     /// failure becomes a message on screen and the daemon carries on.
+    ///
+    /// That includes a bug: a panic while handling one event is reported the
+    /// same way instead of ending the daemon, which would hang up every PTY
+    /// and kill every program running in them.
     fn dispatch(&mut self, event: Event) -> bool {
-        match self.handle_event(event) {
-            Ok(stop) => stop,
-            Err(error) => {
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle_event(event)));
+        match result {
+            Ok(Ok(stop)) => stop,
+            Ok(Err(error)) => {
                 self.note_failure("mux", error);
+                false
+            }
+            Err(panic) => {
+                self.note_failure(
+                    "mux internal error",
+                    anyhow::anyhow!("{}", panic_message(&*panic)),
+                );
                 false
             }
         }
@@ -913,7 +979,9 @@ impl Server {
                         mouse: false,
                         bell_style: BellStyle::default(),
                         default_cursor_shape: crate::frame::CursorShape::default(),
-                        colors: ColorDepth::TrueColor,
+                        terminal: TerminalFeatures::FULL,
+                        glyphs: crate::config::Glyphs::default(),
+                        focused: true,
                         vim: HashMap::new(),
                         tree: None,
                         themes: None,
@@ -947,7 +1015,7 @@ impl Server {
                     let previous_bells = pane.parser.callbacks().bell_count;
                     let had_prompt = pane.parser.callbacks().prompt_ready.is_some();
                     pane.parser.callbacks_mut().set_colors(colors);
-                    process_terminal_bytes(&mut pane.parser, &mut pane.parser_prefix, &bytes);
+                    process_terminal_bytes(&mut pane.parser, &bytes);
                     clipboard_writes =
                         std::mem::take(&mut pane.parser.callbacks_mut().clipboard_writes);
                     bell_events = pane
@@ -1112,6 +1180,11 @@ impl Server {
                 if let Some(client) = self.clients.get_mut(&id) {
                     client.cols = cols;
                     client.rows = rows;
+                    // A terminal may reflow, crop or clear its screen when it
+                    // is resized, and a quick resize back to the same size
+                    // leaves the frame size unchanged. What it shows now is
+                    // unknown, so the next frame is painted in full.
+                    client.frame = Frame::default();
                 }
                 self.resize_active(id)?;
                 self.rebuild_vim(id);
@@ -1135,6 +1208,11 @@ impl Server {
                 self.handle_paste(id, text)?;
             }
             Event::Client(id, ClientMessage::Detach) => self.detach(id)?,
+            Event::Client(id, ClientMessage::Focus(focused)) => {
+                if let Some(client) = self.clients.get_mut(&id) {
+                    client.focused = focused;
+                }
+            }
         }
         Ok(false)
     }
@@ -1154,7 +1232,8 @@ impl Server {
             theme_directory,
             mouse,
             bell_style,
-            truecolor,
+            terminal,
+            glyphs,
             default_cursor_shape,
         } = hello;
         let session_id = if let Some(name) = session {
@@ -1186,7 +1265,8 @@ impl Server {
             client.mouse = mouse;
             client.bell_style = bell_style;
             client.default_cursor_shape = default_cursor_shape;
-            client.colors = ColorDepth::of(truecolor);
+            client.terminal = terminal;
+            client.glyphs = glyphs;
             client.initialized = true;
         }
         self.theme = theme;
@@ -1283,25 +1363,22 @@ impl Server {
                         if let Some(backing) = backing {
                             parser.screen_mut().set_history_backing(backing);
                         }
-                        let mut parser_prefix = Vec::new();
                         let Some((reader, history_length)) = restored else {
                             return (
                                 id,
                                 ReplayedPane {
                                     parser,
-                                    parser_prefix,
                                     valid_length: 0,
                                     history_length: 0,
                                     replayed: false,
                                 },
                             );
                         };
-                        match replay_pane_journal(&mut parser, &mut parser_prefix, reader) {
+                        match replay_pane_journal(&mut parser, reader) {
                             Ok(valid_length) => (
                                 id,
                                 ReplayedPane {
                                     parser,
-                                    parser_prefix,
                                     valid_length,
                                     history_length,
                                     replayed: true,
@@ -1313,7 +1390,6 @@ impl Server {
                                 id,
                                 ReplayedPane {
                                     parser: new_parser(rows, cols),
-                                    parser_prefix: Vec::new(),
                                     valid_length: 0,
                                     history_length,
                                     replayed: true,
@@ -1345,7 +1421,7 @@ impl Server {
         history: PaneJournal,
     ) -> Result<Pane> {
         let parser = new_parser(rows, cols);
-        self.spawn_pane_with(id, cwd, cols, rows, history, parser, Vec::new(), true)
+        self.spawn_pane_with(id, cwd, cols, rows, history, parser, true)
     }
 
     /// Spawns a pane around a parser someone else has already filled in, which
@@ -1359,7 +1435,6 @@ impl Server {
         rows: u16,
         history: PaneJournal,
         mut parser: vt100::Parser<TerminalCallbacks>,
-        parser_prefix: Vec<u8>,
         needs_backing: bool,
     ) -> Result<Pane> {
         // Clipboard writes are live terminal actions, not restorable screen state.
@@ -1435,7 +1510,6 @@ impl Server {
             child,
             child_pid,
             parser,
-            parser_prefix,
             cwd: cwd.to_path_buf(),
             cwd_sampled: Instant::now(),
             process_icon: IDLE_ICON,
@@ -2319,6 +2393,15 @@ impl Server {
         Ok(())
     }
 
+    /// Forgets what the client's terminal shows, so the next frame repaints
+    /// all of it: the way back from anything else having drawn over mux.
+    fn refresh_client(&mut self, id: usize) {
+        if let Some(client) = self.clients.get_mut(&id) {
+            client.frame = Frame::default();
+        }
+        self.dirty = true;
+    }
+
     fn enter_vim(&mut self, id: usize) {
         let Some((session_index, window_index, pane_index)) = self.active_pane_indices(id) else {
             return;
@@ -2365,7 +2448,6 @@ impl Server {
 /// A pane's parser, filled in from its journal before the pane exists.
 struct ReplayedPane {
     parser: vt100::Parser<TerminalCallbacks>,
-    parser_prefix: Vec<u8>,
     /// How much of the journal replayed cleanly, which is where the pane's
     /// own writes carry on from.
     valid_length: u64,
@@ -2715,6 +2797,15 @@ fn release_unused_memory() {
 
 #[cfg(not(target_os = "macos"))]
 fn release_unused_memory() {}
+
+/// The text a panic was raised with.
+pub(super) fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic".into())
+}
 
 fn visit_window(session: &mut Session, window: usize) {
     session.current_window = window.min(session.windows.len() - 1);
