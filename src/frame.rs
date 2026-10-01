@@ -606,10 +606,7 @@ pub fn write_cell_attributes(
     }
     write_color(output, attributes.foreground, true, colors);
     write_color(output, attributes.background, false, colors);
-    if attributes.underline_color != vt100::Color::Default
-        && attributes.underline != vt100::UnderlineStyle::None
-        && terminal.styled_underlines
-    {
+    if attributes.underline_color != vt100::Color::Default && terminal.styled_underlines {
         write_color_parameter(output, attributes.underline_color, 58, colors);
     }
     output.push(b'm');

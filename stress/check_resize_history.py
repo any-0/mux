@@ -3,12 +3,14 @@
 import argparse
 import hashlib
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 from run import ROOT,write_json
 
 BASE='01eaa380a7b46e0e68546a555614d50a25b87106'
+# The commit that added the regression test; later commits change the API
+# the rest of the test file uses.
+FIXED='bcdbbc091c74feb0f82b453d04b627637e15212e'
 
 
 def check(output):
@@ -18,7 +20,7 @@ def check(output):
     subprocess.run(['git','worktree','add','--detach',str(checkout),BASE],cwd=ROOT,check=True)
     try:
         # This file differs from the baseline only by the new regression test.
-        shutil.copyfile(ROOT/'src/server/tests.rs',checkout/'src/server/tests.rs')
+        (checkout/'src/server/tests.rs').write_bytes(subprocess.run(['git','show',f'{FIXED}:src/server/tests.rs'],cwd=ROOT,check=True,capture_output=True).stdout)
         test='server::tests::shrinking_a_pane_keeps_output_above_the_idle_cursor_in_history'
         with (output/'baseline-regression.log').open('wb') as log:
             result=subprocess.run(['cargo','test','--locked','--target-dir',str(target),test,'--','--exact','--nocapture'],cwd=checkout,stdout=log,stderr=subprocess.STDOUT,timeout=180)

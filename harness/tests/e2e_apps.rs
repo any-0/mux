@@ -124,8 +124,17 @@ fn compare(name: &str, command: &str, program: &str, compare: Compare) {
     }
     let rig = Rig::new();
     fixture(&rig);
-    let want = direct(command, &rig.root.join("home"));
-    let got = in_mux(command, &rig);
+    let mut want = direct(command, &rig.root.join("home"));
+    let mut got = in_mux(command, &rig);
+    // What changes between the two runs on its own (free disk space in mc's
+    // panel footer) is not the multiplexer's to reproduce.
+    for screen in [&mut want, &mut got] {
+        for cell in &mut screen.cells {
+            if cell.text.chars().all(|c| c.is_ascii_digit()) {
+                cell.text = "0".into();
+            }
+        }
+    }
     if let Some(report) = want.diff(&got, compare) {
         panic!("{name}: mux shows something else than the program drew:\n{report}");
     }
