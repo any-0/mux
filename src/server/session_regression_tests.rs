@@ -1,6 +1,5 @@
 //! PTY histories adapted from tmux regress/input-{scroll,edit,malformed,sgr}.sh
 //! and screen-redraw-status.sh. Assertions describe user-visible results.
-//! See docs/regression-coverage.md and scripts/check-regression-witnesses.
 
 use std::{
     fs,

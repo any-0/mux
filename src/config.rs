@@ -1117,6 +1117,8 @@ mod tests {
             v = "split-vertical"
             [vim]
             "§" = "first-nonblank"
+            "Ctrl-d" = "half-page-down-center"
+            "Shift-Down" = "down-10"
         "#;
         let bindings = load("mux-binding-config.toml", source).unwrap().bindings;
         for (mode, name, expected) in [
@@ -1124,30 +1126,12 @@ mod tests {
             (Mode::Normal, "Alt-x", Some(Action::SessionTree)),
             (Mode::Leader, "v", Some(Action::SplitVertical)),
             (Mode::Vim, "§", Some(Action::FirstNonBlank)),
+            (Mode::Vim, "Ctrl-d", Some(Action::HalfPageDownCenter)),
+            (Mode::Vim, "Shift-Down", Some(Action::CursorDown10)),
             (Mode::Vim, "Alt-a", Some(Action::EnterLeader)),
             (Mode::Vim, "Alt-d", Some(Action::JumpCharacter)),
         ] {
             assert_eq!(bindings.get(mode, &key(name)), expected, "{name}");
-        }
-    }
-
-    #[test]
-    fn checked_in_preset_loads_expected_motion_overrides() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/julian.toml");
-        let settings = Settings::load(Some(&path)).unwrap();
-        assert_eq!(settings.clipboard_command, ["yank"]);
-        assert_eq!(settings.theme, Theme::default());
-        for (name, expected) in [
-            ("§", Action::FirstNonBlank),
-            ("Ctrl-d", Action::HalfPageDownCenter),
-            ("Shift-Down", Action::CursorDown10),
-            ("Alt-3", Action::SelectWindow(3)),
-        ] {
-            assert_eq!(
-                settings.bindings.get(Mode::Vim, &key(name)),
-                Some(expected),
-                "{name}"
-            );
         }
     }
 

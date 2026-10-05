@@ -22,8 +22,7 @@ This is `vt100` 0.16.2 from crates.io with the following mux changes.
 
 ## Emulation
 
-Checked against alacritty by the differential fuzzer in `harness/`, and against
-xterm and tmux where those disagree:
+Checked against alacritty, and against xterm and tmux where those disagree:
 
 - DEC Special Graphics and UK character sets in G0/G1, SI/SO, saved by DECSC.
 - REP (bounded to a screenful), IRM, DECAWM off, tab stops (HTS, TBC, CHT,

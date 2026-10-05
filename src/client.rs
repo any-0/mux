@@ -301,8 +301,8 @@ fn truecolor_from(
 /// the colour's parameters read as unrelated attributes. `var` reads the
 /// environment.
 fn styled_underlines_from(var: impl Fn(&str) -> Option<String>) -> bool {
-    // An explicit answer, for a terminal (or a test oracle) that is capable
-    // but cannot be recognised. Unlike the configuration key, older mux
+    // An explicit answer, for a terminal that is capable but cannot be
+    // recognised. Unlike the configuration key, older mux
     // versions simply ignore it.
     match var("MUX_STYLED_UNDERLINES").as_deref() {
         Some("1") => return true,

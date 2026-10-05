@@ -134,8 +134,7 @@ pane are relayed too. Vim state is kept per pane.
 
 `$XDG_CONFIG_HOME/mux/config.toml` (default `~/.config/mux/config.toml`) is read
 when it exists; `--config PATH` uses another file. Unknown keys, actions or
-values are startup errors. [`config/julian.toml`](config/julian.toml) is a
-Neovim-flavored preset.
+values are startup errors.
 
 ```toml
 theme = "/home/j/.config/theme/current/mux.toml"  # palette file, see below
