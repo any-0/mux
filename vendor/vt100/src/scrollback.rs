@@ -1,11 +1,10 @@
 use std::{
     collections::VecDeque,
     fs::File,
-    iter::FromIterator,
     os::unix::fs::FileExt,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc::{self, SyncSender, TrySendError},
+        mpsc::{self, SyncSender},
         Arc, Mutex, OnceLock, RwLock,
     },
     thread,
@@ -15,12 +14,12 @@ const BLOCK_ROWS: usize = 128;
 const SPILL_QUEUE_JOBS: usize = 64;
 const SPILL_QUEUE_BYTES: usize = 8 * 1024 * 1024;
 
-#[derive(Debug)]
-pub(crate) struct Scrollback {
+#[derive(Clone, Debug, Default)]
+pub struct Scrollback {
     blocks: VecDeque<Block>,
     tail: Vec<crate::row::Row>,
     len: usize,
-    backing: Option<SpillWriter>,
+    backing: Option<Arc<FileAllocator>>,
 }
 
 #[derive(Debug)]
@@ -41,15 +40,9 @@ struct StoredBytes {
 #[derive(Debug)]
 enum Backing {
     Heap(Arc<[u8]>),
+    /// Queued for the writer; still readable from memory meanwhile.
     Spilling(Arc<[u8]>),
-    File { allocation: Arc<FileAllocation> },
-}
-
-#[derive(Clone, Debug)]
-struct SpillWriter {
-    sender: SyncSender<SpillCommand>,
-    allocator: Arc<FileAllocator>,
-    pending_bytes: Arc<AtomicUsize>,
+    File(Arc<FileAllocation>),
 }
 
 #[derive(Debug)]
@@ -57,12 +50,11 @@ struct SpillJob {
     backing: Arc<RwLock<Backing>>,
     bytes: Arc<[u8]>,
     allocation: Arc<FileAllocation>,
-    pending_bytes: Arc<AtomicUsize>,
 }
 
 #[derive(Debug)]
 struct FileAllocator {
-    file: Arc<File>,
+    file: File,
     state: Mutex<AllocatorState>,
 }
 
@@ -85,28 +77,7 @@ enum SpillCommand {
     Flush(SyncSender<()>),
 }
 
-impl Default for Scrollback {
-    fn default() -> Self {
-        Self {
-            blocks: VecDeque::new(),
-            tail: Vec::new(),
-            len: 0,
-            backing: None,
-        }
-    }
-}
-
-impl Clone for Scrollback {
-    fn clone(&self) -> Self {
-        Self {
-            blocks: self.blocks.clone(),
-            tail: self.tail.clone(),
-            len: self.len,
-            backing: self.backing.clone(),
-        }
-    }
-}
-
+// A clone shares the stored bytes but decodes on its own.
 impl Clone for Block {
     fn clone(&self) -> Self {
         Self {
@@ -129,7 +100,7 @@ impl Scrollback {
         self.tail.push(row);
         self.len += 1;
         if self.tail.len() == BLOCK_ROWS {
-            let block = Block::new(std::mem::take(&mut self.tail));
+            let block = Block::new(&std::mem::take(&mut self.tail));
             if let Some(backing) = &self.backing {
                 backing.spill(&block.storage);
             }
@@ -139,7 +110,10 @@ impl Scrollback {
     }
 
     pub(crate) fn set_backing(&mut self, file: File) {
-        let backing = SpillWriter::new(file);
+        let backing = Arc::new(FileAllocator {
+            file,
+            state: Mutex::new(AllocatorState::default()),
+        });
         for block in &self.blocks {
             backing.spill(&block.storage);
         }
@@ -147,8 +121,12 @@ impl Scrollback {
     }
 
     pub(crate) fn flush_backing(&self) {
-        if let Some(backing) = &self.backing {
-            backing.flush();
+        if self.backing.is_some() {
+            let (sender, receiver) = mpsc::sync_channel(0);
+            spill_sender()
+                .send(SpillCommand::Flush(sender))
+                .expect("scrollback spill writer stopped");
+            receiver.recv().expect("scrollback spill writer stopped");
         }
     }
 
@@ -202,7 +180,11 @@ impl Scrollback {
         self.blocks.capacity() * std::mem::size_of::<Block>()
             + self.blocks.iter().map(Block::heap_bytes).sum::<usize>()
             + self.tail.capacity() * std::mem::size_of::<crate::row::Row>()
-            + self.tail.iter().map(crate::row::Row::heap_bytes).sum::<usize>()
+            + self
+                .tail
+                .iter()
+                .map(crate::row::Row::heap_bytes)
+                .sum::<usize>()
     }
 
     pub(crate) fn into_rows(self) -> Vec<crate::row::Row> {
@@ -231,22 +213,11 @@ impl Scrollback {
         if let Some(block) = self.blocks.get(block_index) {
             return Some(&block.rows()[index % BLOCK_ROWS]);
         }
-        self.tail
-            .get(index - (self.blocks.len() - 1) * BLOCK_ROWS)
+        self.tail.get(index - (self.blocks.len() - 1) * BLOCK_ROWS)
     }
 }
 
-impl FromIterator<crate::row::Row> for Scrollback {
-    fn from_iter<T: IntoIterator<Item = crate::row::Row>>(iter: T) -> Self {
-        let mut scrollback = Self::default();
-        for row in iter {
-            scrollback.push_back(row);
-        }
-        scrollback
-    }
-}
-
-pub(crate) struct Iter<'a> {
+pub struct Iter<'a> {
     scrollback: &'a Scrollback,
     index: usize,
 }
@@ -274,18 +245,13 @@ impl<'a> Iterator for Iter<'a> {
 impl ExactSizeIterator for Iter<'_> {}
 
 impl Block {
-    fn new(rows: Vec<crate::row::Row>) -> Self {
+    fn new(rows: &[crate::row::Row]) -> Self {
         let mut raw = Vec::new();
-        for row in &rows {
+        for row in rows {
             row.encode(&mut raw);
         }
         let uncompressed_len = raw.len();
-        let compressed = zstd::bulk::compress(&raw, 1).expect("compress internal scrollback block");
-        let (bytes, compressed) = if compressed.len() < raw.len() {
-            (compressed.into_boxed_slice(), true)
-        } else {
-            (raw.into_boxed_slice(), false)
-        };
+        let (bytes, compressed) = compress_if_smaller(raw);
         Self {
             storage: StoredBytes {
                 compressed,
@@ -302,12 +268,8 @@ impl Block {
         self.decoded.get_or_init(|| self.decode())
     }
 
-    fn into_rows(self) -> Vec<crate::row::Row> {
-        if self.decoded.get().is_some() {
-            self.decoded.into_inner().unwrap()
-        } else {
-            self.decode()
-        }
+    fn into_rows(mut self) -> Vec<crate::row::Row> {
+        self.decoded.take().unwrap_or_else(|| self.decode())
     }
 
     fn decode(&self) -> Vec<crate::row::Row> {
@@ -338,23 +300,14 @@ impl Block {
 impl StoredBytes {
     fn read(&self) -> Vec<u8> {
         match &*self.backing.read().expect("lock scrollback storage") {
-            Backing::Heap(bytes) => bytes.to_vec(),
-            Backing::Spilling(bytes) => bytes.to_vec(),
-            Backing::File { allocation } => {
+            Backing::Heap(bytes) | Backing::Spilling(bytes) => bytes.to_vec(),
+            Backing::File(allocation) => {
                 let mut bytes = vec![0; allocation.len];
-                let mut read = 0;
-                while read < bytes.len() {
-                    let count = allocation
-                        .allocator
-                        .file
-                        .read_at(
-                            &mut bytes[read..],
-                            allocation.offset + read as u64,
-                        )
-                        .expect("read internal scrollback block");
-                    assert!(count > 0, "internal scrollback file ended early");
-                    read += count;
-                }
+                allocation
+                    .allocator
+                    .file
+                    .read_exact_at(&mut bytes, allocation.offset)
+                    .expect("read internal scrollback block");
                 bytes
             }
         }
@@ -362,49 +315,52 @@ impl StoredBytes {
 
     fn heap_bytes(&self) -> usize {
         match &*self.backing.read().expect("lock scrollback storage") {
-            Backing::Heap(bytes) => bytes.len(),
-            Backing::Spilling(bytes) => bytes.len(),
-            Backing::File { .. } => 0,
+            Backing::Heap(bytes) | Backing::Spilling(bytes) => bytes.len(),
+            Backing::File(_) => 0,
         }
     }
 }
 
-impl SpillWriter {
-    fn new(file: File) -> Self {
-        Self {
-            sender: spill_sender().clone(),
-            allocator: Arc::new(FileAllocator {
-                file: Arc::new(file),
-                state: Mutex::new(AllocatorState::default()),
-            }),
-            pending_bytes: spill_pending().clone(),
-        }
+/// Compresses `raw` with zstd unless that would not make it smaller. Returns
+/// the bytes to store and whether they are compressed.
+pub fn compress_if_smaller(raw: Vec<u8>) -> (Vec<u8>, bool) {
+    let compressed = zstd::bulk::compress(&raw, 1).expect("compress scrollback");
+    if compressed.len() < raw.len() {
+        (compressed, true)
+    } else {
+        (raw, false)
     }
+}
 
-    fn flush(&self) {
-        let (sender, receiver) = mpsc::sync_channel(0);
-        self.sender
-            .send(SpillCommand::Flush(sender))
-            .expect("scrollback spill writer stopped");
-        receiver.recv().expect("scrollback spill writer stopped");
-    }
+/// Bytes queued for the spill writer across every scrollback.
+static SPILL_PENDING: AtomicUsize = AtomicUsize::new(0);
 
-    fn spill(&self, storage: &StoredBytes) {
-        let len = {
-            let backing = storage.backing.read().expect("lock scrollback storage");
-            let Backing::Heap(bytes) = &*backing else {
-                return;
-            };
-            bytes.len()
+fn reserve_pending(pending: &AtomicUsize, len: usize) -> bool {
+    pending
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current
+                .checked_add(len)
+                .filter(|next| *next <= SPILL_QUEUE_BYTES)
+        })
+        .is_ok()
+}
+
+impl FileAllocator {
+    /// Queues `storage` for the writer thread. When the queue is full the
+    /// block simply stays in memory: terminal processing never waits.
+    fn spill(self: &Arc<Self>, storage: &StoredBytes) {
+        let len = match &*storage.backing.read().expect("lock scrollback storage") {
+            Backing::Heap(bytes) => bytes.len(),
+            _ => return,
         };
-        if !reserve_pending(&self.pending_bytes, len) {
+        if !reserve_pending(&SPILL_PENDING, len) {
             return;
         }
-        let allocation = self.allocator.allocate(len);
+        let allocation = self.allocate(len);
         let bytes = {
             let mut backing = storage.backing.write().expect("lock scrollback storage");
             let Backing::Heap(bytes) = &*backing else {
-                self.pending_bytes.fetch_sub(len, Ordering::Relaxed);
+                SPILL_PENDING.fetch_sub(len, Ordering::Relaxed);
                 return;
             };
             let bytes = bytes.clone();
@@ -415,65 +371,30 @@ impl SpillWriter {
             backing: storage.backing.clone(),
             bytes: bytes.clone(),
             allocation,
-            pending_bytes: self.pending_bytes.clone(),
         };
-        if let Err(
-            TrySendError::Full(SpillCommand::Write(_))
-            | TrySendError::Disconnected(SpillCommand::Write(_)),
-        ) = self.sender.try_send(SpillCommand::Write(job))
-        {
+        if spill_sender().try_send(SpillCommand::Write(job)).is_err() {
             *storage.backing.write().expect("lock scrollback storage") = Backing::Heap(bytes);
-            self.pending_bytes.fetch_sub(len, Ordering::Relaxed);
+            SPILL_PENDING.fetch_sub(len, Ordering::Relaxed);
         }
     }
-}
 
-fn reserve_pending(pending: &AtomicUsize, len: usize) -> bool {
-    let mut current = pending.load(Ordering::Relaxed);
-    loop {
-        let Some(next) = current
-            .checked_add(len)
-            .filter(|next| *next <= SPILL_QUEUE_BYTES)
-        else {
-            return false;
-        };
-        match pending.compare_exchange_weak(
-            current,
-            next,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => return true,
-            Err(observed) => current = observed,
-        }
-    }
-}
-
-fn spill_pending() -> &'static Arc<AtomicUsize> {
-    static PENDING: OnceLock<Arc<AtomicUsize>> = OnceLock::new();
-    PENDING.get_or_init(|| Arc::new(AtomicUsize::new(0)))
-}
-
-impl FileAllocator {
     fn allocate(self: &Arc<Self>, len: usize) -> Arc<FileAllocation> {
         let mut state = self.state.lock().expect("lock scrollback allocator");
-        let offset = if let Some(index) = state
-            .free
-            .iter()
-            .position(|(_, free_len)| *free_len >= len)
-        {
-            let (offset, free_len) = state.free[index];
-            if free_len == len {
-                state.free.remove(index);
+        let offset =
+            if let Some(index) = state.free.iter().position(|(_, free_len)| *free_len >= len) {
+                let (offset, free_len) = state.free[index];
+                if free_len == len {
+                    state.free.remove(index);
+                } else {
+                    state.free[index] = (offset + to_u64(len), free_len - len);
+                }
+                offset
             } else {
-                state.free[index] = (offset + len as u64, free_len - len);
-            }
-            offset
-        } else {
-            let offset = state.end;
-            state.end += len as u64;
-            offset
-        };
+                let offset = state.end;
+                state.end += to_u64(len);
+                offset
+            };
+        drop(state);
         Arc::new(FileAllocation {
             allocator: self.clone(),
             offset,
@@ -489,7 +410,7 @@ impl FileAllocator {
         for (offset, len) in state.free.drain(..) {
             match merged.last_mut() {
                 Some((previous_offset, previous_len))
-                    if *previous_offset + *previous_len as u64 == offset =>
+                    if *previous_offset + to_u64(*previous_len) == offset =>
                 {
                     *previous_len += len;
                 }
@@ -506,6 +427,7 @@ impl Drop for FileAllocation {
     }
 }
 
+/// The one writer thread, shared by every scrollback.
 fn spill_sender() -> &'static SyncSender<SpillCommand> {
     static SENDER: OnceLock<SyncSender<SpillCommand>> = OnceLock::new();
     SENDER.get_or_init(|| {
@@ -519,34 +441,25 @@ fn spill_sender() -> &'static SyncSender<SpillCommand> {
                         continue;
                     }
                 };
-                let mut written = 0;
-                let mut failed = false;
-                while written < job.bytes.len() {
-                    match job.allocation.allocator.file.write_at(
-                        &job.bytes[written..],
-                        job.allocation.offset + written as u64,
-                    )
-                    {
-                        Ok(0) | Err(_) => {
-                            failed = true;
-                            break;
-                        }
-                        Ok(count) => written += count,
-                    }
-                }
-                job.pending_bytes.fetch_sub(job.bytes.len(), Ordering::Relaxed);
-                if !failed {
-                    *job.backing.write().expect("lock scrollback storage") = Backing::File {
-                        allocation: job.allocation,
-                    };
+                let written = job
+                    .allocation
+                    .allocator
+                    .file
+                    .write_all_at(&job.bytes, job.allocation.offset);
+                SPILL_PENDING.fetch_sub(job.bytes.len(), Ordering::Relaxed);
+                *job.backing.write().expect("lock scrollback storage") = if written.is_ok() {
+                    Backing::File(job.allocation)
                 } else {
-                    *job.backing.write().expect("lock scrollback storage") =
-                        Backing::Heap(job.bytes.clone());
-                }
+                    Backing::Heap(job.bytes)
+                };
             }
         });
         sender
     })
+}
+
+fn to_u64(len: usize) -> u64 {
+    u64::try_from(len).expect("usize fits in u64")
 }
 
 #[cfg(test)]
@@ -573,7 +486,7 @@ mod tests {
 
     fn allocator() -> Arc<FileAllocator> {
         Arc::new(FileAllocator {
-            file: Arc::new(backing_file()),
+            file: backing_file(),
             state: Mutex::new(AllocatorState::default()),
         })
     }

@@ -102,48 +102,46 @@ fn palette_colors(palette: &Palette) -> [(&'static str, Rgb); 14] {
     ]
 }
 
-/// Rows a run of swatches takes once it has wrapped, each `padding` cells wider
-/// than its name and `gap` cells apart.
-fn swatch_rows(names: &[(&str, Rgb)], padding: u16, gap: u16, width: u16) -> u16 {
-    let mut rows = 1;
-    let mut used = 0;
-    for (name, _) in names {
-        let needed = name.chars().count() as u16 + padding;
-        if used + needed > width && used > 0 {
-            rows += 1;
-            used = 0;
-        }
-        used += needed + gap;
-    }
-    rows
+/// Where each palette swatch goes at this width, as row and column offsets: a
+/// swatch is its name padded by a cell each side, one cell from the next.
+fn palette_swatches(palette: &Palette, width: u16) -> Vec<(u16, u16, &'static str, Rgb)> {
+    let (mut row, mut col) = (0, 0);
+    palette_colors(palette)
+        .into_iter()
+        .map(|(name, color)| {
+            let needed = name.len() as u16 + 2;
+            if col + needed > width && col > 0 {
+                row += 1;
+                col = 0;
+            }
+            let swatch = (row, col, name, color);
+            col += needed + 1;
+            swatch
+        })
+        .collect()
 }
 
 /// Rows the palette needs at this width.
 fn theme_palette_rows(palette: &Palette, width: u16) -> u16 {
-    swatch_rows(&palette_colors(palette), 2, 1, width)
+    palette_swatches(palette, width)
+        .last()
+        .map_or(0, |swatch| swatch.0)
+        + 1
 }
 
 /// Shows the palette the highlighted theme is made of.
-fn render_theme_palette(frame: &mut Frame, top: u16, col: u16, width: u16, theme: &Theme) {
+fn render_theme_palette(frame: &mut Frame, top: u16, left: u16, width: u16, theme: &Theme) {
     let palette = theme.palette;
-    let mut row = top;
-    let mut at = col;
-    for (name, color) in palette_colors(&palette) {
-        let tag = format!(" {name} ");
-        let needed = tag.chars().count() as u16;
-        if at + needed > col + width && at > col {
-            row += 1;
-            at = col;
-        }
-        at = frame.set_text(
-            row,
-            at,
-            &tag,
+    for (row, col, name, color) in palette_swatches(&palette, width) {
+        frame.set_text(
+            top + row,
+            left + col,
+            &format!(" {name} "),
             CellAttributes::colors(
                 contrasting_shade(color, palette.foreground, palette.background),
                 color,
             ),
-        ) + 1;
+        );
     }
 }
 
@@ -310,19 +308,12 @@ fn render_theme_tabs(
         for index in indices {
             let entry = &picker.entries[*index];
             let selected = *index == picker.selected;
-            let background = if selected {
-                theme.panel_selected
+            let (foreground, background) = if selected {
+                (theme.panel_foreground, theme.panel_selected)
             } else {
-                theme.panel_background
+                (theme.panel_row_foreground, theme.panel_background)
             };
-            let attributes = CellAttributes::colors(
-                if selected {
-                    theme.panel_foreground
-                } else {
-                    theme.panel_row_foreground
-                },
-                background,
-            );
+            let attributes = CellAttributes::colors(foreground, background);
             let tab = theme_tab_width(&entry.name);
             if at + tab > left + width {
                 break;
@@ -338,9 +329,10 @@ fn render_theme_tabs(
                     CellAttributes::colors(theme.popup_accent, background),
                 );
             }
-            let shortcut = match index {
-                index if *index < 9 => (index + 1).to_string(),
-                _ => " ".into(),
+            let shortcut = if *index < 9 {
+                (index + 1).to_string()
+            } else {
+                " ".into()
             };
             let after = frame.set_text(
                 row,

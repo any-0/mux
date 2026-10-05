@@ -34,10 +34,7 @@ pub enum MuxCommand {
     ResizeRight(u16),
     ZoomPane,
     BreakPane,
-    JoinPane {
-        window: u8,
-        axis_is_vertical: bool,
-    },
+    JoinPane { window: u8, axis_is_vertical: bool },
     SwapWindow(u8),
     JumpToBell,
     KillPane,
@@ -45,7 +42,6 @@ pub enum MuxCommand {
     SelectWindow(u8),
     EnterVim,
     SetTheme(Theme),
-    /// Repaint the whole screen of the attached client.
     RefreshClient,
 }
 
@@ -136,7 +132,6 @@ pub struct Hello {
     pub theme_directory: Option<PathBuf>,
     pub mouse: bool,
     pub bell_style: BellStyle,
-    /// What this client's terminal understands.
     pub terminal: TerminalFeatures,
     /// Which glyphs this client's font has for the sidebar.
     pub glyphs: Glyphs,
@@ -180,28 +175,30 @@ pub enum ServerMessage {
     Error(String),
 }
 
+/// Version 1's shutdown frame is a permanent control message, independent of
+/// `ClientMessage`'s variant order and of the interactive protocol version.
+const SHUTDOWN_FRAME: &[u8] = b"MUXP\x00\x01\x00\x00\x00\x01\x08";
+
+fn wire_config() -> impl bincode::config::Config {
+    bincode::config::standard().with_limit::<MAX_MESSAGE_SIZE>()
+}
+
 pub fn write_message<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<()> {
-    let bytes = bincode::serde::encode_to_vec(
-        value,
-        bincode::config::standard().with_limit::<MAX_MESSAGE_SIZE>(),
-    )
-    .context("encode protocol message")?;
+    let bytes =
+        bincode::serde::encode_to_vec(value, wire_config()).context("encode protocol message")?;
     if bytes.len() > MAX_MESSAGE_SIZE {
         bail!("protocol message exceeds 16 MiB");
     }
-    let length = u32::try_from(bytes.len()).context("protocol message is too large")?;
     writer.write_all(&WIRE_MAGIC)?;
     writer.write_all(&WIRE_VERSION.to_be_bytes())?;
-    writer.write_all(&length.to_be_bytes())?;
+    writer.write_all(&(bytes.len() as u32).to_be_bytes())?;
     writer.write_all(&bytes)?;
     writer.flush()?;
     Ok(())
 }
 
-// Version 1's shutdown frame is a permanent control message. Keep it independent
-// of ClientMessage's enum ordering and the interactive protocol version.
 pub fn write_shutdown(writer: &mut impl Write) -> Result<()> {
-    writer.write_all(b"MUXP\x00\x01\x00\x00\x00\x01\x08")?;
+    writer.write_all(SHUTDOWN_FRAME)?;
     writer.flush()?;
     Ok(())
 }
@@ -234,22 +231,21 @@ pub fn read_message<T: DeserializeOwned>(reader: &mut impl Read) -> Result<Optio
     decode_message(version, &bytes).map(Some)
 }
 
+/// Reads one frame's version and payload; `None` only for a clean disconnect
+/// before the first byte.
 fn read_frame(reader: &mut impl Read) -> Result<Option<(u16, Vec<u8>)>> {
     let mut magic = [0; 4];
-    match reader.read(&mut magic[..1]) {
-        Ok(0) => return Ok(None),
-        Ok(_) => reader.read_exact(&mut magic[1..])?,
-        Err(error) => return Err(error.into()),
+    if reader.read(&mut magic[..1])? == 0 {
+        return Ok(None);
     }
+    reader.read_exact(&mut magic[1..])?;
     if magic != WIRE_MAGIC {
         bail!("incompatible mux protocol; client and daemon must use the same mux version");
     }
-    let mut version = [0; 2];
-    reader.read_exact(&mut version)?;
-    let version = u16::from_be_bytes(version);
-    let mut length = [0; 4];
-    reader.read_exact(&mut length)?;
-    let length = u32::from_be_bytes(length) as usize;
+    let mut header = [0; 6];
+    reader.read_exact(&mut header)?;
+    let version = u16::from_be_bytes([header[0], header[1]]);
+    let length = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
     if length > MAX_MESSAGE_SIZE {
         bail!("protocol message exceeds 16 MiB");
     }
@@ -264,11 +260,8 @@ fn decode_message<T: DeserializeOwned>(version: u16, bytes: &[u8]) -> Result<T> 
             "incompatible mux protocol version {version} (expected {WIRE_VERSION}); client and daemon must use the same mux version"
         );
     }
-    let (value, used) = bincode::serde::decode_from_slice(
-        bytes,
-        bincode::config::standard().with_limit::<MAX_MESSAGE_SIZE>(),
-    )
-    .context("decode protocol message")?;
+    let (value, used) = bincode::serde::decode_from_slice(bytes, wire_config())
+        .context("decode protocol message")?;
     if used != bytes.len() {
         bail!("protocol message contains trailing bytes");
     }
@@ -279,34 +272,32 @@ fn decode_message<T: DeserializeOwned>(version: u16, bytes: &[u8]) -> Result<T> 
 mod tests {
     use super::*;
 
+    fn frame(version: u16, payload: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::from(WIRE_MAGIC);
+        bytes.extend_from_slice(&version.to_be_bytes());
+        bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
     #[test]
-    fn shutdown_uses_the_version_one_encoding() {
+    fn shutdown_uses_the_version_one_encoding_and_nothing_else_does() {
         let mut bytes = Vec::new();
         write_shutdown(&mut bytes).unwrap();
-        assert_eq!(bytes, b"MUXP\x00\x01\x00\x00\x00\x01\x08");
+        assert_eq!(bytes, frame(1, &[8]));
         assert!(matches!(
             read_client_message(&mut bytes.as_slice()).unwrap(),
             Some(ClientMessage::Shutdown)
         ));
-    }
-
-    #[test]
-    fn legacy_compatibility_only_accepts_exact_shutdown() {
-        for payload in [vec![5], vec![8, 0]] {
-            let mut bytes = b"MUXP\x00\x01".to_vec();
-            bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-            bytes.extend_from_slice(&payload);
-            assert!(read_client_message(&mut bytes.as_slice()).is_err());
+        for payload in [&[5][..], &[8, 0]] {
+            assert!(read_client_message(&mut frame(1, payload).as_slice()).is_err());
         }
     }
 
     #[test]
     fn shutdown_confirmation_survives_protocol_version_changes() {
         for version in [1_u16, WIRE_VERSION, WIRE_VERSION + 1] {
-            let mut bytes = Vec::new();
-            write_message(&mut bytes, &ServerMessage::Detached).unwrap();
-            bytes[4..6].copy_from_slice(&version.to_be_bytes());
-            read_shutdown_response(&mut bytes.as_slice()).unwrap();
+            read_shutdown_response(&mut frame(version, &[3]).as_slice()).unwrap();
         }
         let mut bytes = Vec::new();
         write_message(&mut bytes, &ServerMessage::Done).unwrap();
@@ -317,19 +308,17 @@ mod tests {
     #[test]
     fn framed_message_round_trips() {
         let mut bytes = Vec::new();
-        write_message(&mut bytes, &ServerMessage::Done).unwrap();
-        assert_eq!(&bytes[..4], &WIRE_MAGIC);
+        write_message(&mut bytes, &ServerMessage::Detached).unwrap();
+        assert_eq!(bytes, frame(WIRE_VERSION, &[3]));
         assert!(matches!(
             read_message(&mut bytes.as_slice()).unwrap(),
-            Some(ServerMessage::Done)
+            Some(ServerMessage::Detached)
         ));
     }
 
     #[test]
     fn wrong_wire_version_has_an_actionable_error() {
-        let mut bytes = Vec::from(WIRE_MAGIC);
-        bytes.extend_from_slice(&(WIRE_VERSION + 1).to_be_bytes());
-        bytes.extend_from_slice(&0_u32.to_be_bytes());
+        let bytes = frame(WIRE_VERSION + 1, &[]);
         let error = read_message::<ServerMessage>(&mut bytes.as_slice()).unwrap_err();
         assert!(
             error
@@ -348,16 +337,13 @@ mod tests {
     }
 
     #[test]
-    fn oversized_inbound_message_is_rejected_before_allocation() {
+    fn oversized_messages_are_rejected() {
         let mut bytes = Vec::from(WIRE_MAGIC);
         bytes.extend_from_slice(&WIRE_VERSION.to_be_bytes());
         bytes.extend_from_slice(&((MAX_MESSAGE_SIZE as u32) + 1).to_be_bytes());
         let error = read_message::<ServerMessage>(&mut bytes.as_slice()).unwrap_err();
         assert_eq!(error.to_string(), "protocol message exceeds 16 MiB");
-    }
 
-    #[test]
-    fn oversized_outbound_message_is_rejected() {
         let value = ServerMessage::Render(vec![0; MAX_MESSAGE_SIZE + 1]);
         let error = write_message(&mut Vec::new(), &value).unwrap_err();
         assert!(

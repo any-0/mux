@@ -54,49 +54,42 @@ pub(crate) struct VimBuffer {
 }
 
 impl VimBuffer {
-    fn new(rows: Vec<vt100::Row>, cols: u16) -> Self {
-        let lines = rows.iter().map(|_| OnceCell::new()).collect();
-        Self { rows, cols, lines }
+    /// A buffer of lines already unpacked, with no rows behind them.
+    fn unpacked(lines: impl IntoIterator<Item = VimLine>) -> Self {
+        Self {
+            rows: Vec::new(),
+            cols: 0,
+            lines: lines.into_iter().map(OnceCell::from).collect(),
+        }
     }
 
     /// An empty buffer, which is what a pane with nothing in it looks like.
     pub(crate) fn blank() -> Self {
-        Self {
-            rows: Vec::new(),
-            cols: 0,
-            lines: vec![OnceCell::from(VimLine {
-                text: String::new(),
-                cells: Vec::new(),
-            })],
-        }
+        Self::unpacked([VimLine {
+            text: String::new(),
+            cells: Vec::new(),
+        }])
     }
 
     /// A buffer of plain text, for tests that care about motions rather than
     /// what the cells looked like.
     #[cfg(test)]
     pub(crate) fn from_text(texts: Vec<String>) -> Self {
-        let lines = texts
-            .into_iter()
-            .map(|text| {
-                let cells = text
-                    .char_indices()
-                    .map(|(index, character)| VimCell {
-                        attributes: CellAttributes::default(),
-                        text_start: index as u32,
-                        text_length: character.len_utf8() as u32,
-                        character_start: Some(text[..index].chars().count() as u32),
-                        character_length: 1,
-                        wide_continuation: false,
-                    })
-                    .collect();
-                OnceCell::from(VimLine { text, cells })
-            })
-            .collect::<Vec<_>>();
-        Self {
-            rows: Vec::new(),
-            cols: 0,
-            lines,
-        }
+        Self::unpacked(texts.into_iter().map(|text| {
+            let cells = text
+                .char_indices()
+                .enumerate()
+                .map(|(character_index, (index, character))| VimCell {
+                    attributes: CellAttributes::default(),
+                    text_start: index as u32,
+                    text_length: character.len_utf8() as u32,
+                    character_start: Some(character_index as u32),
+                    character_length: 1,
+                    wide_continuation: false,
+                })
+                .collect();
+            VimLine { text, cells }
+        }))
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -128,17 +121,15 @@ pub(super) fn snapshot_screen(screen: &mut vt100::Screen) -> (VimBuffer, Positio
     let (_, cols) = screen.size();
     let history = screen.history_rows();
     let screen_cursor = screen.cursor_position();
-    let buffer = VimBuffer::new(screen.all_rows().cloned().collect(), cols);
+    let rows: Vec<_> = screen.all_rows().cloned().collect();
+    let lines = rows.iter().map(|_| OnceCell::new()).collect();
+    let buffer = VimBuffer { rows, cols, lines };
     // Taking the rows unpacks the blocks they were stored in. The copies are
     // the snapshot's now, so the pane drops what it decoded to hand them over.
     screen.set_scrollback(0);
-    let cursor_row = history + screen_cursor.0 as usize;
-    let cursor_col = vim_character_column(buffer.line(cursor_row), screen_cursor.1 as usize);
-    let cursor = Position {
-        row: cursor_row,
-        col: cursor_col,
-    };
-    (buffer, cursor)
+    let row = history + screen_cursor.0 as usize;
+    let col = vim_character_column(buffer.line(row), screen_cursor.1 as usize);
+    (buffer, Position { row, col })
 }
 
 #[cfg(test)]
@@ -203,23 +194,13 @@ fn vim_line_from_cells(cells: &[vt100::Cell], cols: u16) -> VimLine {
     }
 }
 
+/// The character under a terminal column, or the one just before it (the
+/// cursor can sit one past the text), or else the end of the line.
 fn vim_character_column(line: &VimLine, terminal_col: usize) -> usize {
-    if let Some(start) = line
-        .cells
-        .get(terminal_col)
-        .and_then(VimCell::character_start)
-    {
-        return start;
-    }
-    if terminal_col > 0
-        && let Some(start) = line
-            .cells
-            .get(terminal_col - 1)
-            .and_then(VimCell::character_start)
-    {
-        return start;
-    }
-    line.text.chars().count()
+    let start = |col: usize| line.cells.get(col).and_then(VimCell::character_start);
+    start(terminal_col)
+        .or_else(|| terminal_col.checked_sub(1).and_then(start))
+        .unwrap_or_else(|| line.text.chars().count())
 }
 
 pub(super) fn vim_cursor_column(line: &VimLine, character_col: usize) -> usize {

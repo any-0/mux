@@ -1,17 +1,11 @@
 //! The daemon: it owns every pane, and paints one screen per attached client.
 //!
-//! This module holds the state itself — sessions, windows, panes and clients —
-//! along with the event loop that drives them, and the operations that change
-//! the session tree. The submodules beside it each own one job:
-//!
-//! What drives the daemon:
+//! This module holds the session tree (sessions, windows, panes), the clients,
+//! and the event loop. The submodules each own one job:
 //!
 //! - [`input`]: what a keystroke, a click or a paste does
 //! - [`command`]: the `mux ...` subcommands and queries
 //! - [`render`]: painting one client's screen
-//!
-//! What it is made of:
-//!
 //! - [`layout`]: where a window's panes sit, and the borders between them
 //! - [`terminal`]: the PTY and `vt100` glue for one pane
 //! - [`snapshot`]: the still copy of a pane that Vim mode moves around in
@@ -19,9 +13,6 @@
 //! - [`ui`]: the bar, the tree, popups and previews
 //! - [`themes`]: the theme picker
 //! - [`process`]: what a pane is running, and its icon
-//!
-//! What it keeps:
-//!
 //! - [`journal`]: a pane's replayable history on disk
 //! - [`persist`]: the session tree on disk, and the daemon's private files
 
@@ -114,12 +105,9 @@ fn configure_pane_terminal(command: &mut CommandBuilder) {
 }
 
 impl Event {
-    /// Whether this came from a client rather than from a pane.
-    ///
-    /// A pane restored from a long journal has its shell start up the moment it
-    /// is spawned, and two dozen shells can put thousands of output events in
-    /// front of the attach that is waiting to draw the screen. Client events go
-    /// first within a batch so the daemon answers the person before the panes.
+    /// Client events go first within a batch: two dozen freshly restored
+    /// shells can queue thousands of output events in front of the attach
+    /// waiting to draw the screen.
     fn is_client_event(&self) -> bool {
         matches!(
             self,
@@ -175,6 +163,19 @@ struct Window {
 }
 
 impl Window {
+    fn new(pane: Pane) -> Self {
+        let pane_id = pane.id;
+        Self {
+            panes: vec![pane],
+            layout: PaneLayout::Pane(pane_id),
+            active_pane: pane_id,
+            previous_pane: pane_id,
+            bell: None,
+            zoomed: false,
+            name: None,
+        }
+    }
+
     fn select_pane(&mut self, pane_id: usize) {
         if pane_id != self.active_pane {
             self.previous_pane = self.active_pane;
@@ -206,10 +207,21 @@ impl Window {
             .map_or(IDLE_ICON, |pane| pane.process_icon)
     }
 
-    /// Where this window's panes sit inside `area`.
-    ///
-    /// Zoomed, only the active pane has a place; the rest keep whatever size
-    /// they last had and are not drawn.
+    /// Moves focus off `pane_id` once it has left this window.
+    fn forget_pane(&mut self, pane_id: usize) {
+        let Some(first) = self.panes.first().map(|pane| pane.id) else {
+            return;
+        };
+        if self.active_pane == pane_id {
+            self.active_pane = first;
+            self.previous_pane = first;
+        } else if self.previous_pane == pane_id {
+            self.previous_pane = self.active_pane;
+        }
+    }
+
+    /// Where this window's panes sit inside `area`. Zoomed, only the active
+    /// pane has a place; the rest keep their size and are not drawn.
     fn regions(&self, area: Rect) -> (Vec<(usize, Rect)>, Vec<Divider>) {
         window_regions(&self.layout, self.active_pane, self.zoomed, area)
     }
@@ -221,6 +233,21 @@ struct Session {
     root: PathBuf,
     windows: Vec<Window>,
     current_window: usize,
+}
+
+impl Session {
+    fn current_window_mut(&mut self) -> &mut Window {
+        &mut self.windows[self.current_window]
+    }
+
+    /// Removes a window, keeping the current one in place where it survives.
+    fn remove_window(&mut self, index: usize) {
+        self.windows.remove(index);
+        if !self.windows.is_empty() {
+            self.current_window =
+                window_index_after_removal(self.current_window, index, self.windows.len());
+        }
+    }
 }
 
 /// The daemon's end of one client connection.
@@ -262,11 +289,9 @@ impl ClientWriter {
         }
     }
 
-    /// Waits for everything queued to reach the client, then closes it.
-    ///
-    /// Dropping the sender is enough on its own — the thread drains what is
-    /// left before it sees the disconnect — but the daemon exits right after
-    /// shutdown, so it has to wait for that to happen.
+    /// Waits (bounded) for everything queued to reach the client, then closes
+    /// it: the daemon exits right after shutdown, so it cannot leave the
+    /// writer thread to drain on its own.
     fn finish(self) {
         drop(self.messages);
         let deadline = Instant::now() + CLIENT_WRITE_TIMEOUT;
@@ -337,6 +362,41 @@ struct Client {
 }
 
 impl Client {
+    fn new(writer: UnixStream) -> Self {
+        Self {
+            writer: ClientWriter::spawn(writer),
+            cols: 80,
+            rows: 24,
+            cwd: PathBuf::new(),
+            session_id: None,
+            previous_session_id: None,
+            bindings: Bindings::defaults(),
+            clipboard_command: vec!["yank".into()],
+            terminal_clipboard: false,
+            theme_command: vec!["theme".into()],
+            theme_directory: None,
+            theme: Theme::default(),
+            mouse: false,
+            bell_style: BellStyle::default(),
+            default_cursor_shape: crate::frame::CursorShape::default(),
+            terminal: TerminalFeatures::FULL,
+            glyphs: crate::config::Glyphs::default(),
+            focused: true,
+            vim: HashMap::new(),
+            tree: None,
+            themes: None,
+            leader: false,
+            leader_key: None,
+            literal: false,
+            rename: None,
+            confirmation: None,
+            message: None,
+            initialized: false,
+            frame: Frame::default(),
+            scratch: Frame::default(),
+        }
+    }
+
     /// The selected theme is a temporary preview while the picker is open.
     fn rendered_theme(&self) -> Theme {
         self.themes
@@ -433,12 +493,7 @@ pub fn run(socket_path: &Path) -> Result<()> {
         server.restore(state)?;
     }
     server.compact_journals()?;
-    for pane in server
-        .sessions
-        .iter()
-        .flat_map(|session| &session.windows)
-        .flat_map(|window| &window.panes)
-    {
+    for pane in server.panes() {
         pane.parser.screen().flush_history_backing();
     }
     release_unused_memory();
@@ -506,6 +561,49 @@ fn process_icon_sampler(events: mpsc::SyncSender<Event>) -> Sender<Vec<ProcessSa
 }
 
 impl Server {
+    fn panes(&self) -> impl Iterator<Item = &Pane> {
+        self.sessions
+            .iter()
+            .flat_map(|session| &session.windows)
+            .flat_map(|window| &window.panes)
+    }
+
+    fn panes_mut(&mut self) -> impl Iterator<Item = &mut Pane> {
+        self.sessions
+            .iter_mut()
+            .flat_map(|session| &mut session.windows)
+            .flat_map(|window| &mut window.panes)
+    }
+
+    /// The session, window and pane indices of `pane_id`.
+    fn locate_pane(&self, pane_id: usize) -> Option<(usize, usize, usize)> {
+        self.sessions
+            .iter()
+            .enumerate()
+            .find_map(|(session_index, session)| {
+                session
+                    .windows
+                    .iter()
+                    .enumerate()
+                    .find_map(|(window_index, window)| {
+                        let pane_index = window.panes.iter().position(|pane| pane.id == pane_id)?;
+                        Some((session_index, window_index, pane_index))
+                    })
+            })
+    }
+
+    fn session_index(&self, session_id: usize) -> Option<usize> {
+        self.sessions
+            .iter()
+            .position(|session| session.id == session_id)
+    }
+
+    fn session(&self, session_id: usize) -> Option<&Session> {
+        self.sessions
+            .iter()
+            .find(|session| session.id == session_id)
+    }
+
     fn restore(&mut self, state: PersistedState) -> Result<()> {
         // Replaying journals is the slow part of starting up, and panes have
         // nothing to say to each other while it happens, so every pane in the
@@ -553,15 +651,14 @@ impl Server {
                 }
                 let mut panes = Vec::with_capacity(saved_window.panes.len());
                 for saved_pane in saved_window.panes {
-                    let replayed = replayed
-                        .remove(&saved_pane.id)
-                        .context("a saved pane was not replayed")?;
                     let ReplayedPane {
                         parser,
                         valid_length,
                         history_length,
                         replayed: had_history,
-                    } = replayed;
+                    } = replayed
+                        .remove(&saved_pane.id)
+                        .context("a saved pane was not replayed")?;
                     let history = match self
                         .persistence
                         .resume_pane_history(saved_pane.id, valid_length)
@@ -571,7 +668,7 @@ impl Server {
                             PaneJournal::new(self.persistence.new_pane_history(saved_pane.id)?, 0)
                         }
                     };
-                    let mut pane = self.spawn_pane_with(
+                    let mut pane = self.spawn_pane(
                         saved_pane.id,
                         &saved_pane.cwd,
                         saved_pane.cols,
@@ -724,14 +821,11 @@ impl Server {
             self.dirty |= self.expire_messages();
             self.dirty |= self.advance_bell_animations();
             let now = Instant::now();
-            for pane in self
-                .sessions
-                .iter_mut()
-                .flat_map(|session| &mut session.windows)
-                .flat_map(|window| &mut window.panes)
-            {
-                self.dirty |= pane.parser.callbacks_mut().expire_synchronized_output(now);
-            }
+            let expired = self
+                .panes_mut()
+                .map(|pane| pane.parser.callbacks_mut().expire_synchronized_output(now))
+                .fold(false, |any, expired| any | expired);
+            self.dirty |= expired;
             if self.dirty && last_render.elapsed() >= FRAME_INTERVAL {
                 self.dirty = false;
                 self.render_all();
@@ -771,6 +865,7 @@ impl Server {
     /// When the next repaint is due, or `None` when the daemon can sleep until
     /// something happens.
     fn next_wake(&self, last_render: Instant) -> Option<Instant> {
+        let attached = self.clients.values().any(|client| client.initialized);
         // A message expiring is a change no further event would announce.
         self.clients
             .values()
@@ -781,27 +876,17 @@ impl Server {
                     .then_some(Instant::now() + ANIMATION_INTERVAL),
             )
             .chain(
-                self.sessions
-                    .iter()
-                    .flat_map(|session| &session.windows)
-                    .flat_map(|window| &window.panes)
-                    .filter(|_| self.clients.values().any(|client| client.initialized))
-                    .filter(|pane| !pane.process_pending)
+                self.panes()
+                    .filter(|pane| attached && !pane.process_pending)
                     .map(|pane| pane.process_sampled + PROCESS_POLL_INTERVAL),
             )
-            .chain(
-                self.sessions
-                    .iter()
-                    .flat_map(|session| &session.windows)
-                    .flat_map(|window| &window.panes)
-                    .filter_map(|pane| {
-                        pane.parser
-                            .callbacks()
-                            .synchronized_output
-                            .as_ref()
-                            .map(|update| update.expires)
-                    }),
-            )
+            .chain(self.panes().filter_map(|pane| {
+                pane.parser
+                    .callbacks()
+                    .synchronized_output
+                    .as_ref()
+                    .map(|update| update.expires)
+            }))
             .min()
     }
 
@@ -825,12 +910,7 @@ impl Server {
     /// Finishes the durable work that was deferred while the daemon was busy.
     fn settle(&mut self) {
         let mut failure = None;
-        for pane in self
-            .sessions
-            .iter_mut()
-            .flat_map(|session| &mut session.windows)
-            .flat_map(|window| &mut window.panes)
-        {
+        for pane in self.panes_mut() {
             if let Err(error) = pane.history.poll_failure() {
                 failure = Some((pane.id, error));
             }
@@ -861,18 +941,14 @@ impl Server {
     /// Rewrites journals that have outgrown [`MAX_JOURNAL_BYTES`] so restoring
     /// a long-lived pane stays fast and its history stays bounded on disk.
     fn compact_journals(&mut self) -> Result<()> {
-        let overgrown = self.overgrown_journals();
-        for pane_id in overgrown {
+        for pane_id in self.overgrown_journals() {
             self.compact_journal(pane_id)?;
         }
         Ok(())
     }
 
     fn overgrown_journals(&self) -> Vec<usize> {
-        self.sessions
-            .iter()
-            .flat_map(|session| &session.windows)
-            .flat_map(|window| &window.panes)
+        self.panes()
             .filter(|pane| pane.history.needs_compaction())
             .map(|pane| pane.id)
             .collect()
@@ -915,10 +991,8 @@ impl Server {
         self.state_dirty = true;
     }
 
-    /// Reports something that went wrong without taking the daemon with it.
-    ///
-    /// Losing a pane's history or a state write is worth telling the user
-    /// about, but it is never worth killing every shell the daemon owns.
+    /// Reports something that went wrong without taking the daemon (and every
+    /// shell it owns) down with it.
     fn note_failure(&mut self, what: &str, error: anyhow::Error) {
         let text = format!("{what}: {error:#}");
         for client in self
@@ -933,12 +1007,8 @@ impl Server {
 
     /// Runs one event and reports whether the daemon should stop.
     ///
-    /// Nothing an event can do is worth losing every running shell over, so a
-    /// failure becomes a message on screen and the daemon carries on.
-    ///
-    /// That includes a bug: a panic while handling one event is reported the
-    /// same way instead of ending the daemon, which would hang up every PTY
-    /// and kill every program running in them.
+    /// An error, or even a panic, becomes a message on screen: ending the
+    /// daemon would hang up every PTY and kill every program running in them.
     fn dispatch(&mut self, event: Event) -> bool {
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle_event(event)));
@@ -961,127 +1031,14 @@ impl Server {
     fn handle_event(&mut self, event: Event) -> Result<bool> {
         match event {
             Event::Connected(id, writer) => {
-                self.clients.insert(
-                    id,
-                    Client {
-                        writer: ClientWriter::spawn(writer),
-                        cols: 80,
-                        rows: 24,
-                        cwd: PathBuf::new(),
-                        session_id: None,
-                        previous_session_id: None,
-                        bindings: Bindings::defaults(),
-                        clipboard_command: vec!["yank".into()],
-                        terminal_clipboard: false,
-                        theme_command: vec!["theme".into()],
-                        theme_directory: None,
-                        theme: Theme::default(),
-                        mouse: false,
-                        bell_style: BellStyle::default(),
-                        default_cursor_shape: crate::frame::CursorShape::default(),
-                        terminal: TerminalFeatures::FULL,
-                        glyphs: crate::config::Glyphs::default(),
-                        focused: true,
-                        vim: HashMap::new(),
-                        tree: None,
-                        themes: None,
-                        leader: false,
-                        leader_key: None,
-                        literal: false,
-                        rename: None,
-                        confirmation: None,
-                        message: None,
-                        initialized: false,
-                        frame: Frame::default(),
-                        scratch: Frame::default(),
-                    },
-                );
+                self.clients.insert(id, Client::new(writer));
             }
             Event::Disconnected(id) => {
-                if self.remember_active_pane(id)? {
-                    self.save_state_soon();
-                }
+                self.track_active_pane(id);
                 self.clients.remove(&id);
             }
             Event::PtyOutput(pane_id, bytes, permit) => {
-                let mut cwd_changed = false;
-                let mut bell_events = 0;
-                let mut clipboard_writes = Vec::new();
-                let mut failure = None;
-                let mut input_failure = None;
-                let colors = TerminalColors::from(&self.theme);
-                if let Some(pane) = self.pane_mut(pane_id) {
-                    failure = pane.history.append_output(&bytes, Some(permit)).err();
-                    let previous_bells = pane.parser.callbacks().bell_count;
-                    let had_prompt = pane.parser.callbacks().prompt_ready.is_some();
-                    pane.parser.callbacks_mut().set_colors(colors);
-                    process_terminal_bytes(&mut pane.parser, &bytes);
-                    clipboard_writes =
-                        std::mem::take(&mut pane.parser.callbacks_mut().clipboard_writes);
-                    bell_events = pane
-                        .parser
-                        .callbacks()
-                        .bell_count
-                        .saturating_sub(previous_bells) as usize;
-                    let responses = std::mem::take(&mut pane.parser.callbacks_mut().responses);
-                    if !responses.is_empty() {
-                        // A pane whose shell has just died cannot take a reply.
-                        if let Err(error) = pane.writer.send(&responses) {
-                            input_failure = Some(error);
-                        }
-                    }
-                    // Sampling the shell's directory costs a system call, so do
-                    // it when a prompt appears and otherwise only occasionally.
-                    let reached_prompt =
-                        !had_prompt && pane.parser.callbacks().prompt_ready.is_some();
-                    if reached_prompt || pane.cwd_sampled.elapsed() >= CWD_POLL_INTERVAL {
-                        pane.cwd_sampled = Instant::now();
-                        if let Some(pid) = pane.child_pid
-                            && let Some(cwd) = process_cwd(pid)
-                            && cwd != pane.cwd
-                        {
-                            pane.cwd = cwd;
-                            cwd_changed = true;
-                        }
-                    }
-                    self.dirty = true;
-                }
-                if let Some(error) = failure {
-                    self.note_failure(&format!("pane {pane_id} history"), error);
-                }
-                if let Some(error) = input_failure {
-                    self.note_failure(&format!("pane {pane_id} input"), error);
-                }
-                if !clipboard_writes.is_empty() {
-                    let clipboard_session = self.sessions.iter().find_map(|session| {
-                        session
-                            .windows
-                            .iter()
-                            .any(|window| window.panes.iter().any(|pane| pane.id == pane_id))
-                            .then_some(session.id)
-                    });
-                    let clipboard_clients: Vec<_> = self
-                        .clients
-                        .iter()
-                        .filter_map(|(id, client)| {
-                            (client.session_id == clipboard_session).then_some(*id)
-                        })
-                        .collect();
-                    for clipboard in clipboard_writes {
-                        for id in &clipboard_clients {
-                            self.clients[id].writer.send(ServerMessage::Clipboard {
-                                selection: clipboard.selection.clone(),
-                                data: clipboard.data.clone(),
-                            });
-                        }
-                    }
-                }
-                if bell_events > 0 {
-                    self.ring_bell(pane_id, bell_events);
-                }
-                if cwd_changed {
-                    self.save_state_soon();
-                }
+                self.handle_pty_output(pane_id, &bytes, permit);
             }
             Event::PtyClosed(pane_id) => {
                 self.close_pane(pane_id)?;
@@ -1121,12 +1078,7 @@ impl Server {
             Event::Client(_, ClientMessage::Shutdown) => {
                 // The last chance to reach the disk, so this one is not deferred.
                 self.state_writer.flush(self.persisted_state())?;
-                for pane in self
-                    .sessions
-                    .iter_mut()
-                    .flat_map(|session| &mut session.windows)
-                    .flat_map(|window| &mut window.panes)
-                {
+                for pane in self.panes_mut() {
                     let _ = pane.history.flush();
                 }
                 for client in self.clients.values() {
@@ -1192,9 +1144,7 @@ impl Server {
                 self.dirty = true;
             }
             Event::Client(id, ClientMessage::Key(key)) => {
-                if self.remember_active_pane(id)? {
-                    self.save_state_soon();
-                }
+                self.track_active_pane(id);
                 self.handle_key(id, key)?;
             }
             Event::Client(id, ClientMessage::Mouse(mouse)) => {
@@ -1202,9 +1152,7 @@ impl Server {
                 self.dirty = true;
             }
             Event::Client(id, ClientMessage::Paste(text)) => {
-                if self.remember_active_pane(id)? {
-                    self.save_state_soon();
-                }
+                self.track_active_pane(id);
                 self.handle_paste(id, text)?;
             }
             Event::Client(id, ClientMessage::Detach) => self.detach(id)?,
@@ -1215,6 +1163,72 @@ impl Server {
             }
         }
         Ok(false)
+    }
+
+    fn handle_pty_output(&mut self, pane_id: usize, bytes: &[u8], permit: OutputPermit) {
+        let colors = TerminalColors::from(&self.theme);
+        let Some(pane) = self.pane_mut(pane_id) else {
+            return;
+        };
+        let history_failure = pane.history.append_output(bytes, Some(permit)).err();
+        let previous_bells = pane.parser.callbacks().bell_count;
+        let had_prompt = pane.parser.callbacks().prompt_ready.is_some();
+        pane.parser.callbacks_mut().set_colors(colors);
+        process_terminal_bytes(&mut pane.parser, bytes);
+        let callbacks = pane.parser.callbacks_mut();
+        let clipboard_writes = std::mem::take(&mut callbacks.clipboard_writes);
+        let bell_events = callbacks.bell_count.saturating_sub(previous_bells) as usize;
+        let reached_prompt = !had_prompt && callbacks.prompt_ready.is_some();
+        let responses = std::mem::take(&mut callbacks.responses);
+        // A pane whose shell has just died cannot take a reply.
+        let input_failure = if responses.is_empty() {
+            None
+        } else {
+            pane.writer.send(&responses).err()
+        };
+        // Sampling the shell's directory costs a system call, so do it when a
+        // prompt appears and otherwise only occasionally.
+        let mut cwd_changed = false;
+        if reached_prompt || pane.cwd_sampled.elapsed() >= CWD_POLL_INTERVAL {
+            pane.cwd_sampled = Instant::now();
+            if let Some(pid) = pane.child_pid
+                && let Some(cwd) = process_cwd(pid)
+                && cwd != pane.cwd
+            {
+                pane.cwd = cwd;
+                cwd_changed = true;
+            }
+        }
+        self.dirty = true;
+        if let Some(error) = history_failure {
+            self.note_failure(&format!("pane {pane_id} history"), error);
+        }
+        if let Some(error) = input_failure {
+            self.note_failure(&format!("pane {pane_id} input"), error);
+        }
+        if !clipboard_writes.is_empty() {
+            let session_id = self
+                .locate_pane(pane_id)
+                .map(|(session_index, _, _)| self.sessions[session_index].id);
+            for client in self
+                .clients
+                .values()
+                .filter(|client| client.session_id == session_id)
+            {
+                for clipboard in &clipboard_writes {
+                    client.writer.send(ServerMessage::Clipboard {
+                        selection: clipboard.selection.clone(),
+                        data: clipboard.data.clone(),
+                    });
+                }
+            }
+        }
+        if bell_events > 0 {
+            self.ring_bell(pane_id, bell_events);
+        }
+        if cwd_changed {
+            self.save_state_soon();
+        }
     }
 
     fn initialize_client(&mut self, id: usize, hello: Hello) -> Result<()> {
@@ -1248,40 +1262,31 @@ impl Server {
         } else {
             self.create_session(automatic_session_name(1), cwd.clone(), cols, rows)?
         };
-        {
-            let client = self
-                .clients
-                .get_mut(&id)
-                .context("client disconnected during setup")?;
-            client.cols = cols;
-            client.rows = rows;
-            client.cwd = cwd;
-            client.bindings = bindings;
-            client.clipboard_command = clipboard_command;
-            client.terminal_clipboard = terminal_clipboard;
-            client.theme = theme;
-            client.theme_command = theme_command;
-            client.theme_directory = theme_directory;
-            client.mouse = mouse;
-            client.bell_style = bell_style;
-            client.default_cursor_shape = default_cursor_shape;
-            client.terminal = terminal;
-            client.glyphs = glyphs;
-            client.initialized = true;
-        }
+        let client = self
+            .clients
+            .get_mut(&id)
+            .context("client disconnected during setup")?;
+        client.cols = cols;
+        client.rows = rows;
+        client.cwd = cwd;
+        client.bindings = bindings;
+        client.clipboard_command = clipboard_command;
+        client.terminal_clipboard = terminal_clipboard;
+        client.theme = theme;
+        client.theme_command = theme_command;
+        client.theme_directory = theme_directory;
+        client.mouse = mouse;
+        client.bell_style = bell_style;
+        client.default_cursor_shape = default_cursor_shape;
+        client.terminal = terminal;
+        client.glyphs = glyphs;
+        client.initialized = true;
         self.theme = theme;
         self.set_client_session(id, session_id);
-        let shimmer = self.bells_shimmer();
-        if let Some(session) = self
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            play_bell_once(&mut session.windows[session.current_window].bell, shimmer);
+        if let Some(session_index) = self.session_index(session_id) {
+            self.answer_bell(session_index);
         }
-        self.remember_active_pane(id)?;
-        self.resize_active(id)?;
-        self.save_state_soon();
+        self.show_active(id)?;
         self.dirty = true;
         Ok(())
     }
@@ -1316,19 +1321,8 @@ impl Server {
         rows: u16,
         bar_width: u16,
     ) -> Result<Window> {
-        let content_cols = cols.saturating_sub(bar_width).max(1);
-        let content_rows = rows.max(1);
-        let pane = self.create_pane(cwd, content_cols, content_rows)?;
-        let pane_id = pane.id;
-        Ok(Window {
-            panes: vec![pane],
-            layout: PaneLayout::Pane(pane_id),
-            active_pane: pane_id,
-            previous_pane: pane_id,
-            bell: None,
-            zoomed: false,
-            name: None,
-        })
+        let pane = self.create_pane(cwd, cols.saturating_sub(bar_width).max(1), rows.max(1))?;
+        Ok(Window::new(pane))
     }
 
     fn create_pane(&mut self, cwd: &Path, cols: u16, rows: u16) -> Result<Pane> {
@@ -1336,7 +1330,7 @@ impl Server {
         self.next_pane_id += 1;
         let mut history = PaneJournal::new(self.persistence.new_pane_history(id)?, 0);
         history.append_resize(rows.max(1), cols.max(1))?;
-        self.spawn_pane(id, cwd, cols, rows, history)
+        self.spawn_pane(id, cwd, cols, rows, history, new_parser(rows, cols), true)
     }
 
     /// Every saved pane's scrollback, read back off disk side by side.
@@ -1363,71 +1357,51 @@ impl Server {
                         if let Some(backing) = backing {
                             parser.screen_mut().set_history_backing(backing);
                         }
-                        let Some((reader, history_length)) = restored else {
-                            return (
-                                id,
-                                ReplayedPane {
-                                    parser,
-                                    valid_length: 0,
-                                    history_length: 0,
-                                    replayed: false,
-                                },
-                            );
+                        let pane = match restored {
+                            None => ReplayedPane {
+                                parser,
+                                valid_length: 0,
+                                history_length: 0,
+                                replayed: false,
+                            },
+                            Some((reader, history_length)) => {
+                                match replay_pane_journal(&mut parser, reader) {
+                                    Ok(valid_length) => ReplayedPane {
+                                        parser,
+                                        valid_length,
+                                        history_length,
+                                        replayed: true,
+                                    },
+                                    // A corrupt journal costs this pane its
+                                    // scrollback rather than its session.
+                                    Err(_) => ReplayedPane {
+                                        parser: new_parser(rows, cols),
+                                        valid_length: 0,
+                                        history_length,
+                                        replayed: true,
+                                    },
+                                }
+                            }
                         };
-                        match replay_pane_journal(&mut parser, reader) {
-                            Ok(valid_length) => (
-                                id,
-                                ReplayedPane {
-                                    parser,
-                                    valid_length,
-                                    history_length,
-                                    replayed: true,
-                                },
-                            ),
-                            // A corrupt journal costs this pane its scrollback
-                            // rather than the session it belongs to.
-                            Err(_) => (
-                                id,
-                                ReplayedPane {
-                                    parser: new_parser(rows, cols),
-                                    valid_length: 0,
-                                    history_length,
-                                    replayed: true,
-                                },
-                            ),
-                        }
+                        (id, pane)
                     })
                 })
                 .collect();
             for worker in workers {
-                match worker.join() {
-                    Ok((id, pane)) => {
-                        replayed.insert(id, pane);
-                    }
-                    Err(_) => bail!("a pane's history could not be read"),
-                }
+                let Ok((id, pane)) = worker.join() else {
+                    bail!("a pane's history could not be read");
+                };
+                replayed.insert(id, pane);
             }
             Ok(())
         })?;
         Ok(replayed)
     }
 
-    fn spawn_pane(
-        &self,
-        id: usize,
-        cwd: &Path,
-        cols: u16,
-        rows: u16,
-        history: PaneJournal,
-    ) -> Result<Pane> {
-        let parser = new_parser(rows, cols);
-        self.spawn_pane_with(id, cwd, cols, rows, history, parser, true)
-    }
-
-    /// Spawns a pane around a parser someone else has already filled in, which
-    /// is how a restored pane gets its scrollback back.
+    /// Spawns a shell around `parser`, which a restored pane has already
+    /// filled in with its scrollback.
     #[allow(clippy::too_many_arguments)]
-    fn spawn_pane_with(
+    fn spawn_pane(
         &self,
         id: usize,
         cwd: &Path,
@@ -1520,24 +1494,7 @@ impl Server {
     }
 
     fn close_pane(&mut self, pane_id: usize) -> Result<()> {
-        let Some((session_index, window_index, pane_index)) = self
-            .sessions
-            .iter()
-            .enumerate()
-            .find_map(|(session_index, session)| {
-                session
-                    .windows
-                    .iter()
-                    .enumerate()
-                    .find_map(|(window_index, window)| {
-                        window
-                            .panes
-                            .iter()
-                            .position(|pane| pane.id == pane_id)
-                            .map(|pane_index| (session_index, window_index, pane_index))
-                    })
-            })
-        else {
+        let Some((session_index, window_index, pane_index)) = self.locate_pane(pane_id) else {
             return Ok(());
         };
         // A background exit can remove rows before an open tree's selection.
@@ -1568,40 +1525,30 @@ impl Server {
         // The window this pane was zoomed out of has changed shape; show it.
         window.zoomed = false;
         let removed_window = window.panes.is_empty();
-        if !removed_window {
+        if removed_window {
+            self.sessions[session_index].remove_window(window_index);
+        } else {
             window.layout = window
                 .layout
                 .clone()
                 .without(pane_id)
                 .context("pane layout lost its remaining pane")?;
-        }
-        if let Some(first) = window.panes.first() {
-            if window.active_pane == pane_id {
-                window.active_pane = first.id;
-                window.previous_pane = first.id;
-            } else if window.previous_pane == pane_id {
-                window.previous_pane = window.active_pane;
-            }
-        }
-
-        if removed_window {
-            self.sessions[session_index].windows.remove(window_index);
+            window.forget_pane(pane_id);
         }
         if self.sessions[session_index].windows.is_empty() {
-            let session_id = self.sessions[session_index].id;
             self.sessions.remove(session_index);
             let replacement = self.sessions.first().map(|session| session.id);
             let mut detached = Vec::new();
             for (client_id, client) in &mut self.clients {
                 if let Some(tree) = &mut client.tree {
-                    tree.expanded.remove(&session_id);
+                    tree.expanded.remove(&closed_session_id);
                 }
                 if client.confirmation.as_ref().is_some_and(|confirmation| {
-                    matches!(confirmation, Confirmation::KillSession { session_id: target, .. } if *target == session_id)
+                    matches!(confirmation, Confirmation::KillSession { session_id: target, .. } if *target == closed_session_id)
                 }) {
                     client.confirmation = None;
                 }
-                if client.session_id == Some(session_id) {
+                if client.session_id == Some(closed_session_id) {
                     client.session_id = replacement;
                     client.leader = false;
                     client.leader_key = None;
@@ -1615,49 +1562,28 @@ impl Server {
                 }
                 client.previous_session_id = client
                     .previous_session_id
-                    .filter(|previous| *previous != session_id);
+                    .filter(|previous| *previous != closed_session_id);
             }
             for client_id in detached {
                 self.clients.remove(&client_id);
             }
-            let shimmer = self.bells_shimmer();
-            if let Some(replacement) = replacement
-                && let Some(session) = self
-                    .sessions
-                    .iter_mut()
-                    .find(|session| session.id == replacement)
-            {
-                play_bell_once(&mut session.windows[session.current_window].bell, shimmer);
+            if replacement.is_some() {
+                self.answer_bell(0);
             }
         } else if removed_window {
-            let shimmer = self.bells_shimmer();
-            let session = &mut self.sessions[session_index];
-            session.current_window = window_index_after_removal(
-                session.current_window,
-                window_index,
-                session.windows.len(),
-            );
-            play_bell_once(&mut session.windows[session.current_window].bell, shimmer);
+            self.answer_bell(session_index);
         }
         for (id, mut target) in tree_targets {
             if target.session_id == closed_session_id {
                 if removed_window {
                     if let Some(window) = target.window {
-                        if window == window_index {
-                            target.window = None;
+                        target.window = shifted_index(window, window_index);
+                        if target.window.is_none() {
                             target.pane = None;
-                        } else if window > window_index {
-                            target.window = Some(window - 1);
                         }
                     }
                 } else if target.window == Some(window_index) {
-                    target.pane = target.pane.and_then(|pane| {
-                        if pane == pane_index {
-                            None
-                        } else {
-                            Some(pane - usize::from(pane > pane_index))
-                        }
-                    });
+                    target.pane = target.pane.and_then(|pane| shifted_index(pane, pane_index));
                 }
             }
             let Some(tree) = self
@@ -1685,9 +1611,7 @@ impl Server {
         }
         if self.last_active_pane == Some(pane_id) {
             self.last_active_pane = self
-                .sessions
-                .iter()
-                .find(|session| session.id == closed_session_id)
+                .session(closed_session_id)
                 .or_else(|| self.sessions.first())
                 .map(|session| session.windows[session.current_window].active_pane);
         }
@@ -1767,18 +1691,7 @@ impl Server {
     }
 
     fn ring_bell(&mut self, pane_id: usize, bell_events: usize) {
-        let Some((session_index, window_index)) =
-            self.sessions
-                .iter()
-                .enumerate()
-                .find_map(|(session_index, session)| {
-                    session
-                        .windows
-                        .iter()
-                        .position(|window| window.panes.iter().any(|pane| pane.id == pane_id))
-                        .map(|window_index| (session_index, window_index))
-                })
-        else {
+        let Some((session_index, window_index, _)) = self.locate_pane(pane_id) else {
             return;
         };
         let session_id = self.sessions[session_index].id;
@@ -1845,27 +1758,18 @@ impl Server {
             self.set_message(id, "no pending bells".into());
             return Ok(());
         };
-        let shimmer = self.bells_shimmer();
-        let session_id = {
-            let session = &mut self.sessions[session_index];
-            let pane_id = session.windows[window_index].bell.as_ref().unwrap().pane_id;
-            visit_window(session, window_index);
-            if session.windows[window_index]
-                .panes
-                .iter()
-                .any(|pane| pane.id == pane_id)
-            {
-                session.windows[window_index].select_pane(pane_id);
-            }
-            play_bell_once(&mut session.windows[window_index].bell, shimmer);
-            session.id
-        };
+        let session = &mut self.sessions[session_index];
+        let pane_id = session.windows[window_index].bell.as_ref().unwrap().pane_id;
+        visit_window(session, window_index);
+        let window = &mut session.windows[window_index];
+        if window.panes.iter().any(|pane| pane.id == pane_id) {
+            window.select_pane(pane_id);
+        }
+        let session_id = session.id;
+        self.answer_bell(session_index);
         self.set_client_session(id, session_id);
         self.clients.get_mut(&id).unwrap().tree = None;
-        self.remember_active_pane(id)?;
-        self.resize_active(id)?;
-        self.save_state_soon();
-        Ok(())
+        self.show_active(id)
     }
 
     fn new_window(&mut self, id: usize) -> Result<()> {
@@ -1876,22 +1780,26 @@ impl Server {
         let window = self.create_window(&root, cols, rows, bar_width(future_window_count))?;
         let session = &mut self.sessions[session_index];
         session.windows.push(window);
-        let new_window = session.windows.len() - 1;
-        visit_window(session, new_window);
-        self.remember_active_pane(id)?;
+        visit_window(session, session.windows.len() - 1);
+        self.remember_active_pane(id);
         self.save_state_soon();
         Ok(())
     }
 
-    fn new_session(&mut self, id: usize) -> Result<()> {
+    /// Creates a session, named `name` or else the next free automatic name,
+    /// and moves the client to it.
+    fn new_session(&mut self, id: usize, name: Option<String>) -> Result<()> {
+        if name.as_ref().is_some_and(|name| name.trim().is_empty()) {
+            bail!("session name cannot be empty");
+        }
         let root = self
             .active_cwd(id)
             .unwrap_or_else(|| self.clients[&id].cwd.clone());
-        let name = self.next_session_name();
+        let name = name.unwrap_or_else(|| self.next_session_name());
         let (cols, rows) = self.client_size(id);
         let session_id = self.create_session(name, root, cols, rows)?;
         self.set_client_session(id, session_id);
-        self.remember_active_pane(id)?;
+        self.remember_active_pane(id);
         self.save_state_soon();
         Ok(())
     }
@@ -1905,44 +1813,33 @@ impl Server {
     }
 
     fn switch_to_previous_session(&mut self, id: usize) -> Result<()> {
-        let Some(session_id) = self.clients[&id].previous_session_id else {
-            self.set_message(id, "no previous session".into());
-            return Ok(());
-        };
-        if !self.sessions.iter().any(|session| session.id == session_id) {
+        let previous = self.clients[&id].previous_session_id;
+        let Some(session_index) = previous.and_then(|session_id| self.session_index(session_id))
+        else {
             self.clients.get_mut(&id).unwrap().previous_session_id = None;
             self.set_message(id, "no previous session".into());
             return Ok(());
-        }
-        self.set_client_session(id, session_id);
-        let shimmer = self.bells_shimmer();
-        if let Some((session_index, window_index)) = self.active_indices(id) {
-            play_bell_once(
-                &mut self.sessions[session_index].windows[window_index].bell,
-                shimmer,
-            );
-        }
+        };
+        self.set_client_session(id, self.sessions[session_index].id);
+        self.answer_bell(session_index);
         self.clients.get_mut(&id).unwrap().tree = None;
-        self.remember_active_pane(id)?;
-        self.resize_active(id)?;
-        self.save_state_soon();
-        Ok(())
+        self.show_active(id)
     }
 
+    /// The tree row a client has selected, clamped to the rows that exist.
+    fn selected_tree_item(&self, tree: &TreeState) -> Option<TreeItem> {
+        let items = self.tree_items(&tree.expanded);
+        let index = tree.selected.min(items.len().saturating_sub(1));
+        items.into_iter().nth(index)
+    }
+
+    /// Renames the session the tree is pointing at, or the current one.
     fn start_rename(&mut self, id: usize) {
-        let session_id = if let Some(tree) = self.clients[&id].tree.as_ref() {
-            let items = self.tree_items(&tree.expanded);
-            items
-                .get(tree.selected.min(items.len().saturating_sub(1)))
-                .map(|item| item.session_id)
-        } else {
-            self.clients[&id].session_id
+        let session_id = match &self.clients[&id].tree {
+            Some(tree) => self.selected_tree_item(tree).map(|item| item.session_id),
+            None => self.clients[&id].session_id,
         };
-        let Some(session) = session_id.and_then(|session_id| {
-            self.sessions
-                .iter()
-                .find(|session| session.id == session_id)
-        }) else {
+        let Some(session) = session_id.and_then(|session_id| self.session(session_id)) else {
             return;
         };
         self.start_editing(
@@ -1956,28 +1853,25 @@ impl Server {
 
     /// Renames the window the tree is pointing at, or the current one.
     fn start_rename_window(&mut self, id: usize) {
-        let target = if let Some(tree) = self.clients[&id].tree.as_ref() {
-            let items = self.tree_items(&tree.expanded);
-            items
-                .get(tree.selected.min(items.len().saturating_sub(1)))
-                .and_then(|item| Some((item.session_id, item.window?)))
-        } else {
-            self.active_indices(id)
+        let target = match &self.clients[&id].tree {
+            Some(tree) => self
+                .selected_tree_item(tree)
+                .and_then(|item| Some((item.session_id, item.window?))),
+            None => self
+                .active_indices(id)
                 .map(|(session_index, window_index)| {
                     (self.sessions[session_index].id, window_index)
-                })
+                }),
         };
         let Some((session_id, window_index)) = target else {
             self.set_message(id, "select a window to rename".into());
             return;
         };
-        let name = self
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
+        let Some(name) = self
+            .session(session_id)
             .and_then(|session| session.windows.get(window_index))
-            .map(|window| window.name.clone().unwrap_or_default());
-        let Some(name) = name else {
+            .map(|window| window.name.clone().unwrap_or_default())
+        else {
             return;
         };
         self.start_editing(
@@ -2000,15 +1894,14 @@ impl Server {
     }
 
     fn start_kill_pane(&mut self, id: usize) {
-        let Some((session_index, window_index, pane_index)) = self.active_pane_indices(id) else {
+        let Some(pane_id) = self.active_pane(id).map(|pane| pane.id) else {
             return;
         };
-        let pane_id = self.sessions[session_index].windows[window_index].panes[pane_index].id;
         self.clients.get_mut(&id).unwrap().confirmation = Some(Confirmation::KillPane { pane_id });
     }
 
     fn start_kill_session(&mut self, id: usize, session_id: usize) {
-        if !self.sessions.iter().any(|session| session.id == session_id) {
+        if self.session(session_id).is_none() {
             return;
         }
         self.clients.get_mut(&id).unwrap().confirmation =
@@ -2026,17 +1919,14 @@ impl Server {
     }
 
     fn kill_session(&mut self, session_id: usize) -> Result<()> {
-        let Some(session) = self
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-        else {
+        let Some(session) = self.session(session_id) else {
             return Ok(());
         };
         let pane_ids: Vec<_> = session
             .windows
             .iter()
-            .flat_map(|window| window.panes.iter().map(|pane| pane.id))
+            .flat_map(|window| &window.panes)
+            .map(|pane| pane.id)
             .collect();
         for pane_id in &pane_ids {
             self.pane_mut(*pane_id)
@@ -2051,6 +1941,23 @@ impl Server {
         Ok(())
     }
 
+    /// Why `name` cannot be given to the session at `session_index`, if it
+    /// cannot.
+    fn check_session_name(&self, session_index: usize, name: &str) -> Result<()> {
+        if name.trim().is_empty() {
+            bail!("session name cannot be empty");
+        }
+        if self
+            .sessions
+            .iter()
+            .enumerate()
+            .any(|(index, session)| index != session_index && session.name == name)
+        {
+            bail!("session {name:?} already exists");
+        }
+        Ok(())
+    }
+
     fn finish_rename(&mut self, id: usize) -> Result<()> {
         let Some(rename) = self
             .clients
@@ -2059,55 +1966,43 @@ impl Server {
         else {
             return Ok(());
         };
-        let (session_id, window_index) = match rename.target {
-            RenameTarget::Session { session_id } => (session_id, None),
+        let name = rename.text;
+        match rename.target {
             RenameTarget::Window {
                 session_id,
                 window_index,
-            } => (session_id, Some(window_index)),
-        };
-        let Some(session_index) = self
-            .sessions
-            .iter()
-            .position(|session| session.id == session_id)
-        else {
-            return Ok(());
-        };
-        let name = rename.text;
-        if let Some(window_index) = window_index {
-            let Some(window) = self.sessions[session_index].windows.get_mut(window_index) else {
-                return Ok(());
-            };
-            // An empty name hands the window back to whatever its program calls
-            // itself, which is how a name is cleared.
-            window.name = (!name.trim().is_empty()).then_some(name);
-            self.save_state_soon();
-            return Ok(());
+            } => {
+                let Some(window) = self
+                    .session_index(session_id)
+                    .and_then(|index| self.sessions[index].windows.get_mut(window_index))
+                else {
+                    return Ok(());
+                };
+                // An empty name hands the window back to whatever its program
+                // calls itself, which is how a name is cleared.
+                window.name = (!name.trim().is_empty()).then_some(name);
+            }
+            RenameTarget::Session { session_id } => {
+                let Some(session_index) = self.session_index(session_id) else {
+                    return Ok(());
+                };
+                if let Err(error) = self.check_session_name(session_index, &name) {
+                    self.set_message(id, error.to_string());
+                    return Ok(());
+                }
+                self.sessions[session_index].name = name;
+            }
         }
-        if name.trim().is_empty() {
-            self.set_message(id, "session name cannot be empty".into());
-            return Ok(());
-        }
-        if self
-            .sessions
-            .iter()
-            .enumerate()
-            .any(|(index, session)| index != session_index && session.name == name)
-        {
-            self.set_message(id, format!("session {name:?} already exists"));
-            return Ok(());
-        }
-        self.sessions[session_index].name = name;
         self.save_state_soon();
         Ok(())
     }
 
     fn split_active_pane(&mut self, id: usize, axis: SplitAxis) -> Result<()> {
-        let (session_index, window_index, pane_index) =
+        let (session_index, window_index, _) =
             self.active_pane_indices(id).context("no active pane")?;
         let area = self.content_area(id);
         let window = &self.sessions[session_index].windows[window_index];
-        let active_pane = window.panes[pane_index].id;
+        let active_pane = window.active_pane;
         let (regions, _) = window.regions(area);
         let active_rect = regions
             .iter()
@@ -2137,10 +2032,7 @@ impl Server {
         }
         window.panes.push(pane);
         window.select_pane(pane_id);
-        self.remember_active_pane(id)?;
-        self.resize_active(id)?;
-        self.save_state_soon();
-        Ok(())
+        self.show_active(id)
     }
 
     fn focus_pane(&mut self, id: usize, direction: PaneDirection) -> Result<()> {
@@ -2157,7 +2049,7 @@ impl Server {
             direction,
         ) {
             self.sessions[session_index].windows[window_index].select_pane(pane_id);
-            self.remember_active_pane(id)?;
+            self.remember_active_pane(id);
             self.save_state_soon();
         }
         Ok(())
@@ -2213,23 +2105,10 @@ impl Server {
         }
         let pane_id = session.windows[window_index].active_pane;
         let pane = self.detach_pane(pane_id).context("active pane vanished")?;
-        let pane_id = pane.id;
         let session = &mut self.sessions[session_index];
-        session.windows.push(Window {
-            panes: vec![pane],
-            layout: PaneLayout::Pane(pane_id),
-            active_pane: pane_id,
-            previous_pane: pane_id,
-            bell: None,
-            zoomed: false,
-            name: None,
-        });
-        let new_window = session.windows.len() - 1;
-        visit_window(session, new_window);
-        self.remember_active_pane(id)?;
-        self.resize_active(id)?;
-        self.save_state_soon();
-        Ok(())
+        session.windows.push(Window::new(pane));
+        visit_window(session, session.windows.len() - 1);
+        self.show_active(id)
     }
 
     /// Moves the active pane into `target`, splitting the pane it finds there.
@@ -2259,7 +2138,6 @@ impl Server {
             target
         };
         let pane = self.detach_pane(pane_id).context("active pane vanished")?;
-        let pane_id = pane.id;
         let session = &mut self.sessions[session_index];
         let window = session
             .windows
@@ -2273,52 +2151,22 @@ impl Server {
         window.zoomed = false;
         window.select_pane(pane_id);
         visit_window(session, target);
-        self.remember_active_pane(id)?;
-        self.resize_active(id)?;
-        self.save_state_soon();
-        Ok(())
+        self.show_active(id)
     }
 
     /// Removes a pane from its window without touching the process inside it,
     /// closing the window if that was the last pane in it.
     fn detach_pane(&mut self, pane_id: usize) -> Option<Pane> {
-        let (session_index, window_index, pane_index) =
-            self.sessions
-                .iter()
-                .enumerate()
-                .find_map(|(session_index, session)| {
-                    session
-                        .windows
-                        .iter()
-                        .enumerate()
-                        .find_map(|(window_index, window)| {
-                            window
-                                .panes
-                                .iter()
-                                .position(|pane| pane.id == pane_id)
-                                .map(|pane_index| (session_index, window_index, pane_index))
-                        })
-                })?;
-        let window = &mut self.sessions[session_index].windows[window_index];
+        let (session_index, window_index, pane_index) = self.locate_pane(pane_id)?;
+        let session = &mut self.sessions[session_index];
+        let window = &mut session.windows[window_index];
         let pane = window.panes.remove(pane_index);
         window.zoomed = false;
         if window.panes.is_empty() {
-            let session = &mut self.sessions[session_index];
-            session.windows.remove(window_index);
-            session.current_window = window_index_after_removal(
-                session.current_window,
-                window_index,
-                session.windows.len(),
-            );
-            return Some(pane);
-        }
-        window.layout = window.layout.clone().without(pane_id)?;
-        if window.active_pane == pane_id {
-            let first = window.panes[0].id;
-            window.active_pane = first;
-            window.previous_pane = first;
-        } else if window.previous_pane == pane_id {
-            window.previous_pane = window.active_pane;
+            session.remove_window(window_index);
+        } else {
+            window.layout = window.layout.clone().without(pane_id)?;
+            window.forget_pane(pane_id);
         }
         Some(pane)
     }
@@ -2382,13 +2230,9 @@ impl Server {
             return Ok(());
         };
         if number > 0 && number <= self.sessions[session_index].windows.len() {
-            let shimmer = self.bells_shimmer();
-            let session = &mut self.sessions[session_index];
-            visit_window(session, number - 1);
-            play_bell_once(&mut session.windows[session.current_window].bell, shimmer);
-            self.remember_active_pane(id)?;
-            self.resize_active(id)?;
-            self.save_state_soon();
+            visit_window(&mut self.sessions[session_index], number - 1);
+            self.answer_bell(session_index);
+            self.show_active(id)?;
         }
         Ok(())
     }
@@ -2406,18 +2250,15 @@ impl Server {
         let Some((session_index, window_index, pane_index)) = self.active_pane_indices(id) else {
             return;
         };
-        let rows = self.clients[&id].rows.max(1) as usize;
-        let pane_id = self.sessions[session_index].windows[window_index].panes[pane_index].id;
-        if self.clients[&id].vim.contains_key(&pane_id) {
+        let pane = &mut self.sessions[session_index].windows[window_index].panes[pane_index];
+        let client = self.clients.get_mut(&id).unwrap();
+        if client.vim.contains_key(&pane.id) {
             return;
         }
-        let (buffer, cursor) = snapshot_screen(
-            self.sessions[session_index].windows[window_index].panes[pane_index]
-                .parser
-                .screen_mut(),
-        );
-        self.clients.get_mut(&id).unwrap().vim.insert(
-            pane_id,
+        let rows = client.rows.max(1) as usize;
+        let (buffer, cursor) = snapshot_screen(pane.parser.screen_mut());
+        client.vim.insert(
+            pane.id,
             VimState {
                 mode: VimMode::new(buffer, cursor, rows),
             },
@@ -2511,40 +2352,33 @@ fn run_clipboard_command(command: &[String], text: &str) -> Result<()> {
 
 impl Server {
     fn detach(&mut self, id: usize) -> Result<()> {
-        if self.remember_active_pane(id)? {
-            self.save_state_soon();
-        }
-        if let Some(client) = self.clients.get_mut(&id) {
+        self.track_active_pane(id);
+        if let Some(client) = self.clients.remove(&id) {
             client.writer.send(ServerMessage::Detached);
         }
-        self.clients.remove(&id);
         Ok(())
     }
 
     fn choose_tree_item(&mut self, id: usize, item: TreeItem) -> Result<()> {
-        let shimmer = self.bells_shimmer();
-        if let Some(session) = self
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == item.session_id)
-        {
-            if let Some(window) = item.window {
-                visit_window(session, window.min(session.windows.len() - 1));
-                if let Some(pane) = item.pane {
-                    let window = &mut session.windows[session.current_window];
-                    if let Some(selected) = window.panes.get(pane) {
-                        window.select_pane(selected.id);
-                    }
-                }
+        let Some(session_index) = self.session_index(item.session_id) else {
+            return Ok(());
+        };
+        let session = &mut self.sessions[session_index];
+        if let Some(window) = item.window {
+            visit_window(session, window);
+            let window = session.current_window_mut();
+            if let Some(pane_id) = item
+                .pane
+                .and_then(|pane| window.panes.get(pane))
+                .map(|pane| pane.id)
+            {
+                window.select_pane(pane_id);
             }
-            play_bell_once(&mut session.windows[session.current_window].bell, shimmer);
-            self.set_client_session(id, item.session_id);
-            self.clients.get_mut(&id).unwrap().tree = None;
-            self.remember_active_pane(id)?;
-            self.resize_active(id)?;
-            self.save_state_soon();
         }
-        Ok(())
+        self.answer_bell(session_index);
+        self.set_client_session(id, item.session_id);
+        self.clients.get_mut(&id).unwrap().tree = None;
+        self.show_active(id)
     }
 
     fn next_session_name(&self) -> String {
@@ -2555,23 +2389,44 @@ impl Server {
     }
 
     fn last_active_session_id(&self) -> Option<usize> {
-        let pane_id = self.last_active_pane?;
-        self.sessions.iter().find_map(|session| {
-            session
-                .windows
-                .iter()
-                .any(|window| window.panes.iter().any(|pane| pane.id == pane_id))
-                .then_some(session.id)
-        })
+        let (session_index, _, _) = self.locate_pane(self.last_active_pane?)?;
+        Some(self.sessions[session_index].id)
     }
 
-    fn remember_active_pane(&mut self, client_id: usize) -> Result<bool> {
+    /// Records the client's active pane as the one to come back to, reporting
+    /// whether that changed.
+    fn remember_active_pane(&mut self, client_id: usize) -> bool {
         let Some(pane_id) = self.active_pane(client_id).map(|pane| pane.id) else {
-            return Ok(false);
+            return false;
         };
         let changed = self.last_active_pane != Some(pane_id);
         self.last_active_pane = Some(pane_id);
-        Ok(changed)
+        changed
+    }
+
+    fn track_active_pane(&mut self, client_id: usize) {
+        if self.remember_active_pane(client_id) {
+            self.save_state_soon();
+        }
+    }
+
+    /// Settles a client on what it now shows: remembers its active pane,
+    /// fits the window to it, and saves.
+    fn show_active(&mut self, client_id: usize) -> Result<()> {
+        self.remember_active_pane(client_id);
+        self.resize_active(client_id)?;
+        self.save_state_soon();
+        Ok(())
+    }
+
+    /// Answers a pending bell on the session's current window, which has just
+    /// come into view.
+    fn answer_bell(&mut self, session_index: usize) {
+        let shimmer = self.bells_shimmer();
+        play_bell_once(
+            &mut self.sessions[session_index].current_window_mut().bell,
+            shimmer,
+        );
     }
 
     fn active_cwd(&self, id: usize) -> Option<PathBuf> {
@@ -2588,11 +2443,7 @@ impl Server {
     }
 
     fn active_indices(&self, client_id: usize) -> Option<(usize, usize)> {
-        let session_id = self.clients.get(&client_id)?.session_id?;
-        let session_index = self
-            .sessions
-            .iter()
-            .position(|session| session.id == session_id)?;
+        let session_index = self.session_index(self.clients.get(&client_id)?.session_id?)?;
         Some((session_index, self.sessions[session_index].current_window))
     }
 
@@ -2667,11 +2518,7 @@ impl Server {
     }
 
     fn pane_mut(&mut self, pane_id: usize) -> Option<&mut Pane> {
-        self.sessions
-            .iter_mut()
-            .flat_map(|session| session.windows.iter_mut())
-            .flat_map(|window| window.panes.iter_mut())
-            .find(|pane| pane.id == pane_id)
+        self.panes_mut().find(|pane| pane.id == pane_id)
     }
 
     fn sample_process_icons(&mut self) {
@@ -2680,10 +2527,7 @@ impl Server {
         }
         let now = Instant::now();
         let samples: Vec<_> = self
-            .sessions
-            .iter_mut()
-            .flat_map(|session| &mut session.windows)
-            .flat_map(|window| &mut window.panes)
+            .panes_mut()
             .filter(|pane| {
                 !pane.process_pending
                     && now.duration_since(pane.process_sampled) >= PROCESS_POLL_INTERVAL
@@ -2817,6 +2661,12 @@ fn window_index_after_removal(index: usize, removed: usize, remaining: usize) ->
     } else {
         index.min(remaining - 1)
     }
+}
+
+/// Where `index` ends up once the item at `removed` is taken out of its list,
+/// or `None` if it was that item.
+fn shifted_index(index: usize, removed: usize) -> Option<usize> {
+    (index != removed).then(|| index - usize::from(index > removed))
 }
 
 fn automatic_session_name(number: usize) -> String {

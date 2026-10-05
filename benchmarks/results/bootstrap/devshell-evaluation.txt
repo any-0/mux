@@ -1,1 +1,0 @@
-/nix/store/m1fdp4pl3x67jcsfbijakadc990gc9p7-nix-shell.drv

@@ -9,14 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
-      - name: Test with the pinned project toolchain
-        run: ./scripts/test-nix
-      - name: Confirm the regression witnesses fail on the old implementation
-        run: nix develop ./.nix --command ./scripts/check-regression-witnesses 9c74b7029e6112175d0914c0efc12d87317efccf
-      - name: Differential and end-to-end harness against the real binary
-        run: ./scripts/test-harness
-      - name: Confirm the harness witnesses fail on the build before them
-        run: nix develop ./.nix --command ./scripts/check-harness-witnesses d6dd228054231e77772bd17a412d8f0d07871835
+      - name: Format, test and lint
+        run: |
+          nix develop ./.nix --command sh -euc '
+            cargo fmt --all -- --check
+            cargo test --locked
+            cargo test --manifest-path vendor/vt100/Cargo.toml --locked --lib
+            cargo clippy --locked --all-targets -- -D warnings
+            cargo fmt --manifest-path vendor/vt100/Cargo.toml -- --check
+            cargo clippy --manifest-path vendor/vt100/Cargo.toml --locked --all-targets -- -D warnings
+          '

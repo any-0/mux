@@ -1,5 +1,3 @@
-use crate::term::BufWrite as _;
-
 /// Represents a foreground or background color for cells.
 #[derive(Eq, PartialEq, Debug, Copy, Clone, Default)]
 pub enum Color {
@@ -14,6 +12,7 @@ pub enum Color {
     Rgb(u8, u8, u8),
 }
 
+// The bits of `mode` are part of the packed scrollback format.
 const TEXT_MODE_INTENSITY: u8 = 0b0000_0011;
 const TEXT_MODE_BOLD: u8 = 0b0000_0001;
 const TEXT_MODE_DIM: u8 = 0b0000_0010;
@@ -24,11 +23,11 @@ const TEXT_MODE_UNDERLINE_STYLE: u8 = 0b1110_0000;
 
 // Rendition flags that do not fit in `mode`. Kept in a separate byte so the
 // packed scrollback format only grows for rows that actually use them.
-pub(crate) const EXTRA_STRIKETHROUGH: u8 = 0b0000_0001;
-pub(crate) const EXTRA_BLINK: u8 = 0b0000_0010;
-pub(crate) const EXTRA_HIDDEN: u8 = 0b0000_0100;
-pub(crate) const EXTRA_OVERLINE: u8 = 0b0000_1000;
-pub(crate) const EXTRA_ALL: u8 = 0b0000_1111;
+const EXTRA_STRIKETHROUGH: u8 = 0b0000_0001;
+const EXTRA_BLINK: u8 = 0b0000_0010;
+const EXTRA_HIDDEN: u8 = 0b0000_0100;
+const EXTRA_OVERLINE: u8 = 0b0000_1000;
+pub const EXTRA_ALL: u8 = 0b0000_1111;
 
 /// The visual form of an underline.
 #[derive(Eq, PartialEq, Debug, Copy, Clone, Default)]
@@ -49,8 +48,16 @@ pub enum UnderlineStyle {
     Dashed = 5,
 }
 
+impl From<UnderlineStyle> for u8 {
+    #[allow(clippy::as_conversions)] // a fieldless `repr(u8)` enum
+    fn from(style: UnderlineStyle) -> Self {
+        style as Self
+    }
+}
+
 impl UnderlineStyle {
-    fn from_sgr(value: u16) -> Option<Self> {
+    /// The style `SGR 4:<value>` selects.
+    pub(crate) fn from_sgr(value: u16) -> Option<Self> {
         match value {
             0 => Some(Self::None),
             1 => Some(Self::Straight),
@@ -72,49 +79,45 @@ pub struct Attrs {
     pub extra: u8,
 }
 
+fn set_bit(bits: &mut u8, flag: u8, value: bool) {
+    if value {
+        *bits |= flag;
+    } else {
+        *bits &= !flag;
+    }
+}
+
 impl Attrs {
-    fn extra_flag(&self, flag: u8) -> bool {
-        self.extra & flag != 0
-    }
-
-    fn set_extra_flag(&mut self, flag: u8, value: bool) {
-        if value {
-            self.extra |= flag;
-        } else {
-            self.extra &= !flag;
-        }
-    }
-
     pub fn strikethrough(&self) -> bool {
-        self.extra_flag(EXTRA_STRIKETHROUGH)
+        self.extra & EXTRA_STRIKETHROUGH != 0
     }
 
     pub fn set_strikethrough(&mut self, value: bool) {
-        self.set_extra_flag(EXTRA_STRIKETHROUGH, value);
+        set_bit(&mut self.extra, EXTRA_STRIKETHROUGH, value);
     }
 
     pub fn blink(&self) -> bool {
-        self.extra_flag(EXTRA_BLINK)
+        self.extra & EXTRA_BLINK != 0
     }
 
     pub fn set_blink(&mut self, value: bool) {
-        self.set_extra_flag(EXTRA_BLINK, value);
+        set_bit(&mut self.extra, EXTRA_BLINK, value);
     }
 
     pub fn hidden(&self) -> bool {
-        self.extra_flag(EXTRA_HIDDEN)
+        self.extra & EXTRA_HIDDEN != 0
     }
 
     pub fn set_hidden(&mut self, value: bool) {
-        self.set_extra_flag(EXTRA_HIDDEN, value);
+        set_bit(&mut self.extra, EXTRA_HIDDEN, value);
     }
 
     pub fn overline(&self) -> bool {
-        self.extra_flag(EXTRA_OVERLINE)
+        self.extra & EXTRA_OVERLINE != 0
     }
 
     pub fn set_overline(&mut self, value: bool) {
-        self.set_extra_flag(EXTRA_OVERLINE, value);
+        set_bit(&mut self.extra, EXTRA_OVERLINE, value);
     }
 
     pub fn bold(&self) -> bool {
@@ -123,10 +126,6 @@ impl Attrs {
 
     pub fn dim(&self) -> bool {
         self.mode & TEXT_MODE_DIM != 0
-    }
-
-    fn intensity(&self) -> u8 {
-        self.mode & TEXT_MODE_INTENSITY
     }
 
     // Bold and faint are independent, as in xterm: SGR 1 and SGR 2 each add
@@ -148,11 +147,7 @@ impl Attrs {
     }
 
     pub fn set_italic(&mut self, italic: bool) {
-        if italic {
-            self.mode |= TEXT_MODE_ITALIC;
-        } else {
-            self.mode &= !TEXT_MODE_ITALIC;
-        }
+        set_bit(&mut self.mode, TEXT_MODE_ITALIC, italic);
     }
 
     pub fn underline(&self) -> bool {
@@ -168,30 +163,15 @@ impl Attrs {
     }
 
     pub fn underline_style(&self) -> UnderlineStyle {
-        match (self.mode & TEXT_MODE_UNDERLINE_STYLE) >> 5 {
-            1 => UnderlineStyle::Straight,
-            2 => UnderlineStyle::Double,
-            3 => UnderlineStyle::Curly,
-            4 => UnderlineStyle::Dotted,
-            5 => UnderlineStyle::Dashed,
-            _ => UnderlineStyle::None,
-        }
+        UnderlineStyle::from_sgr(u16::from(self.mode >> 5)).unwrap_or_default()
     }
 
     pub fn set_underline_style(&mut self, style: UnderlineStyle) {
         self.mode &= !(TEXT_MODE_UNDERLINE | TEXT_MODE_UNDERLINE_STYLE);
-        self.mode |= (style as u8) << 5;
+        self.mode |= u8::from(style) << 5;
         if style != UnderlineStyle::None {
             self.mode |= TEXT_MODE_UNDERLINE;
         }
-    }
-
-    pub fn set_underline_style_sgr(&mut self, value: u16) -> bool {
-        let Some(style) = UnderlineStyle::from_sgr(value) else {
-            return false;
-        };
-        self.set_underline_style(style);
-        true
     }
 
     pub fn inverse(&self) -> bool {
@@ -199,120 +179,60 @@ impl Attrs {
     }
 
     pub fn set_inverse(&mut self, inverse: bool) {
-        if inverse {
-            self.mode |= TEXT_MODE_INVERSE;
-        } else {
-            self.mode &= !TEXT_MODE_INVERSE;
-        }
+        set_bit(&mut self.mode, TEXT_MODE_INVERSE, inverse);
     }
 
-    pub fn write_escape_code_diff(
-        &self,
-        contents: &mut Vec<u8>,
-        other: &Self,
-    ) {
+    /// Writes the SGR sequence that changes `other` into `self`.
+    pub fn write_escape_code_diff(&self, contents: &mut Vec<u8>, other: &Self) {
         if self != other && self == &Self::default() {
-            crate::term::ClearAttrs.write_buf(contents);
+            crate::term::clear_attrs(contents);
             return;
         }
 
-        let attrs = crate::term::Attrs::default();
-
-        let attrs = if self.fgcolor == other.fgcolor {
-            attrs
-        } else {
-            attrs.fgcolor(self.fgcolor)
-        };
-        let attrs = if self.bgcolor == other.bgcolor {
-            attrs
-        } else {
-            attrs.bgcolor(self.bgcolor)
-        };
-        let attrs = if self.underline_color == other.underline_color {
-            attrs
-        } else {
-            attrs.underline_color(self.underline_color)
-        };
-        let attrs = if self.intensity() == other.intensity() {
-            attrs
-        } else {
-            attrs.intensity(match self.intensity() {
-                0 => crate::term::Intensity::Normal,
-                TEXT_MODE_BOLD => crate::term::Intensity::Bold,
-                TEXT_MODE_DIM => crate::term::Intensity::Dim,
-                TEXT_MODE_INTENSITY => crate::term::Intensity::BoldDim,
-                _ => unreachable!(),
-            })
-        };
-        let attrs = if self.italic() == other.italic() {
-            attrs
-        } else {
-            attrs.italic(self.italic())
-        };
-        let attrs = if self.underline_style() == other.underline_style() {
-            attrs
-        } else {
-            attrs.underline(self.underline_style())
-        };
-        let attrs = if self.inverse() == other.inverse() {
-            attrs
-        } else {
-            attrs.inverse(self.inverse())
-        };
-        let attrs = if self.blink() == other.blink() {
-            attrs
-        } else {
-            attrs.blink(self.blink())
-        };
-        let attrs = if self.hidden() == other.hidden() {
-            attrs
-        } else {
-            attrs.hidden(self.hidden())
-        };
-        let attrs = if self.strikethrough() == other.strikethrough() {
-            attrs
-        } else {
-            attrs.strikethrough(self.strikethrough())
-        };
-        let attrs = if self.overline() == other.overline() {
-            attrs
-        } else {
-            attrs.overline(self.overline())
-        };
-
-        attrs.write_buf(contents);
+        let mut sgr = crate::term::Sgr::new(contents);
+        if self.fgcolor != other.fgcolor {
+            sgr.color(self.fgcolor, 30);
+        }
+        if self.bgcolor != other.bgcolor {
+            sgr.color(self.bgcolor, 40);
+        }
+        if self.underline_color != other.underline_color {
+            sgr.color(self.underline_color, 50);
+        }
+        if self.mode & TEXT_MODE_INTENSITY != other.mode & TEXT_MODE_INTENSITY {
+            // Bold and faint are independent, so each state is written from
+            // a clean slate.
+            sgr.param(22);
+            if self.bold() {
+                sgr.param(1);
+            }
+            if self.dim() {
+                sgr.param(2);
+            }
+        }
+        if self.italic() != other.italic() {
+            sgr.flag(self.italic(), 3, 23);
+        }
+        if self.underline_style() != other.underline_style() {
+            sgr.underline(self.underline_style());
+        }
+        for (value, prev, on, off) in [
+            (self.inverse(), other.inverse(), 7, 27),
+            (self.blink(), other.blink(), 5, 25),
+            (self.hidden(), other.hidden(), 8, 28),
+            (self.strikethrough(), other.strikethrough(), 9, 29),
+            (self.overline(), other.overline(), 53, 55),
+        ] {
+            if value != prev {
+                sgr.flag(value, on, off);
+            }
+        }
+        sgr.finish();
     }
 }
 
 #[cfg(test)]
 mod intensity_tests {
-    #[test]
-    fn persisted_scrollback_accepts_simultaneous_bold_and_faint() {
-        let mut parser = crate::Parser::new(2, 20, 10);
-        parser.process(b"\x1b[1;2;4:3;58;5;45mBOTH\r\nNEXT\r\n");
-        let packed = parser.screen().encode_history();
-        let mut restored = crate::Parser::new(2, 20, 10);
-        assert!(restored.screen_mut().restore_history(&packed));
-        restored.screen_mut().set_scrollback(1);
-        let cell = restored.screen().cell(0, 0).unwrap();
-        assert_eq!(cell.contents(), "B");
-        assert!(cell.bold() && cell.dim());
-        assert_eq!(cell.underline_style(), crate::UnderlineStyle::Curly);
-        assert_eq!(cell.underline_color(), crate::Color::Idx(45));
-    }
-
-    #[test]
-    fn bold_and_faint_are_independent_and_sgr_22_clears_both() {
-        let mut parser = crate::Parser::new(3, 20, 0);
-        parser.process(b"\x1b[1;2;4:3;58;5;45mX\x1b[22mY");
-        let x = parser.screen().cell(0, 0).unwrap();
-        assert!(x.bold() && x.dim());
-        assert_eq!(x.underline_style(), crate::UnderlineStyle::Curly);
-        assert_eq!(x.underline_color(), crate::Color::Idx(45));
-        let y = parser.screen().cell(0, 1).unwrap();
-        assert!(!y.bold() && !y.dim());
-    }
-
     #[test]
     fn formatted_intensity_transitions_clear_old_bits_before_setting_new_ones() {
         // Every pair is needed: emitting only SGR 2 after SGR 1 accumulates

@@ -7,7 +7,7 @@ mod vim;
 
 use std::{
     env,
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     io::{self, BufRead, Write},
     path::PathBuf,
 };
@@ -16,19 +16,6 @@ use anyhow::{Context, Result, bail};
 
 use crate::config::Theme;
 use crate::protocol::{MuxCommand, MuxQuery};
-
-#[derive(Debug, Eq, PartialEq)]
-struct QueryInvocation {
-    query: MuxQuery,
-    pane_id: Option<usize>,
-    json: bool,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-struct CommandInvocation {
-    command: MuxCommand,
-    pane_id: Option<usize>,
-}
 
 fn main() {
     if let Err(error) = run() {
@@ -40,17 +27,13 @@ fn main() {
 fn run() -> Result<()> {
     let arguments: Vec<_> = env::args_os().skip(1).collect();
     let automatic = arguments.first().is_some_and(|argument| argument == "auto");
-    let arguments = if automatic {
-        &arguments[1..]
-    } else {
-        &arguments[..]
-    };
+    let arguments = &arguments[usize::from(automatic)..];
     if !automatic {
-        if let Some(invocation) = parse_query_invocation(arguments)? {
-            return client::query(invocation.query, invocation.pane_id, invocation.json);
+        if let Some((query, pane_id, json)) = parse_query_invocation(arguments)? {
+            return client::query(query, pane_id, json);
         }
-        if let Some(invocation) = parse_command_invocation(arguments)? {
-            return client::command(invocation.command, invocation.pane_id);
+        if let Some((command, pane_id)) = parse_command_invocation(arguments)? {
+            return client::command(command, pane_id);
         }
     }
     let mut arguments = arguments.iter();
@@ -59,14 +42,11 @@ fn run() -> Result<()> {
     while let Some(argument) = arguments.next() {
         match argument.to_string_lossy().as_ref() {
             "__server" => {
-                let socket = arguments
-                    .next()
-                    .map(PathBuf::from)
-                    .ok_or_else(|| anyhow::anyhow!("missing server socket path"))?;
+                let socket = arguments.next().context("missing server socket path")?;
                 if arguments.next().is_some() {
                     bail!("unexpected server argument")
                 }
-                return server::run(&socket);
+                return server::run(&PathBuf::from(socket));
             }
             "stop" | "kill-server" => {
                 if arguments.next().is_some() {
@@ -76,19 +56,12 @@ fn run() -> Result<()> {
             }
             "--config" => {
                 config = Some(PathBuf::from(
-                    arguments
-                        .next()
-                        .ok_or_else(|| anyhow::anyhow!("--config needs a path"))?,
+                    arguments.next().context("--config needs a path")?,
                 ));
             }
             "--session" => {
-                session = Some(
-                    arguments
-                        .next()
-                        .ok_or_else(|| anyhow::anyhow!("--session needs a name"))?
-                        .to_string_lossy()
-                        .into_owned(),
-                );
+                let name = arguments.next().context("--session needs a name")?;
+                session = Some(name.to_string_lossy().into_owned());
             }
             "--help" | "-h" => {
                 print_help();
@@ -97,7 +70,7 @@ fn run() -> Result<()> {
             unknown => bail!("unknown argument {unknown:?}; run mux --help"),
         }
     }
-    if automatic && should_confirm_auto_attach(env::var_os("SSH_TTY").as_deref()) {
+    if automatic && client::over_ssh() {
         let stdin = io::stdin();
         let stdout = io::stdout();
         if !confirm_auto_attach(&mut stdin.lock(), &mut stdout.lock())? {
@@ -105,10 +78,6 @@ fn run() -> Result<()> {
         }
     }
     client::attach(config.as_deref(), session)
-}
-
-fn should_confirm_auto_attach(ssh_tty: Option<&OsStr>) -> bool {
-    ssh_tty.is_some_and(|value| !value.is_empty())
 }
 
 fn confirm_auto_attach(reader: &mut impl BufRead, writer: &mut impl Write) -> Result<bool> {
@@ -141,8 +110,33 @@ fn window_number(value: &OsString, command: &str) -> Result<u8> {
     Ok(number)
 }
 
+/// `NUMBER` or `-t NUMBER`.
+fn window_target(rest: &[OsString], command: &str) -> Result<u8> {
+    match rest {
+        [number] => window_number(number, command),
+        [flag, number] if flag == "-t" => window_number(number, command),
+        _ => bail!("{command} needs -t NUMBER"),
+    }
+}
+
+/// Reads the ID following a `--pane` flag.
+fn pane_option<'a>(
+    pane_id: &mut Option<usize>,
+    rest: &mut impl Iterator<Item = &'a OsString>,
+) -> Result<()> {
+    if pane_id.is_some() {
+        bail!("--pane may be given only once")
+    }
+    let value = rest.next().context("--pane needs an ID")?;
+    let id = value.to_string_lossy().parse();
+    *pane_id = Some(id.context("--pane ID must be a number")?);
+    Ok(())
+}
+
 /// Read-only commands, which print to stdout instead of changing anything.
-fn parse_query(arguments: &[OsString]) -> Result<Option<MuxQuery>> {
+fn parse_query_invocation(
+    arguments: &[OsString],
+) -> Result<Option<(MuxQuery, Option<usize>, bool)>> {
     let Some(name) = arguments.first().map(|value| value.to_string_lossy()) else {
         return Ok(None);
     };
@@ -152,73 +146,32 @@ fn parse_query(arguments: &[OsString]) -> Result<Option<MuxQuery>> {
         "list-panes" => MuxQuery::Panes,
         _ => return Ok(None),
     };
-    if arguments.len() > 1 {
-        bail!("{name} takes no arguments")
-    }
-    Ok(Some(query))
-}
-
-fn parse_query_invocation(arguments: &[OsString]) -> Result<Option<QueryInvocation>> {
-    let Some(name) = arguments.first() else {
-        return Ok(None);
-    };
-    let Some(query) = parse_query(std::slice::from_ref(name))? else {
-        return Ok(None);
-    };
     let mut pane_id = None;
     let mut json = false;
     let mut rest = arguments[1..].iter();
     while let Some(argument) = rest.next() {
         match argument.to_string_lossy().as_ref() {
-            "--pane" => {
-                if pane_id.is_some() {
-                    bail!("--pane may be given only once")
-                }
-                pane_id = Some(pane_id_argument(
-                    rest.next()
-                        .ok_or_else(|| anyhow::anyhow!("--pane needs an ID"))?,
-                )?);
-            }
+            "--pane" => pane_option(&mut pane_id, &mut rest)?,
             "--json" if !json => json = true,
             "--json" => bail!("--json may be given only once"),
-            unknown => bail!("{} does not accept {unknown:?}", name.to_string_lossy()),
+            unknown => bail!("{name} does not accept {unknown:?}"),
         }
     }
-    Ok(Some(QueryInvocation {
-        query,
-        pane_id,
-        json,
-    }))
+    Ok(Some((query, pane_id, json)))
 }
 
-fn parse_command_invocation(arguments: &[OsString]) -> Result<Option<CommandInvocation>> {
-    let Some(name) = arguments.first() else {
-        return Ok(None);
-    };
+fn parse_command_invocation(arguments: &[OsString]) -> Result<Option<(MuxCommand, Option<usize>)>> {
     let mut pane_id = None;
-    let mut command_arguments = vec![name.clone()];
-    let mut rest = arguments[1..].iter();
+    let mut rest = arguments.iter();
+    let mut command_arguments: Vec<_> = rest.next().cloned().into_iter().collect();
     while let Some(argument) = rest.next() {
         if argument == "--pane" {
-            if pane_id.is_some() {
-                bail!("--pane may be given only once")
-            }
-            pane_id = Some(pane_id_argument(
-                rest.next()
-                    .ok_or_else(|| anyhow::anyhow!("--pane needs an ID"))?,
-            )?);
+            pane_option(&mut pane_id, &mut rest)?;
         } else {
             command_arguments.push(argument.clone());
         }
     }
-    Ok(parse_command(&command_arguments)?.map(|command| CommandInvocation { command, pane_id }))
-}
-
-fn pane_id_argument(value: &OsString) -> Result<usize> {
-    value
-        .to_string_lossy()
-        .parse()
-        .context("--pane ID must be a number")
+    Ok(parse_command(&command_arguments)?.map(|command| (command, pane_id)))
 }
 
 fn parse_command(arguments: &[OsString]) -> Result<Option<MuxCommand>> {
@@ -226,38 +179,23 @@ fn parse_command(arguments: &[OsString]) -> Result<Option<MuxCommand>> {
         return Ok(None);
     };
     let rest = &arguments[1..];
-    let no_arguments = |command: &str| {
+    let no_arguments = |command: &str, result: MuxCommand| {
         if rest.is_empty() {
-            Ok(())
+            Ok(result)
         } else {
             bail!("{command} takes no arguments")
         }
     };
     let command = match name.as_ref() {
-        "choose-tree" => {
-            no_arguments("choose-tree")?;
-            MuxCommand::ChooseTree
-        }
-        "detach" | "detach-client" => {
-            no_arguments("detach")?;
-            MuxCommand::Detach
-        }
-        "new-window" => {
-            no_arguments("new-window")?;
-            MuxCommand::NewWindow
-        }
-        "new-session" => {
-            let name = match rest {
-                [] => None,
-                [flag, name] if flag == "-s" => Some(name.to_string_lossy().into_owned()),
-                _ => bail!("new-session accepts only -s NAME"),
-            };
-            MuxCommand::NewSession(name)
-        }
-        "set-session-root" => {
-            no_arguments("set-session-root")?;
-            MuxCommand::SetSessionRoot
-        }
+        "choose-tree" => no_arguments("choose-tree", MuxCommand::ChooseTree)?,
+        "detach" | "detach-client" => no_arguments("detach", MuxCommand::Detach)?,
+        "new-window" => no_arguments("new-window", MuxCommand::NewWindow)?,
+        "new-session" => MuxCommand::NewSession(match rest {
+            [] => None,
+            [flag, name] if flag == "-s" => Some(name.to_string_lossy().into_owned()),
+            _ => bail!("new-session accepts only -s NAME"),
+        }),
+        "set-session-root" => no_arguments("set-session-root", MuxCommand::SetSessionRoot)?,
         "rename-session" => match rest {
             [name] => MuxCommand::RenameSession(name.to_string_lossy().into_owned()),
             _ => bail!("rename-session needs exactly one name"),
@@ -282,10 +220,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Option<MuxCommand>> {
             _ => bail!("select-pane needs one of -L, -D, -U, or -R"),
         },
         "resize-pane" if matches!(rest, [flag] if flag == "-Z") => MuxCommand::ZoomPane,
-        "focus-mode" => {
-            no_arguments("focus-mode")?;
-            MuxCommand::ZoomPane
-        }
+        "focus-mode" => no_arguments("focus-mode", MuxCommand::ZoomPane)?,
         "resize-pane" => {
             let (flag, cells) = match rest {
                 [flag] => (flag, 1),
@@ -306,10 +241,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Option<MuxCommand>> {
                 _ => bail!("resize-pane needs one of -L, -D, -U, or -R"),
             }
         }
-        "break-pane" => {
-            no_arguments("break-pane")?;
-            MuxCommand::BreakPane
-        }
+        "break-pane" => no_arguments("break-pane", MuxCommand::BreakPane)?,
         "join-pane" => {
             let (window, axis_is_vertical) = match rest {
                 [flag, number] if flag == "-t" => (number, true),
@@ -328,46 +260,19 @@ fn parse_command(arguments: &[OsString]) -> Result<Option<MuxCommand>> {
                 axis_is_vertical,
             }
         }
-        "swap-window" => {
-            let number = match rest {
-                [number] => number,
-                [flag, number] if flag == "-t" => number,
-                _ => bail!("swap-window needs -t NUMBER"),
-            };
-            MuxCommand::SwapWindow(window_number(number, "swap-window")?)
-        }
-        "jump-to-bell" => {
-            no_arguments("jump-to-bell")?;
-            MuxCommand::JumpToBell
-        }
-        "kill-pane" => {
-            no_arguments("kill-pane")?;
-            MuxCommand::KillPane
-        }
-        "kill-session" => {
-            no_arguments("kill-session")?;
-            MuxCommand::KillSession
-        }
+        "swap-window" => MuxCommand::SwapWindow(window_target(rest, "swap-window")?),
+        "jump-to-bell" => no_arguments("jump-to-bell", MuxCommand::JumpToBell)?,
+        "kill-pane" => no_arguments("kill-pane", MuxCommand::KillPane)?,
+        "kill-session" => no_arguments("kill-session", MuxCommand::KillSession)?,
         "select-window" => {
-            let number = match rest {
-                [number] => number,
-                [flag, number] if flag == "-t" => number,
-                _ => bail!("select-window needs -t NUMBER"),
-            };
-            let number = window_number(number, "select-window")?;
+            let number = window_target(rest, "select-window")?;
             if number > 9 {
                 bail!("select-window target must be from 1 through 9")
             }
             MuxCommand::SelectWindow(number)
         }
-        "vim-mode" => {
-            no_arguments("vim-mode")?;
-            MuxCommand::EnterVim
-        }
-        "refresh-client" | "refresh" => {
-            no_arguments("refresh-client")?;
-            MuxCommand::RefreshClient
-        }
+        "vim-mode" => no_arguments("vim-mode", MuxCommand::EnterVim)?,
+        "refresh-client" | "refresh" => no_arguments("refresh-client", MuxCommand::RefreshClient)?,
         "set-theme" => match rest {
             [path] => MuxCommand::SetTheme(Theme::load(&PathBuf::from(path))?),
             _ => bail!("set-theme needs exactly one path"),
@@ -432,167 +337,101 @@ mod tests {
     }
 
     #[test]
-    fn parses_tmux_style_commands_for_existing_features() {
-        assert_eq!(
-            parse_command(&args(&["choose-tree"])).unwrap(),
-            Some(MuxCommand::ChooseTree)
-        );
-        assert_eq!(
-            parse_command(&args(&["split-window", "-h"])).unwrap(),
-            Some(MuxCommand::SplitVertical)
-        );
-        assert_eq!(
-            parse_command(&args(&["select-pane", "-L"])).unwrap(),
-            Some(MuxCommand::FocusLeft)
-        );
-        assert_eq!(
-            parse_command(&args(&["select-window", "-t", "3"])).unwrap(),
-            Some(MuxCommand::SelectWindow(3))
-        );
-        assert_eq!(
-            parse_command(&args(&["vim-mode"])).unwrap(),
-            Some(MuxCommand::EnterVim)
-        );
+    fn parses_tmux_style_commands() {
+        use MuxCommand::*;
+        for (input, expected) in [
+            (&["choose-tree"][..], ChooseTree),
+            (&["split-window", "-h"], SplitVertical),
+            (&["select-pane", "-L"], FocusLeft),
+            (&["select-window", "-t", "3"], SelectWindow(3)),
+            (&["vim-mode"], EnterVim),
+            (&["resize-pane", "-L"], ResizeLeft(1)),
+            (&["resize-pane", "-D", "5"], ResizeDown(5)),
+            // tmux spells focus mode as a resize; both work.
+            (&["resize-pane", "-Z"], ZoomPane),
+            (&["focus-mode"], ZoomPane),
+            (&["rename-window", "logs"], RenameWindow("logs".into())),
+            (&["rename-window"], RenameWindow(String::new())),
+            (&["break-pane"], BreakPane),
+            (
+                &["join-pane", "-t", "2"],
+                JoinPane {
+                    window: 2,
+                    axis_is_vertical: true,
+                },
+            ),
+            (
+                &["join-pane", "-v", "-t", "3"],
+                JoinPane {
+                    window: 3,
+                    axis_is_vertical: false,
+                },
+            ),
+            (&["swap-window", "-t", "4"], SwapWindow(4)),
+        ] {
+            assert_eq!(parse_command(&args(input)).unwrap(), Some(expected));
+        }
+        // Left for attach parsing.
         assert_eq!(parse_command(&args(&["copy-mode"])).unwrap(), None);
-    }
-
-    #[test]
-    fn attach_options_are_not_parsed_as_commands() {
         assert_eq!(parse_command(&args(&["--session", "work"])).unwrap(), None);
+        for invalid in [
+            &["resize-pane", "-X"][..],
+            // Windows are counted from one, so zero is not a window.
+            &["swap-window", "-t", "0"],
+            &["join-pane", "2"],
+            &["select-window", "10"],
+            &["kill-pane", "extra"],
+        ] {
+            assert!(parse_command(&args(invalid)).is_err(), "{invalid:?}");
+        }
     }
 
     #[test]
-    fn auto_attach_only_confirms_for_an_ssh_tty() {
-        assert!(!should_confirm_auto_attach(None));
-        assert!(!should_confirm_auto_attach(Some(OsStr::new(""))));
-        assert!(should_confirm_auto_attach(Some(OsStr::new("/dev/pts/4"))));
+    fn auto_attach_defaults_to_yes_reprompts_and_declines_eof() {
+        for (input, expected, prompt) in [
+            ("\n", true, "Attach to mux? [Y/n] "),
+            ("no\n", false, "Attach to mux? [Y/n] "),
+            (
+                "maybe\ny\n",
+                true,
+                "Attach to mux? [Y/n] Please answer y or n.\nAttach to mux? [Y/n] ",
+            ),
+            ("", false, "Attach to mux? [Y/n] \n"),
+        ] {
+            let mut output = Vec::new();
+            assert_eq!(
+                confirm_auto_attach(&mut input.as_bytes(), &mut output).unwrap(),
+                expected
+            );
+            assert_eq!(String::from_utf8(output).unwrap(), prompt);
+        }
     }
 
     #[test]
-    fn auto_attach_defaults_to_yes_and_accepts_no() {
-        let mut output = Vec::new();
-        assert!(confirm_auto_attach(&mut "\n".as_bytes(), &mut output).unwrap());
-        assert_eq!(output, b"Attach to mux? [Y/n] ");
-
-        output.clear();
-        assert!(!confirm_auto_attach(&mut "no\n".as_bytes(), &mut output).unwrap());
-        assert_eq!(output, b"Attach to mux? [Y/n] ");
-    }
-
-    #[test]
-    fn auto_attach_reprompts_after_an_unknown_answer_and_declines_eof() {
-        let mut output = Vec::new();
-        assert!(confirm_auto_attach(&mut "maybe\ny\n".as_bytes(), &mut output).unwrap());
+    fn parses_queries_and_their_options() {
         assert_eq!(
-            output,
-            b"Attach to mux? [Y/n] Please answer y or n.\nAttach to mux? [Y/n] "
+            parse_query_invocation(&args(&["ls"])).unwrap(),
+            Some((MuxQuery::Sessions, None, false))
         );
-
-        output.clear();
-        assert!(!confirm_auto_attach(&mut "".as_bytes(), &mut output).unwrap());
-        assert_eq!(output, b"Attach to mux? [Y/n] \n");
-    }
-
-    #[test]
-    fn queries_are_separate_from_commands() {
-        assert_eq!(
-            parse_query(&args(&["list-sessions"])).unwrap(),
-            Some(MuxQuery::Sessions)
-        );
-        assert_eq!(
-            parse_query(&args(&["ls"])).unwrap(),
-            Some(MuxQuery::Sessions)
-        );
-        assert_eq!(
-            parse_query(&args(&["list-panes"])).unwrap(),
-            Some(MuxQuery::Panes)
-        );
-        assert!(parse_query(&args(&["list-windows", "extra"])).is_err());
-        assert_eq!(parse_query(&args(&["kill-pane"])).unwrap(), None);
-    }
-
-    #[test]
-    fn parses_query_output_and_pane_options() {
         assert_eq!(
             parse_query_invocation(&args(&["list-panes", "--pane", "42", "--json"])).unwrap(),
-            Some(QueryInvocation {
-                query: MuxQuery::Panes,
-                pane_id: Some(42),
-                json: true,
-            })
+            Some((MuxQuery::Panes, Some(42), true))
         );
+        assert_eq!(parse_query_invocation(&args(&["kill-pane"])).unwrap(), None);
+        assert!(parse_query_invocation(&args(&["list-windows", "extra"])).is_err());
         assert!(parse_query_invocation(&args(&["ls", "--pane"])).is_err());
         assert!(parse_query_invocation(&args(&["ls", "--json", "--json"])).is_err());
     }
 
     #[test]
-    fn parses_command_pane_option_without_changing_command_aliases() {
+    fn commands_accept_a_pane_option() {
         assert_eq!(
             parse_command_invocation(&args(&["resize-pane", "-D", "5", "--pane", "17"])).unwrap(),
-            Some(CommandInvocation {
-                command: MuxCommand::ResizeDown(5),
-                pane_id: Some(17),
-            })
+            Some((MuxCommand::ResizeDown(5), Some(17)))
         );
         assert!(parse_command_invocation(&args(&["kill-pane", "--pane", "gone"])).is_err());
-    }
-
-    #[test]
-    fn panes_can_be_resized_focused_and_named() {
-        assert_eq!(
-            parse_command(&args(&["resize-pane", "-L"])).unwrap(),
-            Some(MuxCommand::ResizeLeft(1))
+        assert!(
+            parse_command_invocation(&args(&["kill-pane", "--pane", "1", "--pane", "2"])).is_err()
         );
-        assert_eq!(
-            parse_command(&args(&["resize-pane", "-D", "5"])).unwrap(),
-            Some(MuxCommand::ResizeDown(5))
-        );
-        // tmux spells focus mode as a resize; both work.
-        assert_eq!(
-            parse_command(&args(&["resize-pane", "-Z"])).unwrap(),
-            Some(MuxCommand::ZoomPane)
-        );
-        assert_eq!(
-            parse_command(&args(&["focus-mode"])).unwrap(),
-            Some(MuxCommand::ZoomPane)
-        );
-        assert_eq!(
-            parse_command(&args(&["rename-window", "logs"])).unwrap(),
-            Some(MuxCommand::RenameWindow("logs".into()))
-        );
-        assert_eq!(
-            parse_command(&args(&["rename-window"])).unwrap(),
-            Some(MuxCommand::RenameWindow(String::new()))
-        );
-        assert!(parse_command(&args(&["resize-pane", "-X"])).is_err());
-    }
-
-    #[test]
-    fn panes_and_windows_can_be_moved() {
-        assert_eq!(
-            parse_command(&args(&["break-pane"])).unwrap(),
-            Some(MuxCommand::BreakPane)
-        );
-        assert_eq!(
-            parse_command(&args(&["join-pane", "-t", "2"])).unwrap(),
-            Some(MuxCommand::JoinPane {
-                window: 2,
-                axis_is_vertical: true,
-            })
-        );
-        assert_eq!(
-            parse_command(&args(&["join-pane", "-v", "-t", "3"])).unwrap(),
-            Some(MuxCommand::JoinPane {
-                window: 3,
-                axis_is_vertical: false,
-            })
-        );
-        assert_eq!(
-            parse_command(&args(&["swap-window", "-t", "4"])).unwrap(),
-            Some(MuxCommand::SwapWindow(4))
-        );
-        // Windows are counted from one, so zero is not a window.
-        assert!(parse_command(&args(&["swap-window", "-t", "0"])).is_err());
-        assert!(parse_command(&args(&["join-pane", "2"])).is_err());
     }
 }

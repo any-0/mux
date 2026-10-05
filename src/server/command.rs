@@ -12,6 +12,14 @@ use crate::protocol::{MuxCommand, MuxQuery};
 
 use super::*;
 
+fn plural(count: usize) -> &'static str {
+    if count == 1 { "" } else { "s" }
+}
+
+fn flag(set: bool, text: &'static str) -> &'static str {
+    if set { text } else { "" }
+}
+
 impl Server {
     pub(super) fn run_command(
         &mut self,
@@ -20,42 +28,14 @@ impl Server {
     ) -> Result<()> {
         let id = self.command_target_client(pane_id)?;
         match command {
-            MuxCommand::ChooseTree => {
-                self.open_session_tree(id);
-            }
+            MuxCommand::ChooseTree => self.open_session_tree(id),
             MuxCommand::Detach => self.detach(id)?,
             MuxCommand::NewWindow => self.new_window(id)?,
-            MuxCommand::NewSession(name) => {
-                if let Some(name) = name {
-                    if name.trim().is_empty() {
-                        bail!("session name cannot be empty");
-                    }
-                    let root = self
-                        .active_cwd(id)
-                        .unwrap_or_else(|| self.clients[&id].cwd.clone());
-                    let (cols, rows) = self.client_size(id);
-                    let session_id = self.create_session(name, root, cols, rows)?;
-                    self.set_client_session(id, session_id);
-                    self.remember_active_pane(id)?;
-                    self.save_state_soon();
-                } else {
-                    self.new_session(id)?;
-                }
-            }
+            MuxCommand::NewSession(name) => self.new_session(id, name)?,
             MuxCommand::SetSessionRoot => self.set_session_root(id)?,
             MuxCommand::RenameSession(name) => {
                 let (session_index, _) = self.active_indices(id).context("no active session")?;
-                if name.trim().is_empty() {
-                    bail!("session name cannot be empty");
-                }
-                if self
-                    .sessions
-                    .iter()
-                    .enumerate()
-                    .any(|(index, session)| index != session_index && session.name == name)
-                {
-                    bail!("session {name:?} already exists");
-                }
+                self.check_session_name(session_index, &name)?;
                 self.sessions[session_index].name = name;
                 self.save_state_soon();
             }
@@ -74,15 +54,14 @@ impl Server {
             MuxCommand::JoinPane {
                 window,
                 axis_is_vertical,
-            } => self.join_pane(
-                id,
-                window as usize,
-                if axis_is_vertical {
+            } => {
+                let axis = if axis_is_vertical {
                     SplitAxis::Vertical
                 } else {
                     SplitAxis::Horizontal
-                },
-            )?,
+                };
+                self.join_pane(id, window as usize, axis)?
+            }
             MuxCommand::SwapWindow(window) => self.swap_window(id, window as usize)?,
             MuxCommand::RenameWindow(name) => {
                 let (session_index, window_index) =
@@ -152,19 +131,20 @@ impl Server {
             .collect();
         let target = match pane_id {
             Some(pane_id) => Some(
-                self.pane_location(pane_id)
+                self.locate_pane(pane_id)
                     .with_context(|| format!("pane {pane_id} does not exist"))?,
             ),
             None => self
                 .last_active_pane
-                .and_then(|pane_id| self.pane_location(pane_id)),
+                .and_then(|pane_id| self.locate_pane(pane_id)),
         };
-        let current = target.map(|(session_index, _)| self.sessions[session_index].id);
-        if json {
-            return self.json_listing(current, target, query, &attached);
-        }
-        match query {
-            MuxQuery::Sessions => Ok(self
+        let current = target.map(|(session_index, _, _)| self.sessions[session_index].id);
+        let session = current
+            .and_then(|session_id| self.session(session_id))
+            .or_else(|| self.sessions.first());
+        // Each entry as a display line and as a JSON object.
+        let entries: Vec<(String, serde_json::Value)> = match (query, session) {
+            (MuxQuery::Sessions, _) => self
                 .sessions
                 .iter()
                 .map(|session| {
@@ -173,188 +153,102 @@ impl Server {
                         .iter()
                         .map(|window| window.panes.len())
                         .sum();
-                    format!(
+                    let is_attached = attached.contains(&session.id);
+                    let is_current = current == Some(session.id);
+                    let line = format!(
                         "{}: {} window{}, {panes} pane{} [{}]{}{}",
                         session.name,
                         session.windows.len(),
-                        if session.windows.len() == 1 { "" } else { "s" },
-                        if panes == 1 { "" } else { "s" },
+                        plural(session.windows.len()),
+                        plural(panes),
                         session.root.display(),
-                        if attached.contains(&session.id) {
-                            " (attached)"
-                        } else {
-                            ""
-                        },
-                        if current == Some(session.id) {
-                            " (current)"
-                        } else {
-                            ""
-                        },
-                    )
-                })
-                .collect()),
-            MuxQuery::Windows => {
-                let Some(session) = self.session_or_current(current) else {
-                    return Ok(Vec::new());
-                };
-                Ok(session
-                    .windows
-                    .iter()
-                    .enumerate()
-                    .map(|(index, window)| {
-                        format!(
-                            "{}:{}: {} ({} pane{}){}{}",
-                            session.name,
-                            index + 1,
-                            window.label().unwrap_or("shell"),
-                            window.panes.len(),
-                            if window.panes.len() == 1 { "" } else { "s" },
-                            if index == session.current_window {
-                                " (active)"
-                            } else {
-                                ""
-                            },
-                            if window.zoomed { " (focus mode)" } else { "" },
-                        )
-                    })
-                    .collect())
-            }
-            MuxQuery::Panes => {
-                let Some(session) = self.session_or_current(current) else {
-                    return Ok(Vec::new());
-                };
-                let window_index = target
-                    .filter(|(session_index, _)| self.sessions[*session_index].id == session.id)
-                    .map_or(session.current_window, |(_, window_index)| window_index);
-                let window = &session.windows[window_index];
-                Ok(window
-                    .panes
-                    .iter()
-                    .enumerate()
-                    .map(|(index, pane)| {
-                        format!(
-                            "{}:{}.{}: {} [{}x{}]{}",
-                            session.name,
-                            window_index + 1,
-                            index + 1,
-                            pane.cwd.display(),
-                            pane.parser.screen().size().1,
-                            pane.parser.screen().size().0,
-                            if pane.id == window.active_pane {
-                                " (active)"
-                            } else {
-                                ""
-                            },
-                        )
-                    })
-                    .collect())
-            }
-        }
-    }
-
-    fn json_listing(
-        &self,
-        current: Option<usize>,
-        target: Option<(usize, usize)>,
-        query: MuxQuery,
-        attached: &HashSet<usize>,
-    ) -> Result<Vec<String>> {
-        let values: Vec<serde_json::Value> = match query {
-            MuxQuery::Sessions => self
-                .sessions
-                .iter()
-                .map(|session| {
-                    let panes: usize = session
-                        .windows
-                        .iter()
-                        .map(|window| window.panes.len())
-                        .sum();
-                    serde_json::json!({
+                        flag(is_attached, " (attached)"),
+                        flag(is_current, " (current)"),
+                    );
+                    let value = serde_json::json!({
                         "id": session.id,
                         "name": session.name,
                         "root": session.root,
                         "windows": session.windows.len(),
                         "panes": panes,
-                        "attached": attached.contains(&session.id),
-                        "current": current == Some(session.id),
-                    })
+                        "attached": is_attached,
+                        "current": is_current,
+                    });
+                    (line, value)
                 })
                 .collect(),
-            MuxQuery::Windows => {
-                let Some(session) = self.session_or_current(current) else {
-                    return Ok(vec!["[]".into()]);
-                };
-                session
-                    .windows
-                    .iter()
-                    .enumerate()
-                    .map(|(index, window)| {
-                        serde_json::json!({
-                            "session_id": session.id,
-                            "session": session.name,
-                            "id": index + 1,
-                            "name": window.label(),
-                            "panes": window.panes.len(),
-                            "active": index == session.current_window,
-                            "focus_mode": window.zoomed,
-                        })
-                    })
-                    .collect()
-            }
-            MuxQuery::Panes => {
-                let Some(session) = self.session_or_current(current) else {
-                    return Ok(vec!["[]".into()]);
-                };
+            (MuxQuery::Windows | MuxQuery::Panes, None) => Vec::new(),
+            (MuxQuery::Windows, Some(session)) => session
+                .windows
+                .iter()
+                .enumerate()
+                .map(|(index, window)| {
+                    let active = index == session.current_window;
+                    let line = format!(
+                        "{}:{}: {} ({} pane{}){}{}",
+                        session.name,
+                        index + 1,
+                        window.label().unwrap_or("shell"),
+                        window.panes.len(),
+                        plural(window.panes.len()),
+                        flag(active, " (active)"),
+                        flag(window.zoomed, " (focus mode)"),
+                    );
+                    let value = serde_json::json!({
+                        "session_id": session.id,
+                        "session": session.name,
+                        "id": index + 1,
+                        "name": window.label(),
+                        "panes": window.panes.len(),
+                        "active": active,
+                        "focus_mode": window.zoomed,
+                    });
+                    (line, value)
+                })
+                .collect(),
+            (MuxQuery::Panes, Some(session)) => {
                 let window_index = target
-                    .filter(|(session_index, _)| self.sessions[*session_index].id == session.id)
-                    .map_or(session.current_window, |(_, window_index)| window_index);
+                    .filter(|(session_index, _, _)| self.sessions[*session_index].id == session.id)
+                    .map_or(session.current_window, |(_, window_index, _)| window_index);
                 let window = &session.windows[window_index];
                 window
                     .panes
                     .iter()
                     .enumerate()
                     .map(|(index, pane)| {
-                        serde_json::json!({
+                        let (rows, cols) = pane.parser.screen().size();
+                        let active = pane.id == window.active_pane;
+                        let line = format!(
+                            "{}:{}.{}: {} [{cols}x{rows}]{}",
+                            session.name,
+                            window_index + 1,
+                            index + 1,
+                            pane.cwd.display(),
+                            flag(active, " (active)"),
+                        );
+                        let value = serde_json::json!({
                             "session_id": session.id,
                             "session": session.name,
                             "window_id": window_index + 1,
                             "id": pane.id,
                             "index": index + 1,
                             "cwd": pane.cwd,
-                            "cols": pane.parser.screen().size().1,
-                            "rows": pane.parser.screen().size().0,
-                            "active": pane.id == window.active_pane,
-                        })
+                            "cols": cols,
+                            "rows": rows,
+                            "active": active,
+                        });
+                        (line, value)
                     })
                     .collect()
             }
         };
+        if !json {
+            return Ok(entries.into_iter().map(|(line, _)| line).collect());
+        }
+        let values: Vec<_> = entries.into_iter().map(|(_, value)| value).collect();
         Ok(vec![
             serde_json::to_string(&values).context("encode query result")?,
         ])
-    }
-
-    fn session_or_current(&self, current: Option<usize>) -> Option<&Session> {
-        current
-            .and_then(|session_id| {
-                self.sessions
-                    .iter()
-                    .find(|session| session.id == session_id)
-            })
-            .or_else(|| self.sessions.first())
-    }
-
-    fn pane_location(&self, pane_id: usize) -> Option<(usize, usize)> {
-        self.sessions
-            .iter()
-            .enumerate()
-            .find_map(|(session_index, session)| {
-                session
-                    .windows
-                    .iter()
-                    .position(|window| window.panes.iter().any(|pane| pane.id == pane_id))
-                    .map(|window_index| (session_index, window_index))
-            })
     }
 
     fn command_target_client(&mut self, pane_id: Option<usize>) -> Result<usize> {
@@ -377,25 +271,9 @@ impl Server {
             return Ok(id);
         }
 
-        let origin = self
-            .sessions
-            .iter()
-            .enumerate()
-            .find_map(|(session_index, session)| {
-                session
-                    .windows
-                    .iter()
-                    .enumerate()
-                    .find_map(|(window_index, window)| {
-                        window
-                            .panes
-                            .iter()
-                            .any(|pane| pane.id == pane_id)
-                            .then_some((session_index, window_index))
-                    })
-            });
-        let (session_index, window_index) =
-            origin.with_context(|| format!("pane {pane_id} does not exist"))?;
+        let (session_index, window_index, _) = self
+            .locate_pane(pane_id)
+            .with_context(|| format!("pane {pane_id} does not exist"))?;
         let session_id = self.sessions[session_index].id;
         let id = attached
             .iter()

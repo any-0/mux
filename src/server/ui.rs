@@ -10,7 +10,7 @@ use std::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
-    config::{BellStyle, Theme},
+    config::{BellStyle, Glyphs, Theme},
     frame::{CellAttributes, CursorShape, Frame, FrameCursor, Rgb},
 };
 
@@ -75,8 +75,7 @@ impl RenameState {
     }
 
     pub(super) fn delete(&mut self) {
-        let end = self.text.chars().count();
-        if self.cursor == end {
+        if self.cursor == self.text.chars().count() {
             return;
         }
         let start = character_byte_index(&self.text, self.cursor);
@@ -85,23 +84,16 @@ impl RenameState {
     }
 
     pub(super) fn delete_word_before_cursor(&mut self) {
-        while self.cursor > 0
-            && self
-                .text
-                .chars()
-                .nth(self.cursor - 1)
-                .is_some_and(char::is_whitespace)
-        {
-            self.backspace();
-        }
-        while self.cursor > 0
-            && self
-                .text
-                .chars()
-                .nth(self.cursor - 1)
-                .is_some_and(|character| !character.is_whitespace())
-        {
-            self.backspace();
+        for whitespace in [true, false] {
+            while self.cursor > 0
+                && self
+                    .text
+                    .chars()
+                    .nth(self.cursor - 1)
+                    .is_some_and(|character| character.is_whitespace() == whitespace)
+            {
+                self.backspace();
+            }
         }
     }
 
@@ -196,10 +188,24 @@ pub(super) fn kill_session_prompt(session: Option<(&str, usize)>) -> String {
     match session {
         Some((name, panes)) => format!(
             "kill session {name:?} and its {panes} pane{}? [y/N]",
-            if panes == 1 { "" } else { "s" }
+            plural_suffix(panes)
         ),
         None => "kill session? [y/N]".into(),
     }
+}
+
+/// "s" unless `count` is one.
+pub(super) fn plural_suffix(count: usize) -> &'static str {
+    if count == 1 { "" } else { "s" }
+}
+
+/// How much of `screen`, from `source_top` on, fits in `destination`.
+fn visible_extent(screen: &vt100::Screen, source_top: u16, destination: Rect) -> (u16, u16) {
+    let (screen_rows, screen_cols) = screen.size();
+    (
+        destination.cols.min(screen_cols),
+        destination.rows.min(screen_rows.saturating_sub(source_top)),
+    )
 }
 
 /// Paints the slice of `screen` starting at `source_top` into `destination`,
@@ -210,18 +216,16 @@ pub(super) fn render_screen_region(
     source_top: u16,
     destination: Rect,
 ) {
-    let (screen_rows, screen_cols) = screen.size();
-    let width = destination.cols.min(screen_cols);
-    let height = destination.rows.min(screen_rows.saturating_sub(source_top));
+    let (width, height) = visible_extent(screen, source_top, destination);
     for offset in 0..height {
         let row = destination.row + offset;
         for col in 0..width {
-            let Some(cell) = screen.cell(source_top + offset, col) else {
+            let Some(cell) = screen
+                .cell(source_top + offset, col)
+                .filter(|cell| !cell.is_wide_continuation())
+            else {
                 continue;
             };
-            if cell.is_wide_continuation() {
-                continue;
-            }
             let attributes = CellAttributes::from(&cell);
             let contents = if cell.has_contents() {
                 cell.contents()
@@ -249,9 +253,7 @@ pub(super) fn preview_cursor(
     source_top: u16,
     destination: Rect,
 ) -> Option<FrameCursor> {
-    let (screen_rows, screen_cols) = screen.size();
-    let width = destination.cols.min(screen_cols);
-    let height = destination.rows.min(screen_rows.saturating_sub(source_top));
+    let (width, height) = visible_extent(screen, source_top, destination);
     if width == 0 || height == 0 {
         return None;
     }
@@ -358,7 +360,7 @@ pub(super) fn render_preview_window_title(
             " window {}  ·  {} pane{}",
             window_index + 1,
             window.panes.len(),
-            if window.panes.len() == 1 { "" } else { "s" }
+            plural_suffix(window.panes.len())
         ),
     };
     let title = truncate(&title, rect.cols as usize);
@@ -537,19 +539,8 @@ pub(super) fn popup_text_window(
     while start < cursor && characters[start].width().unwrap_or(0) == 0 {
         start += 1;
     }
-    let visible = characters[start..]
-        .iter()
-        .copied()
-        .scan(0, |used, character| {
-            let character_width = character.width().unwrap_or(0);
-            if *used + character_width > width {
-                return None;
-            }
-            *used += character_width;
-            Some(character)
-        })
-        .collect();
-    (visible, Some(before_cursor))
+    let visible: String = characters[start..].iter().collect();
+    (truncate(&visible, width), Some(before_cursor))
 }
 
 pub(super) fn truncate(value: &str, width: usize) -> String {
@@ -577,10 +568,10 @@ pub(super) fn render_bar_separator(
     bar_width: u16,
     current_row: Option<u16>,
     color: Rgb,
-    glyphs: crate::config::Glyphs,
+    glyphs: Glyphs,
 ) {
     let attributes = CellAttributes::foreground(color);
-    let text = glyphs == crate::config::Glyphs::Text;
+    let text = glyphs == Glyphs::Text;
     for row in 1..=rows {
         let glyph = if Some(row) == current_row {
             if text { "┤" } else { "\u{e010}" }
@@ -613,11 +604,7 @@ pub(super) fn centered_bar_layout(
 }
 
 pub(super) fn bar_label(window_number: usize, number_width: usize) -> String {
-    bar_text_label(&window_number.to_string(), number_width)
-}
-
-fn bar_text_label(text: &str, number_width: usize) -> String {
-    format!(" {text:^number_width$} ")
+    format!(" {window_number:^number_width$} ")
 }
 
 pub(super) fn bar_window_label(
@@ -626,7 +613,7 @@ pub(super) fn bar_window_label(
     number_width: usize,
 ) -> String {
     if window == current_window {
-        bar_text_label("•", number_width)
+        format!(" {:^number_width$} ", "•")
     } else {
         bar_label(window + 1, number_width)
     }

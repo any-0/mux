@@ -1,10 +1,5 @@
 //! Behaviour mux added to the emulator, each case checked against what xterm
-//! and tmux do. The harness in `harness/` compares whole random streams with
-//! an independent emulator; these pin the individual rules down in CI.
-
-fn parser(rows: u16, cols: u16) -> crate::Parser {
-    crate::Parser::new(rows, cols, 100)
-}
+//! and tmux do.
 
 fn row(parser: &crate::Parser, row: u16) -> String {
     let (_, cols) = parser.screen().size();
@@ -12,7 +7,7 @@ fn row(parser: &crate::Parser, row: u16) -> String {
 }
 
 fn screen_after(rows: u16, cols: u16, input: &str) -> crate::Parser {
-    let mut parser = parser(rows, cols);
+    let mut parser = crate::Parser::new(rows, cols, 100);
     parser.process(input.as_bytes());
     parser
 }
@@ -149,7 +144,10 @@ fn the_alternate_screen_shares_the_cursor_and_margins_but_saves_separately() {
     assert_eq!(row(&parser, 2), " y");
     // A restore on the alternate screen does not see the normal screen's save.
     let parser = screen_after(3, 10, "\x1b[31m\x1b[?1049h\x1b[uZ");
-    assert_eq!(parser.screen().cell(0, 0).unwrap().fgcolor(), crate::Color::Default);
+    assert_eq!(
+        parser.screen().cell(0, 0).unwrap().fgcolor(),
+        crate::Color::Default
+    );
     // 1047 switches without saving, and clears on the way back.
     let parser = screen_after(3, 10, "main\x1b[?1047halt\x1b[?1047l");
     assert_eq!(row(&parser, 0), "main");
@@ -205,14 +203,13 @@ fn rows_without_new_renditions_keep_the_original_history_format() {
     let mut parser = crate::Parser::new(1, 10, 10);
     parser.process(b"\x1b[1;4;31mold\r\n\r\n");
     let history = parser.screen().encode_history();
-    let mut raw = if history[12] == 1 {
+    let raw = if history[12] == 1 {
         zstd::bulk::decompress(&history[13..], 1 << 20).unwrap()
     } else {
         history[13..].to_vec()
     };
     // The first row's flag byte is the one after its two-byte width.
     assert_eq!(raw[2] & 0b10, 0);
-    raw.clear();
 }
 
 #[test]
@@ -282,4 +279,3 @@ fn one_column_screens_never_panic() {
         }
     }
 }
-

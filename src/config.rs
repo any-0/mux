@@ -192,7 +192,6 @@ impl Settings {
     /// An explicit path must exist; the default one is optional, so a fresh
     /// machine keeps the built-in bindings.
     pub fn load(path: Option<&Path>) -> Result<Self> {
-        let mut bindings = Bindings::defaults();
         let path = match path {
             Some(path) => path.to_path_buf(),
             None => match default_config_path().filter(|path| path.is_file()) {
@@ -200,35 +199,34 @@ impl Settings {
                 None => return Ok(Self::default()),
             },
         };
-        let path = path.as_path();
-        let source =
-            fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
-        let config: FileConfig =
-            toml::from_str(&source).with_context(|| format!("parse config {}", path.display()))?;
-        if config.clipboard_command.is_empty() || config.clipboard_command[0].is_empty() {
-            bail!("clipboard_command must contain a command name");
+        let config: FileConfig = read_toml(&path, "config")?;
+        for (name, command) in [
+            ("clipboard_command", &config.clipboard_command),
+            ("theme_command", &config.theme_command),
+        ] {
+            if command.first().is_none_or(String::is_empty) {
+                bail!("{name} must contain a command name");
+            }
         }
-        if config.theme_command.is_empty() || config.theme_command[0].is_empty() {
-            bail!("theme_command must contain a command name");
+        let mut bindings = Bindings::defaults();
+        for (mode, values) in [
+            (Mode::Normal, config.normal),
+            (Mode::Leader, config.leader),
+            (Mode::Vim, config.vim),
+            (Mode::Tree, config.tree),
+            (Mode::Theme, config.themes),
+        ] {
+            bindings.apply(mode, values)?;
         }
-        bindings.apply(Mode::Normal, config.normal)?;
-        bindings.apply(Mode::Leader, config.leader)?;
-        bindings.apply(Mode::Vim, config.vim)?;
-        bindings.apply(Mode::Tree, config.tree)?;
-        bindings.apply(Mode::Theme, config.themes)?;
-        let mut palette = match config.theme {
+        let base = match config.theme {
             Some(theme_path) => Theme::load(Path::new(&theme_path))?.palette,
             None => Palette::default(),
         };
-        if let Some(variant) = config.variant {
-            palette.variant = variant;
-        }
-        palette.apply_overrides(config.palette)?;
-        let theme = Theme::from_palette(palette);
+        let palette = base.with_overrides(config.variant, config.palette)?;
         Ok(Self {
             bindings,
             clipboard_command: config.clipboard_command,
-            theme,
+            theme: Theme::from_palette(palette),
             theme_command: config.theme_command,
             theme_directory: config
                 .theme_directory
@@ -681,51 +679,48 @@ impl Default for Theme {
 
 impl Theme {
     pub fn load(path: &Path) -> Result<Self> {
-        let source = fs::read_to_string(path)
-            .with_context(|| format!("read theme config {}", path.display()))?;
-        let config: FileThemeConfig = toml::from_str(&source)
-            .with_context(|| format!("parse theme config {}", path.display()))?;
-        let mut palette = Palette::default();
-        if let Some(variant) = config.variant {
-            palette.variant = variant;
-        }
-        palette.apply_overrides(config.palette)?;
+        let config: FileThemeConfig = read_toml(path, "theme config")?;
+        let palette = Palette::default().with_overrides(config.variant, config.palette)?;
         Ok(Self::from_palette(palette))
     }
 }
 
-impl Palette {
-    #[cfg(test)]
-    fn with_overrides(values: FilePalette) -> Result<Self> {
-        let mut palette = Self::default();
-        palette.apply_overrides(values)?;
-        Ok(palette)
-    }
+fn read_toml<T: serde::de::DeserializeOwned>(path: &Path, what: &str) -> Result<T> {
+    let source =
+        fs::read_to_string(path).with_context(|| format!("read {what} {}", path.display()))?;
+    toml::from_str(&source).with_context(|| format!("parse {what} {}", path.display()))
+}
 
-    fn apply_overrides(&mut self, values: FilePalette) -> Result<()> {
-        macro_rules! apply_color {
-            ($field:ident) => {
+impl Palette {
+    fn with_overrides(mut self, variant: Option<Variant>, values: FilePalette) -> Result<Self> {
+        if let Some(variant) = variant {
+            self.variant = variant;
+        }
+        macro_rules! apply_colors {
+            ($($field:ident),*) => {$(
                 if let Some(value) = values.$field {
                     self.$field = parse_color(&value)
                         .with_context(|| format!("invalid color {}", stringify!($field)))?;
                 }
-            };
+            )*};
         }
-        apply_color!(background);
-        apply_color!(foreground);
-        apply_color!(surface);
-        apply_color!(surface_raised);
-        apply_color!(muted);
-        apply_color!(accent);
-        apply_color!(secondary);
-        apply_color!(success);
-        apply_color!(warning);
-        apply_color!(danger);
-        apply_color!(selection);
-        apply_color!(diff_add);
-        apply_color!(diff_delete);
-        apply_color!(diff_change);
-        Ok(())
+        apply_colors!(
+            background,
+            foreground,
+            surface,
+            surface_raised,
+            muted,
+            accent,
+            secondary,
+            success,
+            warning,
+            danger,
+            selection,
+            diff_add,
+            diff_delete,
+            diff_change
+        );
+        Ok(self)
     }
 }
 
@@ -734,14 +729,14 @@ fn parse_color(value: &str) -> Result<Rgb> {
     if hex.len() != 6 {
         bail!("expected #rrggbb or rrggbb")
     }
-    let red = parse_color_channel(hex, 0)?;
-    let green = parse_color_channel(hex, 2)?;
-    let blue = parse_color_channel(hex, 4)?;
-    Ok((red, green, blue))
-}
-
-fn parse_color_channel(hex: &str, start: usize) -> Result<u8> {
-    u8::from_str_radix(&hex[start..start + 2], 16).context("expected hexadecimal color")
+    // Byte slicing below would panic inside a multi-byte character.
+    if !hex.is_ascii() {
+        bail!("expected hexadecimal color")
+    }
+    let channel = |start: usize| {
+        u8::from_str_radix(&hex[start..start + 2], 16).context("expected hexadecimal color")
+    };
+    Ok((channel(0)?, channel(2)?, channel(4)?))
 }
 
 impl Mode {
@@ -822,192 +817,149 @@ impl Action {
                     | Self::ThemeCancel
                     | Self::ThemeSelect(_)
             ),
-            Mode::Vim => !matches!(
-                self,
-                Self::SessionTree
-                    | Self::ThemePicker
-                    | Self::NewWindow
-                    | Self::NewSession
-                    | Self::SetSessionRoot
-                    | Self::RenameSession
-                    | Self::RenameWindow
-                    | Self::SplitHorizontal
-                    | Self::SplitVertical
-                    | Self::FocusPaneLeft
-                    | Self::FocusPaneDown
-                    | Self::FocusPaneUp
-                    | Self::FocusPaneRight
-                    | Self::ResizePaneLeft
-                    | Self::ResizePaneDown
-                    | Self::ResizePaneUp
-                    | Self::ResizePaneRight
-                    | Self::ZoomPane
-                    | Self::BreakPane
-                    | Self::SwapWindowLeft
-                    | Self::SwapWindowRight
-                    | Self::JumpToBell
-                    | Self::KillPane
-                    | Self::KillSession
-                    | Self::LeaderCancel
-                    | Self::EnterVim
-                    | Self::EnterVimJump
-                    | Self::Detach
-                    | Self::TreeDown
-                    | Self::TreeUp
-                    | Self::TreeChoose
-                    | Self::TreeCancel
-                    | Self::TreeSelect(_)
-                    | Self::TreeExpand
-                    | Self::TreeCollapse
-                    | Self::TreeToggle
-                    | Self::ThemeNext
-                    | Self::ThemePrevious
-                    | Self::ThemeChoose
-                    | Self::ThemeCancel
-                    | Self::ThemeSelect(_)
-            ),
+            // Vim mode takes its own motions, plus the few actions that reach
+            // past the pane it is reading.
+            Mode::Vim => {
+                matches!(
+                    self,
+                    Self::EnterLeader | Self::SelectWindow(_) | Self::RefreshClient
+                ) || ![Mode::Normal, Mode::Leader, Mode::Tree, Mode::Theme]
+                    .into_iter()
+                    .any(|mode| self.valid_in(mode))
+            }
         }
     }
 }
 
+/// Every action a binding can name, besides the numbered ones.
+const ACTION_NAMES: &[(&str, Action)] = &[
+    ("leader", Action::EnterLeader),
+    ("session-tree", Action::SessionTree),
+    ("new-window", Action::NewWindow),
+    ("new-session", Action::NewSession),
+    ("set-session-root", Action::SetSessionRoot),
+    ("rename-session", Action::RenameSession),
+    ("rename-window", Action::RenameWindow),
+    ("split-horizontal", Action::SplitHorizontal),
+    ("split-vertical", Action::SplitVertical),
+    ("focus-pane-left", Action::FocusPaneLeft),
+    ("focus-pane-down", Action::FocusPaneDown),
+    ("focus-pane-up", Action::FocusPaneUp),
+    ("focus-pane-right", Action::FocusPaneRight),
+    ("resize-pane-left", Action::ResizePaneLeft),
+    ("resize-pane-down", Action::ResizePaneDown),
+    ("resize-pane-up", Action::ResizePaneUp),
+    ("resize-pane-right", Action::ResizePaneRight),
+    ("focus-mode", Action::ZoomPane),
+    ("break-pane", Action::BreakPane),
+    ("swap-window-left", Action::SwapWindowLeft),
+    ("swap-window-right", Action::SwapWindowRight),
+    ("jump-to-bell", Action::JumpToBell),
+    ("kill-pane", Action::KillPane),
+    ("kill-session", Action::KillSession),
+    ("leader-cancel", Action::LeaderCancel),
+    ("enter-vim", Action::EnterVim),
+    ("enter-vim-jump", Action::EnterVimJump),
+    ("detach", Action::Detach),
+    ("refresh-client", Action::RefreshClient),
+    ("tree-down", Action::TreeDown),
+    ("tree-up", Action::TreeUp),
+    ("tree-choose", Action::TreeChoose),
+    ("tree-cancel", Action::TreeCancel),
+    ("tree-expand", Action::TreeExpand),
+    ("tree-collapse", Action::TreeCollapse),
+    ("tree-toggle", Action::TreeToggle),
+    ("theme-picker", Action::ThemePicker),
+    ("theme-next", Action::ThemeNext),
+    ("theme-previous", Action::ThemePrevious),
+    ("theme-choose", Action::ThemeChoose),
+    ("theme-cancel", Action::ThemeCancel),
+    ("left", Action::CursorLeft),
+    ("down", Action::CursorDown),
+    ("up", Action::CursorUp),
+    ("right", Action::CursorRight),
+    ("down-3", Action::CursorDown3),
+    ("up-3", Action::CursorUp3),
+    ("down-10", Action::CursorDown10),
+    ("up-10", Action::CursorUp10),
+    ("half-page-down", Action::HalfPageDown),
+    ("half-page-up", Action::HalfPageUp),
+    ("half-page-down-center", Action::HalfPageDownCenter),
+    ("half-page-up-center", Action::HalfPageUpCenter),
+    ("word-forward", Action::WordForward),
+    ("big-word-forward", Action::BigWordForward),
+    ("word-end", Action::WordEnd),
+    ("big-word-end", Action::BigWordEnd),
+    ("word-backward", Action::WordBackward),
+    ("big-word-backward", Action::BigWordBackward),
+    ("line-start", Action::LineStart),
+    ("first-nonblank", Action::FirstNonBlank),
+    ("line-end", Action::LineEnd),
+    ("go-top", Action::GoTop),
+    ("go-bottom", Action::GoBottom),
+    ("find-forward", Action::FindForward),
+    ("find-backward", Action::FindBackward),
+    ("till-forward", Action::TillForward),
+    ("till-backward", Action::TillBackward),
+    ("repeat-find-forward", Action::RepeatFindForward),
+    ("repeat-find-backward", Action::RepeatFindBackward),
+    ("search-forward", Action::SearchForward),
+    ("search-backward", Action::SearchBackward),
+    ("repeat-search", Action::RepeatSearch),
+    ("repeat-search-reverse", Action::RepeatSearchReverse),
+    ("jump-character", Action::JumpCharacter),
+    ("jump-older", Action::JumpOlder),
+    ("jump-newer", Action::JumpNewer),
+    ("visual", Action::Visual),
+    ("visual-line", Action::VisualLine),
+    ("visual-block", Action::VisualBlock),
+    ("yank", Action::Yank),
+    ("yank-to-line-end", Action::YankToLineEnd),
+    ("escape", Action::Escape),
+];
+
+/// The actions that end in a number: their prefix, what the number counts,
+/// its largest value, and the action it makes.
+type NumberedAction = (&'static str, &'static str, u8, fn(u8) -> Action);
+const NUMBERED_ACTIONS: [NumberedAction; 3] = [
+    ("select-window-", "window number", 9, Action::SelectWindow),
+    ("tree-select-", "tree line number", 35, Action::TreeSelect),
+    ("theme-select-", "theme line number", 9, Action::ThemeSelect),
+];
+
 fn parse_action(value: &str) -> Result<Action> {
-    let action = match value {
-        "leader" => Action::EnterLeader,
-        "session-tree" => Action::SessionTree,
-        "new-window" => Action::NewWindow,
-        "new-session" => Action::NewSession,
-        "set-session-root" => Action::SetSessionRoot,
-        "rename-session" => Action::RenameSession,
-        "rename-window" => Action::RenameWindow,
-        "split-horizontal" => Action::SplitHorizontal,
-        "split-vertical" => Action::SplitVertical,
-        "focus-pane-left" => Action::FocusPaneLeft,
-        "focus-pane-down" => Action::FocusPaneDown,
-        "focus-pane-up" => Action::FocusPaneUp,
-        "focus-pane-right" => Action::FocusPaneRight,
-        "resize-pane-left" => Action::ResizePaneLeft,
-        "resize-pane-down" => Action::ResizePaneDown,
-        "resize-pane-up" => Action::ResizePaneUp,
-        "resize-pane-right" => Action::ResizePaneRight,
-        "focus-mode" => Action::ZoomPane,
-        "break-pane" => Action::BreakPane,
-        "swap-window-left" => Action::SwapWindowLeft,
-        "swap-window-right" => Action::SwapWindowRight,
-        "jump-to-bell" => Action::JumpToBell,
-        "kill-pane" => Action::KillPane,
-        "kill-session" => Action::KillSession,
-        "leader-cancel" => Action::LeaderCancel,
-        "enter-vim" => Action::EnterVim,
-        "enter-vim-jump" => Action::EnterVimJump,
-        "detach" => Action::Detach,
-        "refresh-client" => Action::RefreshClient,
-        "tree-down" => Action::TreeDown,
-        "tree-up" => Action::TreeUp,
-        "tree-choose" => Action::TreeChoose,
-        "tree-cancel" => Action::TreeCancel,
-        "tree-expand" => Action::TreeExpand,
-        "tree-collapse" => Action::TreeCollapse,
-        "tree-toggle" => Action::TreeToggle,
-        "theme-picker" => Action::ThemePicker,
-        "theme-next" => Action::ThemeNext,
-        "theme-previous" => Action::ThemePrevious,
-        "theme-choose" => Action::ThemeChoose,
-        "theme-cancel" => Action::ThemeCancel,
-        "left" => Action::CursorLeft,
-        "down" => Action::CursorDown,
-        "up" => Action::CursorUp,
-        "right" => Action::CursorRight,
-        "down-3" => Action::CursorDown3,
-        "up-3" => Action::CursorUp3,
-        "down-10" => Action::CursorDown10,
-        "up-10" => Action::CursorUp10,
-        "half-page-down" => Action::HalfPageDown,
-        "half-page-up" => Action::HalfPageUp,
-        "half-page-down-center" => Action::HalfPageDownCenter,
-        "half-page-up-center" => Action::HalfPageUpCenter,
-        "word-forward" => Action::WordForward,
-        "big-word-forward" => Action::BigWordForward,
-        "word-end" => Action::WordEnd,
-        "big-word-end" => Action::BigWordEnd,
-        "word-backward" => Action::WordBackward,
-        "big-word-backward" => Action::BigWordBackward,
-        "line-start" => Action::LineStart,
-        "first-nonblank" => Action::FirstNonBlank,
-        "line-end" => Action::LineEnd,
-        "go-top" => Action::GoTop,
-        "go-bottom" => Action::GoBottom,
-        "find-forward" => Action::FindForward,
-        "find-backward" => Action::FindBackward,
-        "till-forward" => Action::TillForward,
-        "till-backward" => Action::TillBackward,
-        "repeat-find-forward" => Action::RepeatFindForward,
-        "repeat-find-backward" => Action::RepeatFindBackward,
-        "search-forward" => Action::SearchForward,
-        "search-backward" => Action::SearchBackward,
-        "repeat-search" => Action::RepeatSearch,
-        "repeat-search-reverse" => Action::RepeatSearchReverse,
-        "jump-character" => Action::JumpCharacter,
-        "jump-older" => Action::JumpOlder,
-        "jump-newer" => Action::JumpNewer,
-        "visual" => Action::Visual,
-        "visual-line" => Action::VisualLine,
-        "visual-block" => Action::VisualBlock,
-        "yank" => Action::Yank,
-        "yank-to-line-end" => Action::YankToLineEnd,
-        "escape" => Action::Escape,
-        value if value.starts_with("select-window-") => {
-            let number = value.strip_prefix("select-window-").unwrap();
+    if let Some((_, action)) = ACTION_NAMES.iter().find(|(name, _)| *name == value) {
+        return Ok(*action);
+    }
+    for (prefix, what, last, action) in NUMBERED_ACTIONS {
+        if let Some(number) = value.strip_prefix(prefix) {
             let number: u8 = number
                 .parse()
-                .with_context(|| format!("invalid window number in action {value:?}"))?;
-            if !(1..=9).contains(&number) {
-                bail!("window number must be from 1 through 9")
+                .with_context(|| format!("invalid {what} in action {value:?}"))?;
+            if !(1..=last).contains(&number) {
+                bail!("{what} must be from 1 through {last}")
             }
-            Action::SelectWindow(number)
+            return Ok(action(number));
         }
-        value if value.starts_with("tree-select-") => {
-            let number = value.strip_prefix("tree-select-").unwrap();
-            let number: u8 = number
-                .parse()
-                .with_context(|| format!("invalid tree line number in action {value:?}"))?;
-            if !(1..=35).contains(&number) {
-                bail!("tree line number must be from 1 through 35")
-            }
-            Action::TreeSelect(number)
-        }
-        value if value.starts_with("theme-select-") => {
-            let number = value.strip_prefix("theme-select-").unwrap();
-            let number: u8 = number
-                .parse()
-                .with_context(|| format!("invalid theme line number in action {value:?}"))?;
-            if !(1..=9).contains(&number) {
-                bail!("theme line number must be from 1 through 9")
-            }
-            Action::ThemeSelect(number)
-        }
-        value => bail!("unknown action {value:?}"),
-    };
-    Ok(action)
+    }
+    bail!("unknown action {value:?}")
 }
 
 pub fn parse_key(value: &str) -> Result<Key> {
+    const MODIFIERS: [(&str, u8); 4] = [
+        ("shift-", SHIFT),
+        ("alt-", ALT),
+        ("ctrl-", CTRL),
+        ("control-", CTRL),
+    ];
     let mut modifiers = 0;
     let mut name = value;
-    loop {
-        let lower = name.to_ascii_lowercase();
-        let (bit, length) = if lower.starts_with("shift-") {
-            (SHIFT, 6)
-        } else if lower.starts_with("alt-") {
-            (ALT, 4)
-        } else if lower.starts_with("ctrl-") {
-            (CTRL, 5)
-        } else if lower.starts_with("control-") {
-            (CTRL, 8)
-        } else {
-            break;
-        };
+    while let Some((prefix, bit)) = MODIFIERS.iter().find(|(prefix, _)| {
+        name.get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    }) {
         modifiers |= bit;
-        name = &name[length..];
+        name = &name[prefix.len()..];
     }
     if name.is_empty() {
         bail!("missing key name")
@@ -1056,17 +1008,30 @@ pub fn parse_key(value: &str) -> Result<Key> {
 mod tests {
     use super::*;
 
+    /// Loads `source` as a config file, through a temporary file named `name`.
+    fn load(name: &str, source: &str) -> Result<Settings> {
+        let path = env::temp_dir().join(name);
+        fs::write(&path, source).unwrap();
+        let settings = Settings::load(Some(&path));
+        fs::remove_file(&path).unwrap();
+        settings
+    }
+
+    fn key(name: &str) -> Key {
+        parse_key(name).unwrap()
+    }
+
     #[test]
     fn function_keys_can_be_bound_with_modifiers() {
         assert_eq!(
-            parse_key("Ctrl-F12").unwrap(),
+            key("Ctrl-F12"),
             Key {
                 code: KeyCode::F(12),
                 modifiers: CTRL
             }
         );
-        assert_eq!(parse_key("F1").unwrap().code, KeyCode::F(1));
-        assert_eq!(parse_key("f").unwrap().code, KeyCode::Char('f'));
+        assert_eq!(key("F1").code, KeyCode::F(1));
+        assert_eq!(key("f").code, KeyCode::Char('f'));
         assert!(parse_key("F0").is_err());
         assert!(parse_key("F13").is_err());
     }
@@ -1086,46 +1051,28 @@ mod tests {
 
     #[test]
     fn an_empty_config_keeps_the_built_in_bindings() {
-        let path = std::env::temp_dir().join("mux-empty-config.toml");
-        fs::write(&path, "").unwrap();
-        let settings = Settings::load(Some(&path)).unwrap();
-        let (bindings, clipboard, theme) = (
-            settings.bindings,
-            settings.clipboard_command,
-            settings.theme,
-        );
-        assert_eq!(clipboard, default_clipboard());
-        assert_eq!(theme, Theme::default());
+        let settings = load("mux-empty-config.toml", "").unwrap();
+        assert_eq!(settings.clipboard_command, default_clipboard());
+        assert_eq!(settings.theme, Theme::default());
         assert!(
             !settings.mouse,
             "the mouse stays with the terminal by default"
         );
+        let bindings = settings.bindings;
         assert_eq!(
-            bindings.get(Mode::Normal, &parse_key("Alt-a").unwrap()),
+            bindings.get(Mode::Normal, &key("Alt-a")),
             Some(Action::EnterLeader)
         );
         assert_eq!(
-            bindings.get(Mode::Normal, &parse_key("Alt-f").unwrap()),
+            bindings.get(Mode::Normal, &key("Alt-f")),
             Some(Action::ZoomPane)
         );
-        fs::remove_file(&path).unwrap();
     }
 
     #[test]
-    fn the_theme_command_and_directory_have_working_defaults() {
-        assert_eq!(
-            config_home_in(Some(OsStr::new("/x/config")), Some(OsStr::new("/home/j")))
-                .map(|home| home.join("theme/themes")),
-            Some(PathBuf::from("/x/config/theme/themes"))
-        );
-        assert_eq!(
-            config_home_in(None, Some(OsStr::new("/home/j"))).map(|home| home.join("theme/themes")),
-            Some(PathBuf::from("/home/j/.config/theme/themes"))
-        );
-
-        let path = std::env::temp_dir().join("mux-theme-config.toml");
-        fs::write(
-            &path,
+    fn the_theme_command_and_directory_can_be_configured() {
+        let settings = load(
+            "mux-theme-config.toml",
             r#"
                 theme_command = ["theme", "--quiet"]
                 theme_directory = "/opt/themes"
@@ -1134,30 +1081,25 @@ mod tests {
             "#,
         )
         .unwrap();
-        let settings = Settings::load(Some(&path)).unwrap();
         assert_eq!(settings.theme_command, ["theme", "--quiet"]);
         assert_eq!(settings.theme_directory, Some(PathBuf::from("/opt/themes")));
         assert_eq!(
-            settings.bindings.get(Mode::Theme, &parse_key("g").unwrap()),
+            settings.bindings.get(Mode::Theme, &key("g")),
             Some(Action::ThemeSelect(1))
         );
-        fs::remove_file(&path).unwrap();
     }
 
     #[test]
-    fn a_theme_binding_only_takes_actions_the_picker_has() {
-        let source = r#"
-            [themes]
-            n = "new-window"
-        "#;
-        let parsed: FileConfig = toml::from_str(source).unwrap();
-        let error = Bindings::defaults()
-            .apply(Mode::Theme, parsed.themes)
-            .unwrap_err();
-        assert!(
-            error.to_string().contains("cannot be used in theme mode"),
-            "{error}"
-        );
+    fn a_binding_only_takes_actions_its_mode_has() {
+        for (mode, expected) in [
+            (Mode::Theme, "cannot be used in theme mode"),
+            (Mode::Vim, "cannot be used in vim mode"),
+        ] {
+            let error = Bindings::defaults()
+                .apply(mode, HashMap::from([("n".into(), "new-window".into())]))
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
     }
 
     #[test]
@@ -1176,95 +1118,70 @@ mod tests {
             [vim]
             "§" = "first-nonblank"
         "#;
-        let parsed: FileConfig = toml::from_str(source).unwrap();
-        let mut bindings = Bindings::defaults();
-        bindings.apply(Mode::Normal, parsed.normal).unwrap();
-        bindings.apply(Mode::Leader, parsed.leader).unwrap();
-        bindings.apply(Mode::Vim, parsed.vim).unwrap();
-        assert_eq!(
-            bindings.get(Mode::Normal, &parse_key("Alt-s").unwrap()),
-            None
-        );
-        assert_eq!(
-            bindings.get(Mode::Normal, &parse_key("Alt-x").unwrap()),
-            Some(Action::SessionTree)
-        );
-        assert_eq!(
-            bindings.get(Mode::Leader, &parse_key("v").unwrap()),
-            Some(Action::SplitVertical)
-        );
-        assert_eq!(
-            bindings.get(Mode::Vim, &parse_key("§").unwrap()),
-            Some(Action::FirstNonBlank)
-        );
-        assert_eq!(
-            bindings.get(Mode::Vim, &parse_key("Alt-a").unwrap()),
-            Some(Action::EnterLeader)
-        );
-        assert_eq!(
-            bindings.get(Mode::Vim, &parse_key("Alt-d").unwrap()),
-            Some(Action::JumpCharacter)
-        );
-    }
-
-    #[test]
-    fn bad_binding_has_specific_error() {
-        let mut bindings = Bindings::defaults();
-        let error = bindings
-            .apply(
-                Mode::Vim,
-                HashMap::from([("q".into(), "new-window".into())]),
-            )
-            .unwrap_err();
-        assert!(error.to_string().contains("cannot be used in vim mode"));
+        let bindings = load("mux-binding-config.toml", source).unwrap().bindings;
+        for (mode, name, expected) in [
+            (Mode::Normal, "Alt-s", None),
+            (Mode::Normal, "Alt-x", Some(Action::SessionTree)),
+            (Mode::Leader, "v", Some(Action::SplitVertical)),
+            (Mode::Vim, "§", Some(Action::FirstNonBlank)),
+            (Mode::Vim, "Alt-a", Some(Action::EnterLeader)),
+            (Mode::Vim, "Alt-d", Some(Action::JumpCharacter)),
+        ] {
+            assert_eq!(bindings.get(mode, &key(name)), expected, "{name}");
+        }
     }
 
     #[test]
     fn checked_in_preset_loads_expected_motion_overrides() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config/julian.toml");
         let settings = Settings::load(Some(&path)).unwrap();
-        let (bindings, clipboard, theme) = (
-            settings.bindings,
-            settings.clipboard_command,
-            settings.theme,
-        );
-        assert_eq!(clipboard, ["yank"]);
-        assert_eq!(theme, Theme::default());
-        assert_eq!(
-            bindings.get(Mode::Vim, &parse_key("§").unwrap()),
-            Some(Action::FirstNonBlank)
-        );
-        assert_eq!(
-            bindings.get(Mode::Vim, &parse_key("Ctrl-d").unwrap()),
-            Some(Action::HalfPageDownCenter)
-        );
-        assert_eq!(
-            bindings.get(Mode::Vim, &parse_key("Shift-Down").unwrap()),
-            Some(Action::CursorDown10)
-        );
-        assert_eq!(
-            bindings.get(Mode::Vim, &parse_key("Alt-3").unwrap()),
-            Some(Action::SelectWindow(3))
-        );
+        assert_eq!(settings.clipboard_command, ["yank"]);
+        assert_eq!(settings.theme, Theme::default());
+        for (name, expected) in [
+            ("§", Action::FirstNonBlank),
+            ("Ctrl-d", Action::HalfPageDownCenter),
+            ("Shift-Down", Action::CursorDown10),
+            ("Alt-3", Action::SelectWindow(3)),
+        ] {
+            assert_eq!(
+                settings.bindings.get(Mode::Vim, &key(name)),
+                Some(expected),
+                "{name}"
+            );
+        }
     }
 
     #[test]
-    fn color_overrides_accept_hash_or_plain_hex() {
-        let source = r##"
-            [palette]
-            secondary = "#112233"
-            warning = "aabbcc"
-        "##;
-        let parsed: FileConfig = toml::from_str(source).unwrap();
-        let palette = Palette::with_overrides(parsed.palette).unwrap();
+    fn non_ascii_colors_are_an_error_not_a_panic() {
+        assert!(parse_color("a€bc").is_err());
+        assert!(parse_color("#a€bc").is_err());
+    }
+
+    #[test]
+    fn color_overrides_accept_hash_or_plain_hex_and_name_a_bad_role() {
+        let overrides = |source: &str| {
+            let parsed: FileConfig = toml::from_str(source).unwrap();
+            Palette::default().with_overrides(None, parsed.palette)
+        };
+        let palette = overrides(
+            r##"
+                [palette]
+                secondary = "#112233"
+                warning = "aabbcc"
+            "##,
+        )
+        .unwrap();
         assert_eq!(palette.secondary, (0x11, 0x22, 0x33));
         assert_eq!(palette.warning, (0xaa, 0xbb, 0xcc));
         assert_eq!(palette.surface_raised, Palette::default().surface_raised);
+
+        let error = overrides("[palette]\nsecondary = \"11223\"").unwrap_err();
+        assert!(error.to_string().contains("secondary"));
     }
 
     #[test]
     fn the_theme_file_says_what_a_colour_is_and_mux_says_where_it_goes() {
-        let path = std::env::temp_dir().join("mux-palette-theme.toml");
+        let path = env::temp_dir().join("mux-palette-theme.toml");
         fs::write(
             &path,
             r#"
@@ -1281,6 +1198,7 @@ mod tests {
         )
         .unwrap();
         let theme = Theme::load(&path).unwrap();
+        fs::remove_file(&path).unwrap();
         // One colour reaches every part of mux that wears it, without the file
         // having to name any of them.
         assert_eq!(theme.bar_active, (0x00, 0x93, 0x93));
@@ -1295,17 +1213,15 @@ mod tests {
         assert_eq!(theme.bell_base, Palette::default().accent);
         // A light theme writes on its saturated fills in white; a dark one uses
         // its own background.
-        assert_eq!(theme.bar_label_foreground, (0xff, 0xff, 0xff));
+        assert_eq!(theme.bar_label_foreground, WHITE);
         assert_eq!(
             Theme::default().bar_label_foreground,
             Palette::default().background
         );
-        fs::remove_file(&path).unwrap();
     }
 
     #[test]
     fn default_cursor_shape_loads_and_rejects_unknown_shapes() {
-        let path = std::env::temp_dir().join("mux-cursor-config.toml");
         for (source, expected) in [
             ("", CursorShape::Bar),
             ("default_cursor_shape = \"bar\"", CursorShape::Bar),
@@ -1315,38 +1231,29 @@ mod tests {
                 CursorShape::Underline,
             ),
         ] {
-            fs::write(&path, source).unwrap();
-            assert_eq!(
-                Settings::load(Some(&path)).unwrap().default_cursor_shape,
-                expected
-            );
+            let settings = load("mux-cursor-config.toml", source).unwrap();
+            assert_eq!(settings.default_cursor_shape, expected);
         }
-        fs::write(&path, "default_cursor_shape = \"triangle\"").unwrap();
-        assert!(Settings::load(Some(&path)).is_err());
-        fs::remove_file(path).unwrap();
+        assert!(
+            load(
+                "mux-cursor-config.toml",
+                "default_cursor_shape = \"triangle\""
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn bell_style_defaults_to_the_shimmer_and_names_a_bad_value() {
-        let parsed: FileConfig = toml::from_str("mouse = true").unwrap();
-        assert_eq!(parsed.bell_style, BellStyle::Shimmer);
-        let parsed: FileConfig = toml::from_str(r#"bell_style = "steady""#).unwrap();
-        assert_eq!(parsed.bell_style, BellStyle::Steady);
-        let parsed: FileConfig = toml::from_str(r#"bell_style = "none""#).unwrap();
-        assert_eq!(parsed.bell_style, BellStyle::None);
-
+        for (source, expected) in [
+            ("mouse = true", BellStyle::Shimmer),
+            (r#"bell_style = "steady""#, BellStyle::Steady),
+            (r#"bell_style = "none""#, BellStyle::None),
+        ] {
+            let parsed: FileConfig = toml::from_str(source).unwrap();
+            assert_eq!(parsed.bell_style, expected);
+        }
         let error = toml::from_str::<FileConfig>(r#"bell_style = "flash""#).unwrap_err();
         assert!(error.to_string().contains("bell_style"), "{error}");
-    }
-
-    #[test]
-    fn invalid_color_names_the_role() {
-        let source = r##"
-            [palette]
-            secondary = "11223"
-        "##;
-        let parsed: FileConfig = toml::from_str(source).unwrap();
-        let error = Palette::with_overrides(parsed.palette).unwrap_err();
-        assert!(error.to_string().contains("secondary"));
     }
 }

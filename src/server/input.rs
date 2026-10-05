@@ -15,43 +15,42 @@ use super::*;
 
 impl Server {
     pub(super) fn handle_key(&mut self, id: usize, key: Key) -> Result<()> {
+        if !self
+            .clients
+            .get(&id)
+            .is_some_and(|client| client.initialized)
+        {
+            return Ok(());
+        }
+        self.route_key(id, key)?;
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn route_key(&mut self, id: usize, key: Key) -> Result<()> {
         let vim_active = self.vim_active(id);
         let zoomed = self
             .active_indices(id)
             .is_some_and(|(session, window)| self.sessions[session].windows[window].zoomed);
-        let Some(client) = self.clients.get_mut(&id) else {
-            return Ok(());
-        };
-        if !client.initialized {
-            return Ok(());
-        }
+        let client = self.clients.get_mut(&id).unwrap();
         if zoomed {
-            if client.bindings.get(Mode::Normal, &key) == Some(Action::ZoomPane) {
-                self.zoom_pane(id)?;
+            return if client.bindings.get(Mode::Normal, &key) == Some(Action::ZoomPane) {
+                self.zoom_pane(id)
             } else {
-                self.send_key_to_pty(id, &key)?;
-            }
-            self.dirty = true;
-            return Ok(());
+                self.send_key_to_pty(id, &key)
+            };
         }
         // A transient message has served its purpose once the next key arrives.
         client.message = None;
-        let client = &self.clients[&id];
         if client.confirmation.is_some() {
-            self.handle_confirmation_key(id, key)?;
-            self.dirty = true;
-            return Ok(());
+            return self.handle_confirmation_key(id, key);
         }
         if client.rename.is_some() {
-            self.handle_rename_key(id, key)?;
-            self.dirty = true;
-            return Ok(());
+            return self.handle_rename_key(id, key);
         }
         if client.literal {
-            self.clients.get_mut(&id).unwrap().literal = false;
-            self.send_key_to_pty(id, &key)?;
-            self.dirty = true;
-            return Ok(());
+            client.literal = false;
+            return self.send_key_to_pty(id, &key);
         }
         let mode = if client.leader {
             Mode::Leader
@@ -66,14 +65,12 @@ impl Server {
         };
         let action = client.bindings.get(mode, &key);
         match mode {
-            Mode::Normal => self.handle_normal_key(id, action, key)?,
-            Mode::Leader => self.handle_leader_key(id, action, &key)?,
-            Mode::Tree => self.handle_tree_key(id, action, &key)?,
-            Mode::Theme => self.handle_theme_key(id, action)?,
-            Mode::Vim => self.handle_vim_key(id, action, key)?,
+            Mode::Normal => self.handle_normal_key(id, action, key),
+            Mode::Leader => self.handle_leader_key(id, action, &key),
+            Mode::Tree => self.handle_tree_key(id, action, &key),
+            Mode::Theme => self.handle_theme_key(id, action),
+            Mode::Vim => self.handle_vim_key(id, action, key),
         }
-        self.dirty = true;
-        Ok(())
     }
 
     fn handle_normal_key(&mut self, id: usize, action: Option<Action>, key: Key) -> Result<()> {
@@ -81,7 +78,7 @@ impl Server {
             Some(Action::EnterLeader) => self.enter_leader(id, &key),
             Some(Action::SessionTree) => self.open_session_tree(id),
             Some(Action::NewWindow) => self.new_window(id)?,
-            Some(Action::NewSession) => self.new_session(id)?,
+            Some(Action::NewSession) => self.new_session(id, None)?,
             Some(Action::SetSessionRoot) => self.set_session_root(id)?,
             Some(Action::SelectWindow(number)) => self.select_window(id, number as usize)?,
             Some(Action::EnterVim) => self.enter_vim(id),
@@ -113,34 +110,23 @@ impl Server {
             return Ok(());
         }
         // Resizing is worth repeating, so those keys keep the leader held for
-        // the next press; everything else is a one-shot.
-        let repeatable = matches!(
-            action,
-            Some(
-                Action::ResizePaneLeft
-                    | Action::ResizePaneDown
-                    | Action::ResizePaneUp
-                    | Action::ResizePaneRight
-            )
-        );
-        // A repeat keeps the time leader was first entered, so holding it down
-        // to resize still brings the help out instead of restarting its wait.
-        if !repeatable {
-            let client = self.clients.get_mut(&id).unwrap();
-            client.leader = false;
-            client.leader_key = None;
+        // the next press; everything else is a one-shot. A repeat keeps the
+        // time leader was first entered, so holding it down to resize still
+        // brings the help out instead of restarting its wait.
+        let resize = match action {
+            Some(Action::ResizePaneLeft) => Some(PaneDirection::Left),
+            Some(Action::ResizePaneDown) => Some(PaneDirection::Down),
+            Some(Action::ResizePaneUp) => Some(PaneDirection::Up),
+            Some(Action::ResizePaneRight) => Some(PaneDirection::Right),
+            _ => None,
+        };
+        if let Some(direction) = resize {
+            return self.resize_pane(id, direction, RESIZE_STEP);
         }
+        let client = self.clients.get_mut(&id).unwrap();
+        client.leader = false;
+        client.leader_key = None;
         match action {
-            Some(Action::ResizePaneLeft) => {
-                self.resize_pane(id, PaneDirection::Left, RESIZE_STEP)?
-            }
-            Some(Action::ResizePaneDown) => {
-                self.resize_pane(id, PaneDirection::Down, RESIZE_STEP)?
-            }
-            Some(Action::ResizePaneUp) => self.resize_pane(id, PaneDirection::Up, RESIZE_STEP)?,
-            Some(Action::ResizePaneRight) => {
-                self.resize_pane(id, PaneDirection::Right, RESIZE_STEP)?
-            }
             Some(Action::RenameSession) => self.start_rename(id),
             Some(Action::RenameWindow) => self.start_rename_window(id),
             Some(Action::SplitHorizontal) => self.split_active_pane(id, SplitAxis::Horizontal)?,
@@ -225,55 +211,45 @@ impl Server {
             self.clients.get_mut(&id).unwrap().tree = None;
             return Ok(());
         }
+        let selected = items[self.clients[&id]
+            .tree
+            .as_ref()
+            .unwrap()
+            .selected
+            .min(items.len() - 1)]
+        .clone();
+        // Where the cursor lands once a session folds away under it.
+        let session_row = items
+            .iter()
+            .position(|item| item.session_id == selected.session_id && item.window.is_none())
+            .unwrap_or(0);
         let tree = self.clients.get_mut(&id).unwrap().tree.as_mut().unwrap();
         match action {
             Some(Action::TreeDown) => tree.selected = (tree.selected + 1).min(items.len() - 1),
             Some(Action::TreeUp) => tree.selected = tree.selected.saturating_sub(1),
-            Some(Action::TreeChoose) => {
-                let item = items[tree.selected.min(items.len() - 1)].clone();
-                self.choose_tree_item(id, item)?;
-            }
+            Some(Action::TreeChoose) => self.choose_tree_item(id, selected)?,
             Some(Action::TreeSelect(number)) => {
                 if let Some(item) = items.get(number as usize - 1) {
                     self.choose_tree_item(id, item.clone())?;
                 }
             }
             Some(Action::TreeExpand) => {
-                let item = items[tree.selected.min(items.len() - 1)].clone();
-                if item.window.is_none() {
-                    tree.expanded.insert(item.session_id);
+                if selected.window.is_none() {
+                    tree.expanded.insert(selected.session_id);
                 }
             }
             Some(Action::TreeCollapse) => {
-                let item = items[tree.selected.min(items.len() - 1)].clone();
-                tree.expanded.remove(&item.session_id);
-                tree.selected = items
-                    .iter()
-                    .position(|candidate| {
-                        candidate.session_id == item.session_id && candidate.window.is_none()
-                    })
-                    .unwrap_or(0);
+                tree.expanded.remove(&selected.session_id);
+                tree.selected = session_row;
             }
             Some(Action::TreeToggle) => {
-                let item = items[tree.selected.min(items.len() - 1)].clone();
-                if tree.expanded.remove(&item.session_id) {
-                    if item.window.is_some() {
-                        tree.selected = items
-                            .iter()
-                            .position(|candidate| {
-                                candidate.session_id == item.session_id
-                                    && candidate.window.is_none()
-                            })
-                            .unwrap_or(0);
-                    }
-                } else {
-                    tree.expanded.insert(item.session_id);
+                if !tree.expanded.remove(&selected.session_id) {
+                    tree.expanded.insert(selected.session_id);
+                } else if selected.window.is_some() {
+                    tree.selected = session_row;
                 }
             }
-            Some(Action::KillSession) => {
-                let item = items[tree.selected.min(items.len() - 1)].clone();
-                self.start_kill_session(id, item.session_id);
-            }
+            Some(Action::KillSession) => self.start_kill_session(id, selected.session_id),
             Some(Action::SessionTree) => self.switch_to_previous_session(id)?,
             Some(Action::EnterLeader) => self.enter_leader(id, key),
             Some(Action::ThemePicker) => self.open_theme_picker(id),
@@ -390,7 +366,7 @@ impl Server {
                 return Ok(());
             };
             self.sessions[session_index].windows[window_index].select_pane(pane_id);
-            self.remember_active_pane(id)?;
+            self.remember_active_pane(id);
             self.save_state_soon();
         }
         // Vim mode is mux's own; the program underneath does not see it.
@@ -489,18 +465,15 @@ impl Server {
         let bracketed = self
             .active_pane(id)
             .is_some_and(|pane| pane.parser.screen().bracketed_paste());
-        let mut bytes = Vec::new();
-        if bracketed {
+        let text = if bracketed {
             // Pasted text that carries the paste delimiters itself could end
             // the paste early and have the rest run as typed input.
             let text = text.replace("\x1b[201~", "").replace("\x1b[200~", "");
-            bytes.extend_from_slice(b"\x1b[200~");
-            bytes.extend_from_slice(text.as_bytes());
-            bytes.extend_from_slice(b"\x1b[201~");
+            format!("\x1b[200~{text}\x1b[201~")
         } else {
-            bytes.extend_from_slice(text.as_bytes());
-        }
-        self.write_active(id, &bytes)
+            text
+        };
+        self.write_active(id, text.as_bytes())
     }
 
     fn send_key_to_pty(&mut self, id: usize, key: &Key) -> Result<()> {
@@ -511,9 +484,8 @@ impl Server {
         self.write_active(id, &bytes)
     }
 
-    /// Sends `bytes` to the active pane's shell.
-    ///
-    /// The pane's writer handles blocked applications without blocking mux.
+    /// Sends `bytes` to the active pane's shell. The pane's writer copes with
+    /// a blocked application without blocking mux.
     fn write_active(&mut self, id: usize, bytes: &[u8]) -> Result<()> {
         let (session_index, window_index, pane_index) =
             self.active_pane_indices(id).context("no active pane")?;

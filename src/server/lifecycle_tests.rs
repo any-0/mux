@@ -7,15 +7,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{
-    config::Settings,
-    protocol::{ClientMessage, Hello, MuxQuery, ServerMessage, read_message, write_message},
+use super::{
+    JOURNAL_HISTORY, PersistedState, decode_persisted_state, encode_journal_record, new_parser,
+    replay_pane_journal, snapshot_screen,
+    tests::{hello, scratch},
 };
+use crate::protocol::{ClientMessage, MuxCommand, ServerMessage, read_message, write_message};
 
+/// A real daemon process, re-running this test binary as `daemon_worker`.
 struct TestDaemon(Child);
 
 impl TestDaemon {
-    fn start(socket: &Path, home: &Path, state_home: &Path) -> Self {
+    fn start(root: &Path) -> Self {
         let child = Command::new(env::current_exe().unwrap())
             .args([
                 "--ignored",
@@ -23,9 +26,9 @@ impl TestDaemon {
                 "server::lifecycle_tests::daemon_worker",
                 "--nocapture",
             ])
-            .env("MUX_TEST_DAEMON_SOCKET", socket)
-            .env("HOME", home)
-            .env("XDG_STATE_HOME", state_home)
+            .env("MUX_TEST_DAEMON_SOCKET", socket(root))
+            .env("HOME", root.join("home"))
+            .env("XDG_STATE_HOME", root.join("state"))
             .env("SHELL", "/bin/sh")
             .env_remove("MUX")
             .env_remove("MUX_PANE")
@@ -38,16 +41,20 @@ impl TestDaemon {
         Self(child)
     }
 
-    fn wait(mut self) {
+    /// Asks the daemon to shut down and waits for a clean exit.
+    fn stop(mut self, root: &Path) {
+        let mut stream = connect(root);
+        crate::protocol::write_shutdown(&mut stream).unwrap();
+        assert!(matches!(
+            read_message(&mut stream).unwrap(),
+            Some(ServerMessage::Detached)
+        ));
         let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Some(status) = self.0.try_wait().unwrap() {
-                assert!(status.success(), "test daemon exited with {status}");
-                return;
-            }
+        while self.0.try_wait().unwrap().is_none() {
             assert!(Instant::now() < deadline, "test daemon did not stop");
             thread::sleep(Duration::from_millis(10));
         }
+        assert!(self.0.wait().unwrap().success());
     }
 }
 
@@ -58,119 +65,54 @@ impl Drop for TestDaemon {
     }
 }
 
-fn connect(socket: &Path) -> UnixStream {
+fn socket(root: &Path) -> PathBuf {
+    root.join("daemon/mux.sock")
+}
+
+fn connect(root: &Path) -> UnixStream {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        match UnixStream::connect(socket) {
+        match UnixStream::connect(socket(root)) {
             Ok(stream) => {
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
-                stream
-                    .set_write_timeout(Some(Duration::from_secs(5)))
-                    .unwrap();
                 return stream;
             }
-            Err(error) if Instant::now() < deadline => {
-                let _ = error;
-                thread::sleep(Duration::from_millis(10));
-            }
+            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
             Err(error) => panic!("connect to test daemon: {error}"),
         }
     }
 }
 
-fn hello(cwd: PathBuf) -> ClientMessage {
-    let settings = Settings::default();
-    ClientMessage::Hello(Box::new(Hello {
-        cols: 80,
-        rows: 24,
-        cwd,
-        session: Some("lifecycle".into()),
-        bindings: settings.bindings,
-        clipboard_command: settings.clipboard_command,
-        terminal_clipboard: false,
-        theme: settings.theme,
-        theme_command: settings.theme_command,
-        theme_directory: settings.theme_directory,
-        mouse: settings.mouse,
-        bell_style: settings.bell_style,
-        terminal: crate::frame::TerminalFeatures::FULL,
-        glyphs: crate::config::Glyphs::Font,
-        default_cursor_shape: settings.default_cursor_shape,
-    }))
+fn attach(root: &Path) -> UnixStream {
+    let mut stream = connect(root);
+    write_message(&mut stream, &hello(24, 80, root.to_path_buf(), "lifecycle")).unwrap();
+    stream
 }
 
-fn shutdown(socket: &Path) {
-    let mut stream = connect(socket);
-    crate::protocol::write_shutdown(&mut stream).unwrap();
-    assert!(matches!(
-        read_message(&mut stream).unwrap(),
-        Some(ServerMessage::Detached)
-    ));
+fn saved_state(root: &Path) -> PersistedState {
+    decode_persisted_state(&fs::read(root.join("state/mux/state.bin")).unwrap()).unwrap()
 }
 
-#[test]
-#[ignore]
-fn daemon_worker() {
-    let Some(socket) = env::var_os("MUX_TEST_DAEMON_SOCKET") else {
-        return;
-    };
-    super::run(Path::new(&socket)).unwrap();
+fn pane_journal(root: &Path, pane_id: usize) -> PathBuf {
+    root.join(format!("state/mux/pane-{pane_id}.ansi"))
 }
 
-#[test]
-fn daemon_restarts_from_durable_state() {
-    let root = env::temp_dir().join(format!("mux-lifecycle-{}", std::process::id()));
-    let home = root.join("home");
-    let state_home = root.join("state");
-    fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&state_home).unwrap();
-    let socket = root.join("daemon").join("mux.sock");
-
-    let first = TestDaemon::start(&socket, &home, &state_home);
-    let mut attached = connect(&socket);
-    write_message(&mut attached, &hello(root.clone())).unwrap();
-    assert!(matches!(
-        read_message(&mut attached).unwrap(),
-        Some(ServerMessage::Render(_))
-    ));
-    shutdown(&socket);
-    first.wait();
-
-    let state_file = state_home.join("mux/state.bin");
-    let first_state = super::decode_persisted_state(&fs::read(&state_file).unwrap()).unwrap();
-    assert_eq!(first_state.sessions.len(), 1);
-    assert_eq!(first_state.sessions[0].windows[0].panes.len(), 1);
-    let pane_id = first_state.sessions[0].windows[0].panes[0].id;
-    assert!(
-        state_home
-            .join(format!("mux/pane-{pane_id}.ansi"))
-            .is_file()
-    );
-
-    let second = TestDaemon::start(&socket, &home, &state_home);
-    let mut query = connect(&socket);
-    write_message(
-        &mut query,
-        &ClientMessage::Query {
-            pane_id: None,
-            query: MuxQuery::Sessions,
-            json: false,
-        },
-    )
-    .unwrap();
-    let Some(ServerMessage::Listing(sessions)) = read_message(&mut query).unwrap() else {
-        panic!("restarted daemon did not answer session query");
-    };
-    assert!(sessions.iter().any(|session| session.contains("lifecycle")));
-    shutdown(&socket);
-    second.wait();
-
-    let second_state = super::decode_persisted_state(&fs::read(&state_file).unwrap()).unwrap();
-    assert_eq!(second_state.next_session_id, first_state.next_session_id);
-    assert_eq!(second_state.next_pane_id, first_state.next_pane_id);
-    let _ = fs::remove_dir_all(root);
+/// Has the attached pane print `bytes`, which must end with `marker`.
+fn print(
+    stream: &mut UnixStream,
+    terminal: &mut vt100::Parser,
+    root: &Path,
+    bytes: &[u8],
+    marker: &str,
+) {
+    // The marker must appear only in PTY output, not the echoed command.
+    let path = root.join(marker.to_lowercase());
+    fs::write(&path, bytes).unwrap();
+    let command = format!("stty -echo; cat '{}'\n", path.display());
+    write_message(stream, &ClientMessage::Paste(command)).unwrap();
+    wait_for_render(stream, terminal, marker);
 }
 
 fn wait_for_render(stream: &mut UnixStream, terminal: &mut vt100::Parser, marker: &str) {
@@ -186,116 +128,103 @@ fn wait_for_render(stream: &mut UnixStream, terminal: &mut vt100::Parser, marker
     }
 }
 
+fn command(stream: &mut UnixStream, command: MuxCommand) {
+    let message = ClientMessage::Command {
+        pane_id: None,
+        command,
+    };
+    write_message(stream, &message).unwrap();
+}
+
+#[test]
+#[ignore]
+fn daemon_worker() {
+    let Some(socket) = env::var_os("MUX_TEST_DAEMON_SOCKET") else {
+        return;
+    };
+    super::run(Path::new(&socket)).unwrap();
+}
+
 #[test]
 fn real_pty_history_and_styles_survive_restart_and_a_corrupt_sibling() {
-    use super::{JOURNAL_HISTORY, encode_journal_record};
-    use crate::protocol::MuxCommand;
+    let root = scratch("lifecycle");
+    fs::create_dir_all(root.join("home")).unwrap();
+    fs::create_dir_all(root.join("state")).unwrap();
 
-    let root = env::temp_dir().join(format!("mux-history-lifecycle-{}", std::process::id()));
-    let home = root.join("home");
-    let state_home = root.join("state");
-    fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&state_home).unwrap();
-    let socket = root.join("daemon/mux.sock");
-    let first = TestDaemon::start(&socket, &home, &state_home);
-    let mut attached = connect(&socket);
-    write_message(&mut attached, &hello(root.clone())).unwrap();
+    let first = TestDaemon::start(&root);
+    let mut attached = attach(&root);
     let mut terminal = vt100::Parser::new(24, 80, 0);
-    let first_output = root.join("first-output");
-    fs::write(&first_output, b"\x1bcFIRST-PANE").unwrap();
-    write_message(
+    print(
         &mut attached,
-        &ClientMessage::Paste(format!("stty -echo; cat '{}'\n", first_output.display())),
-    )
-    .unwrap();
-    wait_for_render(&mut attached, &mut terminal, "FIRST-PANE");
-    write_message(
-        &mut attached,
-        &ClientMessage::Command {
-            pane_id: None,
-            command: MuxCommand::NewWindow,
-        },
-    )
-    .unwrap();
-    let history_output = root.join("history-output");
+        &mut terminal,
+        &root,
+        b"\x1bcFIRST-PANE",
+        "FIRST-PANE",
+    );
+    command(&mut attached, MuxCommand::NewWindow);
     let mut history = String::new();
     for line in 0..40 {
         history.push_str(&format!("HISTORY-{line:02}\r\n"));
     }
     history.push_str("\x1b[4:3;58;5;45mSTYLED-LAST\x1b[24;59m PLAIN-LAST");
-    fs::write(&history_output, history).unwrap();
-    // Markers only occur in PTY output, never in the echoed shell command.
-    write_message(
+    print(
         &mut attached,
-        &ClientMessage::Paste(format!("stty -echo; cat '{}'\n", history_output.display())),
-    )
-    .unwrap();
-    wait_for_render(&mut attached, &mut terminal, "PLAIN-LAST");
-    shutdown(&socket);
-    first.wait();
+        &mut terminal,
+        &root,
+        history.as_bytes(),
+        "PLAIN-LAST",
+    );
+    first.stop(&root);
 
-    let state_path = state_home.join("mux/state.bin");
-    let state = super::decode_persisted_state(&fs::read(&state_path).unwrap()).unwrap();
+    let state = saved_state(&root);
+    assert_eq!(state.sessions.len(), 1);
     assert_eq!(state.sessions[0].windows.len(), 2);
     let damaged = state.sessions[0].windows[0].panes[0].id;
-    let healthy = state.sessions[0].windows[1].panes[0].id;
-    let healthy_path = state_home.join(format!("mux/pane-{healthy}.ansi"));
-    let mut saved = super::new_parser(24, 80);
-    super::replay_pane_journal(&mut saved, fs::File::open(&healthy_path).unwrap()).unwrap();
-    let (buffer, _) = super::snapshot_screen(saved.screen_mut());
+    let healthy = pane_journal(&root, state.sessions[0].windows[1].panes[0].id);
+    let mut saved = new_parser(24, 80);
+    replay_pane_journal(&mut saved, fs::File::open(&healthy).unwrap()).unwrap();
+    let (buffer, _) = snapshot_screen(saved.screen_mut());
     assert!(buffer.texts().any(|line| line.contains("HISTORY-00")));
 
-    // A fully framed but malformed history row used to panic in Row::decode
-    // on a restore worker, taking down startup of every saved session.
+    // A framed but malformed history row used to panic a restore worker and
+    // take down startup of every saved session.
     let mut invalid = 1u32.to_le_bytes().to_vec();
     invalid.extend(1u64.to_le_bytes());
     invalid.extend([0, 0]);
-    fs::write(
-        state_home.join(format!("mux/pane-{damaged}.ansi")),
-        encode_journal_record(JOURNAL_HISTORY, &invalid).unwrap(),
-    )
-    .unwrap();
-    // A crash can also leave any partial header/payload behind a healthy pane.
-    let mut healthy_bytes = fs::read(&healthy_path).unwrap();
+    let record = encode_journal_record(JOURNAL_HISTORY, &invalid).unwrap();
+    fs::write(pane_journal(&root, damaged), record).unwrap();
+    // A crash can also leave a partial record behind a healthy pane.
+    let mut healthy_bytes = fs::read(&healthy).unwrap();
     healthy_bytes.extend([1, 0, 0, 0, 5, b'x']);
-    fs::write(&healthy_path, healthy_bytes).unwrap();
+    fs::write(&healthy, healthy_bytes).unwrap();
 
-    let second = TestDaemon::start(&socket, &home, &state_home);
-    let mut attached = connect(&socket);
-    write_message(&mut attached, &hello(root.clone())).unwrap();
+    let second = TestDaemon::start(&root);
+    let mut attached = attach(&root);
     let mut restored = vt100::Parser::new(24, 80, 0);
     wait_for_render(&mut attached, &mut restored, "STYLED-LAST");
     assert!(restored.screen().contents().contains("PLAIN-LAST"));
-    let mut styled = 0;
-    for row in 0..24 {
-        for col in 0..80 {
-            let cell = restored.screen().cell(row, col).unwrap();
-            if cell.underline_style() == vt100::UnderlineStyle::Curly {
-                assert_eq!(cell.underline_color(), vt100::Color::Idx(45));
-                styled += 1;
-            }
-        }
-    }
-    assert_eq!(styled, "STYLED-LAST".len());
-    write_message(
+    let curly: Vec<_> = (0..24)
+        .flat_map(|row| (0..80).map(move |col| (row, col)))
+        .filter_map(|(row, col)| restored.screen().cell(row, col))
+        .filter(|cell| cell.underline_style() == vt100::UnderlineStyle::Curly)
+        .map(|cell| cell.underline_color())
+        .collect();
+    assert_eq!(curly, vec![vt100::Color::Idx(45); "STYLED-LAST".len()]);
+    // The pane whose history was corrupt still works.
+    command(&mut attached, MuxCommand::SelectWindow(1));
+    let marker = "CORRUPT-PANE-STILL-USABLE";
+    print(
         &mut attached,
-        &ClientMessage::Command {
-            pane_id: None,
-            command: MuxCommand::SelectWindow(1),
-        },
-    )
-    .unwrap();
-    let usable_output = root.join("usable-output");
-    fs::write(&usable_output, b"CORRUPT-PANE-STILL-USABLE").unwrap();
-    write_message(
-        &mut attached,
-        &ClientMessage::Paste(format!("stty -echo; cat '{}'\n", usable_output.display())),
-    )
-    .unwrap();
-    wait_for_render(&mut attached, &mut restored, "CORRUPT-PANE-STILL-USABLE");
-    shutdown(&socket);
-    second.wait();
-    let final_state = super::decode_persisted_state(&fs::read(&state_path).unwrap()).unwrap();
+        &mut restored,
+        &root,
+        marker.as_bytes(),
+        marker,
+    );
+    second.stop(&root);
+
+    // Restoring created nothing new.
+    let final_state = saved_state(&root);
+    assert_eq!(final_state.next_session_id, state.next_session_id);
     assert_eq!(final_state.next_pane_id, state.next_pane_id);
     assert_eq!(final_state.sessions[0].windows.len(), 2);
     fs::remove_dir_all(root).unwrap();

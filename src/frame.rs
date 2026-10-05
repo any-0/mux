@@ -21,21 +21,15 @@ struct CellText {
 }
 
 impl CellText {
+    /// As much of `text` as fits, cut at a character boundary.
     fn new(text: &str) -> Self {
-        let mut length = 0;
-        for (index, character) in text.char_indices() {
-            let end = index + character.len_utf8();
-            if end > CELL_TEXT_BYTES {
+        let mut cell = Self::empty();
+        for character in text.chars() {
+            if !cell.push(character) {
                 break;
             }
-            length = end;
         }
-        let mut bytes = [0; CELL_TEXT_BYTES];
-        bytes[..length].copy_from_slice(&text.as_bytes()[..length]);
-        Self {
-            bytes,
-            length: length as u8,
-        }
+        cell
     }
 
     const fn empty() -> Self {
@@ -49,13 +43,16 @@ impl CellText {
         &self.bytes[..self.length as usize]
     }
 
-    fn push(&mut self, character: char) {
+    /// Appends `character` if it fits, returning whether it did.
+    fn push(&mut self, character: char) -> bool {
         let start = self.length as usize;
         let end = start + character.len_utf8();
-        if end <= CELL_TEXT_BYTES {
-            character.encode_utf8(&mut self.bytes[start..end]);
-            self.length = end as u8;
+        if end > CELL_TEXT_BYTES {
+            return false;
         }
+        character.encode_utf8(&mut self.bytes[start..end]);
+        self.length = end as u8;
+        true
     }
 }
 
@@ -146,35 +143,15 @@ pub fn rgb((red, green, blue): Rgb) -> vt100::Color {
     vt100::Color::Rgb(red, green, blue)
 }
 
-/// What a client's terminal understands. Every frame is painted in 24-bit
-/// colour, because that is what the theme and the programs in the panes both
-/// speak; a terminal that has not said it renders 24-bit colour is sent the
-/// nearest entry of the xterm 256-colour palette instead of an escape sequence
-/// it would ignore or print.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum ColorDepth {
-    #[default]
-    TrueColor,
-    Palette256,
-}
-
-impl ColorDepth {
-    pub fn of(truecolor: bool) -> Self {
-        if truecolor {
-            Self::TrueColor
-        } else {
-            Self::Palette256
-        }
-    }
-}
-
 /// What a client's terminal understands beyond what every xterm-compatible
 /// terminal does. Frames only use what the terminal has said it supports,
 /// so an older or simpler terminal gets a plainer picture rather than escape
 /// sequences it would misread.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TerminalFeatures {
-    /// 24-bit colour; otherwise colours go out as the nearest 256-colour entry.
+    /// 24-bit colour. Frames are always painted in it, since the theme and the
+    /// programs in the panes both speak it; without it, colours go out as the
+    /// nearest 256-colour entry.
     pub truecolor: bool,
     /// Curly, dotted, dashed and double underlines (`4:n`) and underline
     /// colours (SGR 58). A terminal without them parses `58;2;r;g;b` as faint
@@ -189,10 +166,6 @@ impl TerminalFeatures {
         truecolor: true,
         styled_underlines: true,
     };
-
-    pub fn colors(self) -> ColorDepth {
-        ColorDepth::of(self.truecolor)
-    }
 }
 
 impl Default for TerminalFeatures {
@@ -245,6 +218,11 @@ pub struct Frame {
     cols: u16,
     cells: Vec<FrameCell>,
     cursor: FrameCursor,
+    /// The colour the terminal's cursor is painted (OSC 12); `None` leaves
+    /// the terminal's own.
+    cursor_color: Option<Rgb>,
+    /// What `cursor_color` returns to whenever the cursor is placed.
+    default_cursor_color: Option<Rgb>,
     changed: Vec<bool>,
 }
 
@@ -268,6 +246,8 @@ impl Frame {
         self.changed.clear();
         self.changed.resize(cols as usize, false);
         self.cursor = FrameCursor::default();
+        self.cursor_color = None;
+        self.default_cursor_color = None;
     }
 
     fn index(&self, row: u16, col: u16) -> Option<usize> {
@@ -275,6 +255,11 @@ impl Frame {
             return None;
         }
         Some((row as usize - 1) * self.cols as usize + (col as usize - 1))
+    }
+
+    /// The index of the cell right of `(row, col)`, if there is one.
+    fn next_index(&self, row: u16, col: u16) -> Option<usize> {
+        self.index(row, col.checked_add(1)?)
     }
 
     fn cell(&self, row: u16, col: u16) -> Option<&FrameCell> {
@@ -285,12 +270,12 @@ impl Frame {
         let Some(index) = self.index(row, col) else {
             return;
         };
+        // Overwriting either half of a wide character erases the other half.
         if self.cells[index].continuation && index > 0 {
             self.cells[index - 1] = FrameCell::default();
         }
-        if let Some(next) = col
-            .checked_add(1)
-            .and_then(|next_col| self.index(row, next_col))
+        if let Some(next) = self
+            .next_index(row, col)
             .filter(|next| self.cells[*next].continuation)
         {
             self.cells[next] = FrameCell::default();
@@ -304,23 +289,18 @@ impl Frame {
 
     /// Paints a double-width character, reserving the cell to its right.
     pub fn set_wide_cell(&mut self, row: u16, col: u16, text: &str, attributes: CellAttributes) {
-        let Some(next_col) = col.checked_add(1) else {
+        let Some(next) = self.next_index(row, col) else {
             return;
         };
-        if self.index(row, next_col).is_none() {
-            return;
-        }
         // The new continuation may overwrite the base of another wide glyph.
         // Clear its old continuation before installing this pair.
-        self.set_cell(row, next_col, "", attributes);
+        self.set_cell(row, col + 1, "", attributes);
         self.set_cell(row, col, text, attributes);
-        if let Some(index) = self.index(row, next_col) {
-            self.cells[index] = FrameCell {
-                text: CellText::empty(),
-                attributes,
-                continuation: true,
-            };
-        }
+        self.cells[next] = FrameCell {
+            text: CellText::empty(),
+            attributes,
+            continuation: true,
+        };
     }
 
     /// Paints `text` by terminal cell width and returns the column after it.
@@ -346,16 +326,12 @@ impl Frame {
                     self.set_cell(row, col, text, attributes);
                     col = col.saturating_add(1);
                 }
-                Some(_) => {
-                    if col
-                        .checked_add(1)
-                        .and_then(|next_col| self.index(row, next_col))
-                        .is_some()
-                    {
-                        self.set_wide_cell(row, col, text, attributes);
-                        col = col.saturating_add(2);
-                    }
+                // A wide character that does not fit is dropped.
+                Some(_) if self.next_index(row, col).is_some() => {
+                    self.set_wide_cell(row, col, text, attributes);
+                    col = col.saturating_add(2);
                 }
+                Some(_) => {}
             }
         }
         col
@@ -367,8 +343,20 @@ impl Frame {
         }
     }
 
+    /// Places the cursor, in the default cursor colour.
     pub fn set_cursor(&mut self, cursor: FrameCursor) {
         self.cursor = cursor;
+        self.cursor_color = self.default_cursor_color;
+    }
+
+    pub fn set_default_cursor_color(&mut self, color: Option<Rgb>) {
+        self.default_cursor_color = color;
+        self.cursor_color = color;
+    }
+
+    /// Colours the cursor last placed, until it is placed again.
+    pub fn set_cursor_color(&mut self, color: Option<Rgb>) {
+        self.cursor_color = color;
     }
 
     /// Appends the escape sequences that turn `previous` into this frame.
@@ -397,7 +385,8 @@ impl Frame {
         // cursor without touching a cell still costs nothing.
         let settled =
             previous.cursor == self.cursor || (!previous.cursor.visible && !self.cursor.visible);
-        if !painted && settled {
+        let recolored = !incremental || previous.cursor_color != self.cursor_color;
+        if !painted && settled && !recolored {
             output.truncate(start);
             return;
         }
@@ -406,6 +395,9 @@ impl Frame {
         // it there puts it inside whichever bar, panel, or popup happened to
         // paint last.
         move_to(output, self.cursor.row, self.cursor.col);
+        if recolored {
+            write_cursor_color(output, self.cursor_color);
+        }
         if self.cursor.visible {
             write_steady_cursor_shape(output, self.cursor.shape);
             output.extend_from_slice(b"\x1b[?25h");
@@ -533,7 +525,6 @@ fn width_is_uncertain(text: &[u8]) -> bool {
     if characters.next().is_some() {
         return true;
     }
-    use unicode_width::UnicodeWidthChar as _;
     first.width() != first.width_cjk()
         || matches!(
             u32::from(first),
@@ -555,6 +546,14 @@ fn move_to_column(output: &mut Vec<u8>, col: u16) {
     output.extend_from_slice(format!("\x1b[{col}G").as_bytes());
 }
 
+fn write_cursor_color(output: &mut Vec<u8>, color: Option<Rgb>) {
+    match color {
+        Some((red, green, blue)) => output
+            .extend_from_slice(format!("\x1b]12;#{red:02x}{green:02x}{blue:02x}\x1b\\").as_bytes()),
+        None => output.extend_from_slice(b"\x1b]112\x1b\\"),
+    }
+}
+
 fn write_steady_cursor_shape(output: &mut Vec<u8>, shape: CursorShape) {
     output.extend_from_slice(b"\x1b[?12l");
     output.extend_from_slice(match shape {
@@ -564,22 +563,27 @@ fn write_steady_cursor_shape(output: &mut Vec<u8>, shape: CursorShape) {
     });
 }
 
-pub fn write_cell_attributes(
+fn write_cell_attributes(
     output: &mut Vec<u8>,
     attributes: CellAttributes,
     terminal: TerminalFeatures,
 ) {
-    let colors = terminal.colors();
+    let flags = |output: &mut Vec<u8>, flags: &[(bool, &[u8])]| {
+        for (on, code) in flags {
+            if *on {
+                output.extend_from_slice(code);
+            }
+        }
+    };
     output.extend_from_slice(b"\x1b[0");
-    if attributes.bold {
-        output.extend_from_slice(b";1");
-    }
-    if attributes.dim {
-        output.extend_from_slice(b";2");
-    }
-    if attributes.italic {
-        output.extend_from_slice(b";3");
-    }
+    flags(
+        output,
+        &[
+            (attributes.bold, b";1"),
+            (attributes.dim, b";2"),
+            (attributes.italic, b";3"),
+        ],
+    );
     match attributes.underline {
         vt100::UnderlineStyle::None => {}
         vt100::UnderlineStyle::Straight => output.extend_from_slice(b";4"),
@@ -589,51 +593,35 @@ pub fn write_cell_attributes(
             output.push(b'0' + style as u8);
         }
     }
-    if attributes.blink {
-        output.extend_from_slice(b";5");
-    }
-    if attributes.inverse {
-        output.extend_from_slice(b";7");
-    }
-    if attributes.hidden {
-        output.extend_from_slice(b";8");
-    }
-    if attributes.strikethrough {
-        output.extend_from_slice(b";9");
-    }
-    if attributes.overline {
-        output.extend_from_slice(b";53");
-    }
-    write_color(output, attributes.foreground, true, colors);
-    write_color(output, attributes.background, false, colors);
+    flags(
+        output,
+        &[
+            (attributes.blink, b";5"),
+            (attributes.inverse, b";7"),
+            (attributes.hidden, b";8"),
+            (attributes.strikethrough, b";9"),
+            (attributes.overline, b";53"),
+        ],
+    );
+    write_color(output, attributes.foreground, 38, terminal.truecolor);
+    write_color(output, attributes.background, 48, terminal.truecolor);
     if attributes.underline_color != vt100::Color::Default && terminal.styled_underlines {
-        write_color_parameter(output, attributes.underline_color, 58, colors);
+        write_color(output, attributes.underline_color, 58, terminal.truecolor);
     }
     output.push(b'm');
 }
 
-fn write_color(output: &mut Vec<u8>, color: vt100::Color, foreground: bool, colors: ColorDepth) {
-    let parameter = if foreground { 38 } else { 48 };
-    write_color_parameter(output, color, parameter, colors);
-}
-
-fn write_color_parameter(
-    output: &mut Vec<u8>,
-    color: vt100::Color,
-    parameter: u8,
-    colors: ColorDepth,
-) {
-    // The underline colour goes out in its colon form, which a terminal that
-    // does not know SGR 58 skips as one unit rather than reading the numbers
-    // after it as separate attributes.
-    let separator = if parameter == 58 { ':' } else { ';' };
-    match color {
-        vt100::Color::Default => output.extend_from_slice(match parameter {
-            38 => b";39",
-            48 => b";49",
-            58 => b";59",
-            _ => unreachable!(),
-        }),
+/// Writes one SGR colour for `parameter`: 38 (foreground), 48 (background) or
+/// 58 (underline).
+fn write_color(output: &mut Vec<u8>, color: vt100::Color, parameter: u8, truecolor: bool) {
+    let color = match color {
+        vt100::Color::Rgb(red, green, blue) if !truecolor => {
+            vt100::Color::Idx(nearest_palette_index(red, green, blue))
+        }
+        color => color,
+    };
+    let text = match color {
+        vt100::Color::Default => format!(";{}", parameter + 1),
         // The sixteen basic colours have their own codes, which every terminal
         // understands, including ones without a 256-colour palette.
         vt100::Color::Idx(index @ 0..=15) if parameter != 58 => {
@@ -643,25 +631,19 @@ fn write_color_parameter(
                 (_, true) => 40,
                 (_, false) => 100 - 8,
             };
-            output.extend_from_slice(format!(";{}", base + u16::from(index)).as_bytes())
+            format!(";{}", base + u16::from(index))
         }
-        vt100::Color::Idx(index) => output
-            .extend_from_slice(format!(";{parameter}{separator}5{separator}{index}").as_bytes()),
-        vt100::Color::Rgb(red, green, blue) => match colors {
-            ColorDepth::TrueColor if parameter == 58 => {
-                output.extend_from_slice(format!(";58:2::{red}:{green}:{blue}").as_bytes())
-            }
-            ColorDepth::TrueColor => {
-                output.extend_from_slice(format!(";{parameter};2;{red};{green};{blue}").as_bytes())
-            }
-            ColorDepth::Palette256 => {
-                let index = nearest_palette_index(red, green, blue);
-                output.extend_from_slice(
-                    format!(";{parameter}{separator}5{separator}{index}").as_bytes(),
-                )
-            }
-        },
-    }
+        // The underline colour goes out in its colon form, which a terminal
+        // that does not know SGR 58 skips as one unit rather than reading the
+        // numbers after it as separate attributes.
+        vt100::Color::Idx(index) if parameter == 58 => format!(";58:5:{index}"),
+        vt100::Color::Idx(index) => format!(";{parameter};5;{index}"),
+        vt100::Color::Rgb(red, green, blue) if parameter == 58 => {
+            format!(";58:2::{red}:{green}:{blue}")
+        }
+        vt100::Color::Rgb(red, green, blue) => format!(";{parameter};2;{red};{green};{blue}"),
+    };
+    output.extend_from_slice(text.as_bytes());
 }
 
 /// The entry of the xterm 256-colour palette closest to an exact colour.
@@ -709,84 +691,128 @@ fn nearest_palette_index(red: u8, green: u8, blue: u8) -> u8 {
 mod tests {
     use super::*;
 
+    const PLAIN: CellAttributes = CellAttributes {
+        foreground: vt100::Color::Default,
+        background: vt100::Color::Default,
+        underline_color: vt100::Color::Default,
+        bold: false,
+        dim: false,
+        italic: false,
+        underline: vt100::UnderlineStyle::None,
+        inverse: false,
+        strikethrough: false,
+        blink: false,
+        hidden: false,
+        overline: false,
+    };
+
     fn frame(rows: u16, cols: u16) -> Frame {
         let mut frame = Frame::default();
         frame.reset(rows, cols);
         frame
     }
 
-    fn diff(current: &mut Frame, previous: &Frame) -> Vec<u8> {
+    fn cursor(row: u16, col: u16, shape: CursorShape, visible: bool) -> FrameCursor {
+        FrameCursor {
+            row,
+            col,
+            shape,
+            visible,
+        }
+    }
+
+    fn diff_for(current: &mut Frame, previous: &Frame, terminal: TerminalFeatures) -> String {
         let mut output = Vec::new();
-        current.diff(previous, TerminalFeatures::FULL, &mut output);
-        output
+        current.diff(previous, terminal, &mut output);
+        String::from_utf8(output).unwrap()
+    }
+
+    fn diff(current: &mut Frame, previous: &Frame) -> String {
+        diff_for(current, previous, TerminalFeatures::FULL)
+    }
+
+    /// What a terminal shows after receiving `current` as a first frame.
+    fn render(current: &mut Frame) -> vt100::Parser {
+        let mut parser = vt100::Parser::new(current.rows(), current.cols(), 0);
+        parser.process(diff(current, &Frame::default()).as_bytes());
+        parser
+    }
+
+    fn attributes_written(attributes: CellAttributes, terminal: TerminalFeatures) -> String {
+        let mut output = Vec::new();
+        write_cell_attributes(&mut output, attributes, terminal);
+        String::from_utf8(output).unwrap()
     }
 
     /// Compares what two terminals show. A cell that was never written and one
     /// holding a blank look the same, so blanks are normalized before comparing.
     fn assert_screens_match(left: &vt100::Screen, right: &vt100::Screen, context: &str) {
+        fn cell(screen: &vt100::Screen, row: u16, col: u16) -> impl PartialEq + std::fmt::Debug {
+            let cell = screen.cell(row, col).unwrap();
+            let text = if cell.has_contents() {
+                cell.contents().to_string()
+            } else {
+                " ".into()
+            };
+            let attributes = CellAttributes::from(&cell);
+            (
+                text,
+                attributes,
+                cell.is_wide(),
+                cell.is_wide_continuation(),
+            )
+        }
         let (rows, cols) = left.size();
         assert_eq!(right.size(), (rows, cols), "{context}: size");
         for row in 0..rows {
             for col in 0..cols {
-                let left_cell = left.cell(row, col).unwrap();
-                let right_cell = right.cell(row, col).unwrap();
-                fn text(cell: &vt100::Cell) -> String {
-                    if cell.has_contents() {
-                        cell.contents().to_string()
-                    } else {
-                        " ".into()
-                    }
-                }
                 assert_eq!(
-                    (
-                        text(&left_cell),
-                        CellAttributes::from(&left_cell),
-                        left_cell.is_wide(),
-                        left_cell.is_wide_continuation(),
-                    ),
-                    (
-                        text(&right_cell),
-                        CellAttributes::from(&right_cell),
-                        right_cell.is_wide(),
-                        right_cell.is_wide_continuation(),
-                    ),
+                    cell(left, row, col),
+                    cell(right, row, col),
                     "{context}: cell at row {row} column {col}"
                 );
             }
         }
+        assert_eq!(
+            left.cursor_position(),
+            right.cursor_position(),
+            "{context}: cursor"
+        );
     }
 
     /// Paints a screen's worth of varied content: colors, attributes, wide
     /// characters and an overlay, keyed on `step` so successive frames differ in
     /// every way a real render can.
-    fn paint_sample(frame: &mut Frame, step: usize) {
-        let plain = CellAttributes::default();
+    fn paint_sample(rows: u16, cols: u16, step: usize) -> Frame {
+        let mut frame = frame(rows, cols);
         let accent = CellAttributes::colors((203, 163, 210), (46, 39, 57)).bold();
         let dim = CellAttributes::foreground((150, 138, 166)).dim();
-        for row in 1..=frame.rows() {
+        for row in 1..=rows {
             frame.set_text(
                 row,
                 1,
                 &format!("row {row} step {step} ~ some terminal output"),
-                if row % 3 == 0 { dim } else { plain },
+                if row % 3 == 0 { dim } else { PLAIN },
             );
         }
         frame.set_text(1, 1, &format!(" {} ", step % 10), accent);
-        frame.set_wide_cell(2, 6 + (step % 4) as u16, "世", plain);
+        frame.set_wide_cell(2, 6 + (step % 4) as u16, "世", PLAIN);
         frame.set_wide_cell(2, 8 + (step % 4) as u16, "界", accent);
         frame.set_text(4, 4, &format!("╭{}╮", "─".repeat(8)), accent);
         frame.set_text(5, 4, &format!("│ {:6} │", step), accent);
         frame.fill(6, 4, 10, accent);
-        frame.set_cursor(FrameCursor {
-            row: 2 + (step % 5) as u16,
-            col: 3 + (step % 7) as u16,
-            shape: if step.is_multiple_of(2) {
-                CursorShape::Block
-            } else {
-                CursorShape::Bar
-            },
-            visible: true,
-        });
+        let shape = if step.is_multiple_of(2) {
+            CursorShape::Block
+        } else {
+            CursorShape::Bar
+        };
+        frame.set_cursor(cursor(
+            2 + (step % 5) as u16,
+            3 + (step % 7) as u16,
+            shape,
+            true,
+        ));
+        frame
     }
 
     #[test]
@@ -797,24 +823,13 @@ mod tests {
         let mut incremental = vt100::Parser::new(rows, cols, 0);
         let mut previous = frame(rows, cols);
         for step in 0..12 {
-            let mut current = frame(rows, cols);
-            paint_sample(&mut current, step);
-
-            let mut fresh = vt100::Parser::new(rows, cols, 0);
-            let mut full = frame(rows, cols);
-            paint_sample(&mut full, step);
-            fresh.process(&diff(&mut full, &Frame::default()));
-
-            incremental.process(&diff(&mut current, &previous));
+            let mut current = paint_sample(rows, cols, step);
+            incremental.process(diff(&mut current, &previous).as_bytes());
+            let fresh = render(&mut paint_sample(rows, cols, step));
             assert_screens_match(
                 incremental.screen(),
                 fresh.screen(),
                 &format!("step {step}"),
-            );
-            assert_eq!(
-                incremental.screen().cursor_position(),
-                fresh.screen().cursor_position(),
-                "step {step} cursor diverged"
             );
             previous = current;
         }
@@ -822,82 +837,40 @@ mod tests {
 
     #[test]
     fn a_resize_diff_lands_where_a_full_repaint_would() {
-        let mut previous = frame(6, 30);
-        paint_sample(&mut previous, 1);
-        let mut incremental = vt100::Parser::new(6, 30, 0);
-        incremental.process(&diff(&mut previous, &Frame::default()));
-
+        let mut previous = paint_sample(6, 30, 1);
+        let mut incremental = render(&mut previous);
         // The client's terminal grew; the daemon paints a bigger frame.
         incremental.screen_mut().set_size(6, 40);
-        let mut current = frame(6, 40);
-        paint_sample(&mut current, 2);
-        incremental.process(&diff(&mut current, &previous));
-
-        let mut fresh = vt100::Parser::new(6, 40, 0);
-        let mut full = frame(6, 40);
-        paint_sample(&mut full, 2);
-        fresh.process(&diff(&mut full, &Frame::default()));
-
+        let mut current = paint_sample(6, 40, 2);
+        let output = diff(&mut current, &previous);
+        assert!(output.contains("\x1b[2J"), "{output:?}");
+        incremental.process(output.as_bytes());
+        let fresh = render(&mut paint_sample(6, 40, 2));
         assert_screens_match(incremental.screen(), fresh.screen(), "after resize");
     }
 
     #[test]
-    fn a_first_frame_clears_and_paints_everything() {
+    fn a_first_frame_turns_autowrap_off_clears_and_paints_everything() {
         let mut current = frame(2, 3);
-        current.set_text(1, 1, "abc", CellAttributes::default());
-        let output = String::from_utf8(diff(&mut current, &Frame::default())).unwrap();
-        assert!(output.contains("\x1b[2J"), "{output:?}");
+        current.set_text(2, 1, "abc", PLAIN);
+        let output = diff(&mut current, &Frame::default());
+        assert!(output.starts_with("\x1b[?2026h\x1b[?25l\x1b[?7l\x1b[0m\x1b[2J"));
         assert!(output.contains("abc"), "{output:?}");
-        assert!(output.contains("\x1b[?2026h") && output.contains("\x1b[?2026l"));
+        assert!(output.ends_with("\x1b[?2026l"), "{output:?}");
     }
 
     #[test]
     fn a_terminal_without_truecolor_is_sent_palette_entries() {
         let mut current = frame(1, 3);
-        current.set_text(
-            1,
-            1,
-            "abc",
-            CellAttributes::colors((203, 163, 210), (46, 39, 57)),
-        );
-        let mut output = Vec::new();
-        current.diff(
-            &Frame::default(),
-            TerminalFeatures {
-                truecolor: false,
-                ..TerminalFeatures::FULL
-            },
-            &mut output,
-        );
-        let output = String::from_utf8(output).unwrap();
+        let attributes = CellAttributes::colors((203, 163, 210), (46, 39, 57));
+        current.set_text(1, 1, "abc", attributes);
+        let palette = TerminalFeatures {
+            truecolor: false,
+            ..TerminalFeatures::FULL
+        };
+        let output = diff_for(&mut current, &Frame::default(), palette);
         assert!(!output.contains(";2;"), "no 24-bit colour: {output:?}");
-        assert!(output.contains(";38;5;182"), "{output:?}");
-        assert!(output.contains(";48;5;236"), "{output:?}");
-
-        // Indexed and default colours are already what the terminal expects.
-        let mut current = frame(1, 1);
-        current.set_cell(
-            1,
-            1,
-            "x",
-            CellAttributes {
-                foreground: vt100::Color::Idx(4),
-                background: vt100::Color::Default,
-                ..CellAttributes::default()
-            },
-        );
-        let mut output = Vec::new();
-        current.diff(
-            &Frame::default(),
-            TerminalFeatures {
-                truecolor: false,
-                ..TerminalFeatures::FULL
-            },
-            &mut output,
-        );
-        let output = String::from_utf8(output).unwrap();
-        // The sixteen basic colours use their own codes, understood everywhere.
-        assert!(output.contains(";34;49"), "{output:?}");
+        assert!(output.contains(";38;5;182;48;5;236"), "{output:?}");
     }
 
     #[test]
@@ -919,45 +892,31 @@ mod tests {
 
     #[test]
     fn an_unchanged_frame_sends_no_bytes() {
-        let mut previous = frame(4, 8);
-        previous.set_text(2, 2, "hello", CellAttributes::default());
-        previous.set_cursor(FrameCursor {
-            row: 2,
-            col: 7,
-            shape: CursorShape::Block,
-            visible: true,
-        });
-        let mut current = frame(4, 8);
-        current.set_text(2, 2, "hello", CellAttributes::default());
-        current.set_cursor(FrameCursor {
-            row: 2,
-            col: 7,
-            shape: CursorShape::Block,
-            visible: true,
-        });
-        assert!(diff(&mut current, &previous).is_empty());
+        let paint = || {
+            let mut frame = frame(4, 8);
+            frame.set_text(2, 2, "hello", PLAIN);
+            frame.set_cursor(cursor(2, 7, CursorShape::Block, true));
+            frame
+        };
+        assert!(diff(&mut paint(), &paint()).is_empty());
+        // Nor does a hidden cursor that moves without anything painting.
+        let mut moved = paint();
+        moved.set_cursor(cursor(3, 1, CursorShape::Bar, false));
+        let mut hidden = paint();
+        hidden.set_cursor(cursor(1, 1, CursorShape::Block, false));
+        assert!(diff(&mut moved, &hidden).is_empty());
     }
 
     #[test]
     fn only_changed_cells_are_repainted() {
+        let text = "unchanged text on this row";
         let mut previous = frame(3, 40);
-        previous.set_text(
-            2,
-            1,
-            "unchanged text on this row",
-            CellAttributes::default(),
-        );
+        previous.set_text(2, 1, text, PLAIN);
         let mut current = frame(3, 40);
-        current.set_text(
-            2,
-            1,
-            "unchanged text on this row",
-            CellAttributes::default(),
-        );
-        current.set_cell(2, 5, "X", CellAttributes::default());
-        let output = String::from_utf8(diff(&mut current, &previous)).unwrap();
-        assert!(output.contains("\x1b[2;5H"), "{output:?}");
-        assert!(output.contains('X'), "{output:?}");
+        current.set_text(2, 1, text, PLAIN);
+        current.set_cell(2, 5, "X", PLAIN);
+        let output = diff(&mut current, &previous);
+        assert!(output.contains("\x1b[2;5H\x1b[0;39;49mX"), "{output:?}");
         assert!(!output.contains("unchanged"), "{output:?}");
         assert!(!output.contains("\x1b[2J"), "{output:?}");
     }
@@ -966,63 +925,65 @@ mod tests {
     fn nearby_runs_merge_instead_of_repositioning() {
         let previous = frame(2, 20);
         let mut current = frame(2, 20);
-        current.set_cell(1, 1, "a", CellAttributes::default());
-        current.set_cell(1, 4, "b", CellAttributes::default());
+        current.set_cell(1, 1, "a", PLAIN);
+        current.set_cell(1, 4, "b", PLAIN);
         // Parked off the painted row, so the only move onto it is the run's.
-        current.set_cursor(FrameCursor {
-            row: 2,
-            col: 1,
-            ..FrameCursor::default()
-        });
-        let output = String::from_utf8(diff(&mut current, &previous)).unwrap();
+        current.set_cursor(cursor(2, 1, CursorShape::Block, false));
+        let output = diff(&mut current, &previous);
         assert_eq!(output.matches("\x1b[1;").count(), 1, "{output:?}");
         assert!(output.contains("a  b"), "{output:?}");
     }
 
     #[test]
+    fn placing_the_cursor_returns_it_to_the_default_colour() {
+        let mut frame = frame(2, 4);
+        frame.set_default_cursor_color(Some((1, 2, 3)));
+        frame.set_cursor(cursor(1, 1, CursorShape::Block, true));
+        frame.set_cursor_color(Some((9, 9, 9)));
+        assert_eq!(frame.cursor_color, Some((9, 9, 9)));
+        // A popup placing its own cursor afterwards gets the default back.
+        frame.set_cursor(cursor(2, 2, CursorShape::Bar, true));
+        assert_eq!(frame.cursor_color, Some((1, 2, 3)));
+    }
+
+    #[test]
+    fn the_cursor_colour_is_sent_on_a_full_repaint_and_when_it_changes() {
+        let paint = |color| {
+            let mut frame = frame(2, 4);
+            frame.set_cursor_color(color);
+            frame
+        };
+        let red = Some((0xff, 0x00, 0x10));
+        let first = diff(&mut paint(red), &Frame::default());
+        assert!(first.contains("\x1b]12;#ff0010\x1b\\"), "{first:?}");
+        assert!(diff(&mut paint(red), &paint(red)).is_empty());
+        let blue = diff(&mut paint(Some((0, 0, 0xff))), &paint(red));
+        assert!(blue.contains("\x1b]12;#0000ff\x1b\\"), "{blue:?}");
+        let reset = diff(&mut paint(None), &paint(red));
+        assert!(reset.contains("\x1b]112\x1b\\"), "{reset:?}");
+    }
+
+    #[test]
     fn a_moved_cursor_alone_is_repositioned() {
         let mut previous = frame(3, 10);
-        previous.set_cursor(FrameCursor {
-            row: 1,
-            col: 1,
-            shape: CursorShape::Block,
-            visible: true,
-        });
+        previous.set_cursor(cursor(1, 1, CursorShape::Block, true));
         let mut current = frame(3, 10);
-        current.set_cursor(FrameCursor {
-            row: 3,
-            col: 4,
-            shape: CursorShape::Bar,
-            visible: true,
-        });
-        let output = String::from_utf8(diff(&mut current, &previous)).unwrap();
-        assert!(output.contains("\x1b[3;4H"), "{output:?}");
-        assert!(output.contains("\x1b[6 q"), "{output:?}");
-        assert!(output.contains("\x1b[?25h"), "{output:?}");
+        current.set_cursor(cursor(3, 4, CursorShape::Bar, true));
+        let output = diff(&mut current, &previous);
+        assert!(output.ends_with("\x1b[3;4H\x1b[?12l\x1b[6 q\x1b[?25h\x1b[?2026l"));
     }
 
     #[test]
     fn a_hidden_cursor_stays_hidden_but_still_takes_its_position() {
         let mut previous = frame(2, 4);
-        previous.set_cursor(FrameCursor {
-            row: 1,
-            col: 1,
-            shape: CursorShape::Block,
-            visible: true,
-        });
+        previous.set_cursor(cursor(1, 1, CursorShape::Block, true));
         let mut current = frame(2, 4);
-        current.set_cursor(FrameCursor {
-            row: 2,
-            col: 3,
-            shape: CursorShape::Block,
-            visible: false,
-        });
-        let output = String::from_utf8(diff(&mut current, &previous)).unwrap();
-        assert!(output.contains("\x1b[?25l"), "{output:?}");
+        current.set_cursor(cursor(2, 3, CursorShape::Block, false));
+        let output = diff(&mut current, &previous);
         assert!(!output.contains("\x1b[?25h"), "{output:?}");
         // Invisible, but still moved: painting must not leave it on whatever
         // drew last.
-        assert!(output.contains("\x1b[2;3H"), "{output:?}");
+        assert!(output.ends_with("\x1b[2;3H\x1b[?2026l"), "{output:?}");
     }
 
     #[test]
@@ -1030,129 +991,67 @@ mod tests {
         let previous = frame(3, 20);
         let mut current = frame(3, 20);
         // A bar across the bottom, the way an overlay paints last.
-        current.set_text(3, 1, "status bar", CellAttributes::default());
-        current.set_cursor(FrameCursor {
-            row: 1,
-            col: 5,
-            shape: CursorShape::Block,
-            visible: true,
-        });
-        let output = String::from_utf8(diff(&mut current, &previous)).unwrap();
+        current.set_text(3, 1, "status bar", PLAIN);
+        current.set_cursor(cursor(1, 5, CursorShape::Block, true));
+        let output = diff(&mut current, &previous);
         assert!(output.ends_with("\x1b[1;5H\x1b[?12l\x1b[2 q\x1b[?25h\x1b[?2026l"));
     }
 
     #[test]
     fn wide_characters_repaint_as_one_unit() {
-        let previous = frame(1, 6);
         let mut current = frame(1, 6);
-        current.set_wide_cell(1, 3, "世", CellAttributes::default());
-        let output = String::from_utf8(diff(&mut current, &previous)).unwrap();
-        assert!(output.contains("世"), "{output:?}");
-        // The continuation cell is never emitted on its own.
+        current.set_wide_cell(1, 3, "世", PLAIN);
         let mut later = frame(1, 6);
-        later.set_wide_cell(1, 3, "界", CellAttributes::default());
-        let output = String::from_utf8(diff(&mut later, &current)).unwrap();
-        assert!(output.contains("\x1b[1;3H"), "{output:?}");
-        assert!(output.contains("界"), "{output:?}");
-    }
-
-    #[test]
-    fn a_resize_repaints_the_whole_screen() {
-        let mut previous = frame(4, 4);
-        previous.set_text(1, 1, "keep", CellAttributes::default());
-        let mut current = frame(4, 8);
-        current.set_text(1, 1, "keep", CellAttributes::default());
-        let output = String::from_utf8(diff(&mut current, &previous)).unwrap();
-        assert!(output.contains("\x1b[2J"), "{output:?}");
+        later.set_wide_cell(1, 3, "界", PLAIN);
+        let output = diff(&mut later, &current);
+        assert!(
+            output.contains("\x1b[1;3H\x1b[0;39;49m界\x1b"),
+            "{output:?}"
+        );
     }
 
     #[test]
     fn attributes_are_written_once_per_run() {
-        let attributes = CellAttributes::colors((1, 2, 3), (4, 5, 6));
         let mut current = frame(1, 4);
-        current.set_text(1, 1, "abcd", attributes);
-        let output = String::from_utf8(diff(&mut current, &Frame::default())).unwrap();
+        current.set_text(1, 1, "abcd", CellAttributes::colors((1, 2, 3), (4, 5, 6)));
+        let output = diff(&mut current, &Frame::default());
         assert_eq!(output.matches("38;2;1;2;3").count(), 1, "{output:?}");
     }
 
     #[test]
-    fn curly_underlines_survive_a_pane_repaint() {
-        let mut parser = vt100::Parser::new(1, 5, 0);
-        parser.process(b"\x1b[4:3;58:2::255:0:0mwave");
-        let cell = parser.screen().cell(0, 0).unwrap();
-        assert_eq!(cell.underline_style(), vt100::UnderlineStyle::Curly);
-        assert_eq!(cell.underline_color(), vt100::Color::Rgb(255, 0, 0));
-
-        let mut current = frame(1, 5);
-        current.set_text(1, 1, "wave", CellAttributes::from(&cell));
-        let output = String::from_utf8(diff(&mut current, &Frame::default())).unwrap();
-        assert!(output.contains("4:3"), "{output:?}");
-        assert!(output.contains("58:2::255:0:0"), "{output:?}");
-    }
-
-    #[test]
-    fn interface_text_uses_terminal_cell_widths() {
+    fn interface_text_uses_terminal_cell_widths_and_drops_controls() {
         let mut current = frame(1, 6);
-        assert_eq!(
-            current.set_text(1, 1, "A界e\u{301}", CellAttributes::default()),
-            5
-        );
-
-        let mut parser = vt100::Parser::new(1, 6, 0);
-        parser.process(&diff(&mut current, &Frame::default()));
+        assert_eq!(current.set_text(1, 1, "A\x1b界\ne\u{301}", PLAIN), 5);
+        let parser = render(&mut current);
         assert_eq!(parser.screen().contents().trim_end(), "A界e\u{301}");
         assert!(parser.screen().cell(0, 1).unwrap().is_wide());
         assert!(parser.screen().cell(0, 2).unwrap().is_wide_continuation());
     }
 
     #[test]
-    fn interface_text_does_not_emit_control_characters() {
-        let mut current = frame(1, 4);
-        current.set_text(1, 1, "a\x1b\nb", CellAttributes::default());
-
-        let mut parser = vt100::Parser::new(1, 4, 0);
-        parser.process(&diff(&mut current, &Frame::default()));
-        assert_eq!(parser.screen().contents().trim_end(), "ab");
-    }
-
-    #[test]
     fn overwriting_either_half_clears_the_old_wide_character() {
-        let attributes = CellAttributes::default();
         let mut current = frame(1, 4);
-        current.set_wide_cell(1, 2, "界", attributes);
-        current.set_cell(1, 2, "a", attributes);
-        assert!(!current.cells[current.index(1, 3).unwrap()].continuation);
+        let cell = |frame: &Frame, col| frame.cells[frame.index(1, col).unwrap()];
+        current.set_wide_cell(1, 2, "界", PLAIN);
+        current.set_cell(1, 2, "a", PLAIN);
+        assert!(!cell(&current, 3).continuation);
 
-        current.set_wide_cell(1, 2, "界", attributes);
-        current.set_cell(1, 3, "b", attributes);
-        assert_eq!(
-            current.cells[current.index(1, 2).unwrap()],
-            FrameCell::default()
-        );
+        current.set_wide_cell(1, 2, "界", PLAIN);
+        current.set_cell(1, 3, "b", PLAIN);
+        assert_eq!(cell(&current, 2), FrameCell::default());
+
+        // An overlapping wide glyph clears the previous one's trailing half.
+        current.set_wide_cell(1, 2, "界", PLAIN);
+        current.set_wide_cell(1, 1, "語", PLAIN);
+        assert_eq!(cell(&current, 3), FrameCell::default());
+        assert_eq!(render(&mut current).screen().contents().trim_end(), "語");
     }
 
     #[test]
     fn a_wide_character_is_not_painted_without_two_cells() {
         let mut current = frame(1, 2);
-        assert_eq!(current.set_text(1, 2, "界", CellAttributes::default()), 2);
-        assert_eq!(
-            current.cells[current.index(1, 2).unwrap()],
-            FrameCell::default()
-        );
-    }
-
-    #[test]
-    fn an_overlapping_wide_glyph_clears_the_previous_trailing_half() {
-        let mut current = frame(1, 4);
-        current.set_wide_cell(1, 2, "界", CellAttributes::default());
-        current.set_wide_cell(1, 1, "語", CellAttributes::default());
-        assert_eq!(
-            current.cells[current.index(1, 3).unwrap()],
-            FrameCell::default()
-        );
-        let mut parser = vt100::Parser::new(1, 4, 0);
-        parser.process(&diff(&mut current, &Frame::default()));
-        assert_eq!(parser.screen().contents().trim_end(), "語");
+        assert_eq!(current.set_text(1, 2, "界", PLAIN), 2);
+        assert_eq!(current.cells[1], FrameCell::default());
     }
 
     #[test]
@@ -1168,49 +1067,64 @@ mod tests {
         assert!(width_is_uncertain("\u{e010}".as_bytes()));
 
         let mut current = frame(1, 8);
-        current.set_text(1, 1, "a─b中c", CellAttributes::default());
-        let output = String::from_utf8(diff(&mut current, &Frame::default())).unwrap();
+        current.set_text(1, 1, "a─b中c", PLAIN);
+        let output = diff(&mut current, &Frame::default());
         assert!(output.contains("─\x1b[3Gb"), "{output:?}");
         assert!(output.contains("中c"), "{output:?}");
     }
 
     #[test]
-    fn a_full_repaint_turns_autowrap_off_first() {
-        let mut current = frame(2, 2);
-        current.set_text(2, 2, "x", CellAttributes::default());
-        let output = String::from_utf8(diff(&mut current, &Frame::default())).unwrap();
-        let autowrap = output.find("\x1b[?7l").expect("autowrap left on");
-        assert!(autowrap < output.find('x').unwrap(), "{output:?}");
-    }
-
-    #[test]
-    fn a_terminal_without_styled_underlines_gets_a_plain_one() {
-        let attributes = CellAttributes {
-            underline: vt100::UnderlineStyle::Curly,
-            underline_color: vt100::Color::Rgb(255, 0, 0),
-            ..CellAttributes::default()
-        };
+    fn styled_underlines_are_sent_only_to_terminals_that_draw_them() {
+        // Parsed the way a pane's program would send it.
+        let mut parser = vt100::Parser::new(1, 5, 0);
+        parser.process(b"\x1b[4:3;58:2::255:0:0mwave");
+        let attributes = CellAttributes::from(&parser.screen().cell(0, 0).unwrap());
         let plain = TerminalFeatures {
             styled_underlines: false,
             ..TerminalFeatures::FULL
         };
-        let mut output = Vec::new();
-        write_cell_attributes(&mut output, attributes, plain);
-        assert_eq!(output, b"\x1b[0;4;39;49m");
-        output.clear();
-        write_cell_attributes(&mut output, attributes, TerminalFeatures::FULL);
-        assert_eq!(output, b"\x1b[0;4:3;39;49;58:2::255:0:0m");
+        assert_eq!(attributes_written(attributes, plain), "\x1b[0;4;39;49m");
+        assert_eq!(
+            attributes_written(attributes, TerminalFeatures::FULL),
+            "\x1b[0;4:3;39;49;58:2::255:0:0m"
+        );
+        let indexed = CellAttributes {
+            underline_color: vt100::Color::Idx(200),
+            ..attributes
+        };
+        assert_eq!(
+            attributes_written(indexed, TerminalFeatures::FULL),
+            "\x1b[0;4:3;39;49;58:5:200m"
+        );
     }
 
     #[test]
-    fn the_basic_colours_use_their_own_codes() {
-        let mut output = Vec::new();
+    fn every_attribute_and_basic_colour_has_its_own_code() {
         let attributes = CellAttributes {
             foreground: vt100::Color::Idx(1),
             background: vt100::Color::Idx(12),
-            ..CellAttributes::default()
+            bold: true,
+            dim: true,
+            italic: true,
+            underline: vt100::UnderlineStyle::Straight,
+            inverse: true,
+            strikethrough: true,
+            blink: true,
+            hidden: true,
+            overline: true,
+            ..PLAIN
         };
-        write_cell_attributes(&mut output, attributes, TerminalFeatures::FULL);
-        assert_eq!(output, b"\x1b[0;31;104m");
+        assert_eq!(
+            attributes_written(attributes, TerminalFeatures::FULL),
+            "\x1b[0;1;2;3;4;5;7;8;9;53;31;104m"
+        );
+        let indexed = CellAttributes {
+            foreground: vt100::Color::Idx(100),
+            ..PLAIN
+        };
+        assert_eq!(
+            attributes_written(indexed, TerminalFeatures::FULL),
+            "\x1b[0;38;5;100;49m"
+        );
     }
 }

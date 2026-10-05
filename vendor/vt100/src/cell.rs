@@ -5,7 +5,7 @@ const CONTENT_BYTES: usize = 22;
 
 const IS_WIDE: u8 = 0b1000_0000;
 const IS_WIDE_CONTINUATION: u8 = 0b0100_0000;
-pub(crate) const LEN_BITS: u8 = 0b0001_1111;
+pub const LEN_BITS: u8 = 0b0001_1111;
 
 /// Represents a single terminal cell.
 #[derive(Clone, Debug, Eq)]
@@ -16,16 +16,12 @@ pub struct Cell {
 }
 const _: () = assert!(std::mem::size_of::<Cell>() <= 40);
 
+// Bytes past the length are stale and do not count.
 impl PartialEq<Self> for Cell {
     fn eq(&self, other: &Self) -> bool {
-        if self.len != other.len {
-            return false;
-        }
-        if self.attrs != other.attrs {
-            return false;
-        }
-        let len = self.len();
-        self.contents[..len] == other.contents[..len]
+        self.len == other.len
+            && self.attrs == other.attrs
+            && self.contents[..self.len()] == other.contents[..self.len()]
     }
 }
 
@@ -38,15 +34,12 @@ impl Cell {
         }
     }
 
+    /// The length byte, with its wide flags, as packed rows store it.
     pub(crate) fn compact_len(&self) -> u8 {
         self.len
     }
 
-    pub(crate) fn from_compact(
-        contents: &[u8],
-        len: u8,
-        attrs: crate::attrs::Attrs,
-    ) -> Self {
+    pub(crate) fn from_compact(contents: &[u8], len: u8, attrs: crate::attrs::Attrs) -> Self {
         let content_len = usize::from(len & LEN_BITS);
         let mut compact = Self {
             contents: [0; CONTENT_BYTES],
@@ -64,10 +57,11 @@ impl Cell {
     pub(crate) fn set(&mut self, c: char, a: crate::attrs::Attrs) {
         self.len = 0;
         self.append_char(0, c);
-        // strings in this context should always be an arbitrary character
-        // followed by zero or more zero-width characters, so we should only
-        // have to look at the first character
-        self.set_wide(c.width().unwrap_or(1) > 1);
+        // A cell holds one character and the zero-width ones combined with
+        // it, so the first one decides the width.
+        if c.width().unwrap_or(1) > 1 {
+            self.len |= IS_WIDE;
+        }
         self.attrs = a;
     }
 
@@ -85,8 +79,7 @@ impl Cell {
         self.append_char(self.len(), c);
     }
 
-    // Writes bytes representing c at start
-    // Requires caller to verify start <= CODEPOINTS_IN_CELL * 4
+    // The caller makes sure there is room for four more bytes at `start`.
     fn append_char(&mut self, start: usize, c: char) {
         c.encode_utf8(&mut self.contents[start..]);
         self.len += u8::try_from(c.len_utf8()).unwrap();
@@ -129,20 +122,8 @@ impl Cell {
         self.len & IS_WIDE_CONTINUATION != 0
     }
 
-    fn set_wide(&mut self, wide: bool) {
-        if wide {
-            self.len |= IS_WIDE;
-        } else {
-            self.len &= !IS_WIDE;
-        }
-    }
-
-    pub(crate) fn set_wide_continuation(&mut self, wide: bool) {
-        if wide {
-            self.len |= IS_WIDE_CONTINUATION;
-        } else {
-            self.len &= !IS_WIDE_CONTINUATION;
-        }
+    pub(crate) fn set_wide_continuation(&mut self) {
+        self.len |= IS_WIDE_CONTINUATION;
     }
 
     pub(crate) fn attrs(&self) -> &crate::attrs::Attrs {

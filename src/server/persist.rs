@@ -13,7 +13,7 @@ use std::{
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -22,7 +22,7 @@ use nix::{
     fcntl::{Flock, FlockArg},
 };
 use portable_pty::CommandBuilder;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::layout::{EVEN_SPLIT, PaneLayout, SplitAxis};
 
@@ -52,6 +52,9 @@ add-zsh-hook precmd _mux_prompt_start
 add-zle-hook-widget line-init _mux_prompt_ready
 unset MUX_ORIGINAL_ZDOTDIR
 "#;
+
+const ZSH_STARTUP_FILES: [(&str, &str); 2] =
+    [(".zshenv", ZSHENV_WRAPPER), (".zshrc", ZSHRC_WRAPPER)];
 
 #[derive(Deserialize, Serialize)]
 pub(super) struct PersistedState {
@@ -176,26 +179,25 @@ pub(super) struct PersistedPane {
     pub(super) cols: u16,
 }
 
+/// Decodes a whole state file, which must hold nothing after the state.
+fn decode_exact<T: DeserializeOwned>(bytes: &[u8], what: &'static str) -> Result<T> {
+    let (value, used) =
+        bincode::serde::decode_from_slice(bytes, bincode::config::standard()).context(what)?;
+    if used != bytes.len() {
+        bail!("mux state contains trailing bytes");
+    }
+    Ok(value)
+}
+
 pub(super) fn decode_persisted_state(bytes: &[u8]) -> Result<PersistedState> {
-    let config = bincode::config::standard();
     let (version, _): (u32, usize) =
-        bincode::serde::decode_from_slice(bytes, config).context("decode mux state version")?;
+        bincode::serde::decode_from_slice(bytes, bincode::config::standard())
+            .context("decode mux state version")?;
     match version {
-        STATE_VERSION => {
-            let (state, used): (PersistedState, usize) =
-                bincode::serde::decode_from_slice(bytes, config).context("decode mux state")?;
-            if used != bytes.len() {
-                bail!("mux state contains trailing bytes");
-            }
-            Ok(state)
-        }
+        STATE_VERSION => decode_exact(bytes, "decode mux state"),
         EVEN_SPLIT_STATE_VERSION => {
-            let (legacy, used): (PersistedStateV2, usize) =
-                bincode::serde::decode_from_slice(bytes, config)
-                    .context("decode mux state saved before resizable splits")?;
-            if used != bytes.len() {
-                bail!("mux state contains trailing bytes");
-            }
+            let legacy: PersistedStateV2 =
+                decode_exact(bytes, "decode mux state saved before resizable splits")?;
             Ok(PersistedState {
                 version: STATE_VERSION,
                 next_session_id: legacy.next_session_id,
@@ -205,12 +207,7 @@ pub(super) fn decode_persisted_state(bytes: &[u8]) -> Result<PersistedState> {
             })
         }
         LEGACY_STATE_VERSION => {
-            let (legacy, used): (PersistedStateV1, usize) =
-                bincode::serde::decode_from_slice(bytes, config)
-                    .context("decode legacy mux state")?;
-            if used != bytes.len() {
-                bail!("mux state contains trailing bytes");
-            }
+            let legacy: PersistedStateV1 = decode_exact(bytes, "decode legacy mux state")?;
             Ok(PersistedState {
                 version: STATE_VERSION,
                 next_session_id: legacy.next_session_id,
@@ -223,6 +220,7 @@ pub(super) fn decode_persisted_state(bytes: &[u8]) -> Result<PersistedState> {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct Persistence {
     pub(super) directory: PathBuf,
     pub(super) state_file: PathBuf,
@@ -307,10 +305,7 @@ impl Persistence {
     }
 
     pub(super) fn state_writer(&self) -> StateWriter {
-        let persistence = Self {
-            directory: self.directory.clone(),
-            state_file: self.state_file.clone(),
-        };
+        let persistence = self.clone();
         let (sender, receiver) = mpsc::sync_channel(1);
         let pending = Arc::new(Mutex::new(None));
         let (failure_sender, failures) = mpsc::channel();
@@ -337,10 +332,7 @@ impl Persistence {
             .with_context(|| format!("create pane history {}", path.display()))?;
         set_private_permissions(&path)?;
         drop(file);
-        OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .with_context(|| format!("open pane history {}", path.display()))
+        append_to(&path, "open")
     }
 
     /// Creates an unlinked file for scrollback blocks. The open handle keeps
@@ -383,10 +375,7 @@ impl Persistence {
             .with_context(|| format!("open pane history {}", path.display()))?;
         file.set_len(valid_length)?;
         drop(file);
-        OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .with_context(|| format!("resume pane history {}", path.display()))
+        append_to(&path, "resume")
     }
 
     /// Removes a closed pane's history. A journal that is already gone is the
@@ -403,55 +392,57 @@ impl Persistence {
     }
 }
 
+fn append_to(path: &Path, action: &str) -> Result<File> {
+    OpenOptions::new()
+        .append(true)
+        .open(path)
+        .with_context(|| format!("{action} pane history {}", path.display()))
+}
+
+/// Saves a burst of changes once it settles, and at least once per
+/// `STATE_SAVE_MAX_DELAY` while changes keep arriving.
 fn state_writer(
     persistence: Persistence,
     receiver: Receiver<StateCommand>,
     pending: Arc<Mutex<Option<PersistedState>>>,
     failures: mpsc::Sender<String>,
 ) {
+    // Once the daemon has gone, the failure report simply goes nowhere.
+    let save_pending = || {
+        let state = pending.lock().unwrap().take();
+        if let Some(state) = state
+            && let Err(error) = persistence.save(&state)
+        {
+            let _ = failures.send(format!("{error:#}"));
+        }
+    };
     while let Ok(command) = receiver.recv() {
-        match command {
-            StateCommand::Save => {
-                let deadline = std::time::Instant::now() + STATE_SAVE_MAX_DELAY;
-                loop {
-                    if std::time::Instant::now() >= deadline {
-                        let state = pending.lock().unwrap().take();
-                        if let Some(state) = state
-                            && let Err(error) = persistence.save(&state)
-                        {
-                            let _ = failures.send(format!("{error:#}"));
-                        }
-                        break;
-                    }
-                    let timeout = STATE_SAVE_DEBOUNCE
-                        .min(deadline.saturating_duration_since(std::time::Instant::now()));
-                    match receiver.recv_timeout(timeout) {
-                        Ok(StateCommand::Save) => {}
-                        Ok(StateCommand::Flush(final_state, reply)) => {
-                            pending.lock().unwrap().take();
-                            let _ = reply.send(persistence.save(&final_state));
-                            break;
-                        }
-                        Err(mpsc::RecvTimeoutError::Timeout) => {
-                            let state = pending.lock().unwrap().take();
-                            if let Some(state) = state
-                                && let Err(error) = persistence.save(&state)
-                            {
-                                let _ = failures.send(format!("{error:#}"));
-                            }
-                            break;
-                        }
-                        Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            if let Some(state) = pending.lock().unwrap().take() {
-                                let _ = persistence.save(&state);
-                            }
-                            return;
-                        }
-                    }
-                }
+        if let StateCommand::Flush(state, reply) = command {
+            let _ = reply.send(persistence.save(&state));
+            continue;
+        }
+        let deadline = Instant::now() + STATE_SAVE_MAX_DELAY;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                save_pending();
+                break;
             }
-            StateCommand::Flush(state, reply) => {
-                let _ = reply.send(persistence.save(&state));
+            match receiver.recv_timeout(STATE_SAVE_DEBOUNCE.min(remaining)) {
+                Ok(StateCommand::Save) => {}
+                Ok(StateCommand::Flush(final_state, reply)) => {
+                    pending.lock().unwrap().take();
+                    let _ = reply.send(persistence.save(&final_state));
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    save_pending();
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    save_pending();
+                    return;
+                }
             }
         }
     }
@@ -493,14 +484,13 @@ impl ZshStartup {
     pub(super) fn create(state_directory: &Path) -> Result<Self> {
         let directory = state_directory.join("zsh-startup");
         private_directory(&directory)?;
-        let zshenv = directory.join(".zshenv");
-        let zshrc = directory.join(".zshrc");
-        fs::write(&zshenv, ZSHENV_WRAPPER)?;
-        fs::write(&zshrc, ZSHRC_WRAPPER)?;
-        set_private_permissions(&zshenv)?;
-        set_private_permissions(&zshrc)?;
-        let original_zdotdir = std::env::var_os("ZDOTDIR")
-            .or_else(|| std::env::var_os("HOME"))
+        for (name, contents) in ZSH_STARTUP_FILES {
+            let path = directory.join(name);
+            fs::write(&path, contents)?;
+            set_private_permissions(&path)?;
+        }
+        let original_zdotdir = env::var_os("ZDOTDIR")
+            .or_else(|| env::var_os("HOME"))
             .context("neither ZDOTDIR nor HOME is set")?;
         Ok(Self {
             directory,
@@ -516,13 +506,13 @@ impl ZshStartup {
 
 impl Drop for ZshStartup {
     fn drop(&mut self) {
-        let _ = fs::remove_file(self.directory.join(".zshenv"));
-        let _ = fs::remove_file(self.directory.join(".zshrc"));
+        for (name, _) in ZSH_STARTUP_FILES {
+            let _ = fs::remove_file(self.directory.join(name));
+        }
         let _ = fs::remove_dir(&self.directory);
     }
 }
 
-#[cfg(unix)]
 pub(super) fn set_private_permissions(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
@@ -582,7 +572,6 @@ pub(super) fn private_directory(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod writer_tests {
     use super::*;
-    use std::time::{Duration, Instant};
 
     fn empty_state(sequence: usize) -> PersistedState {
         PersistedState {

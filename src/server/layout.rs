@@ -127,10 +127,7 @@ impl PaneLayout {
         if *split_axis != axis || !(first.contains(pane_id) || second.contains(pane_id)) {
             return false;
         }
-        let total = match axis {
-            SplitAxis::Horizontal => area.rows,
-            SplitAxis::Vertical => area.cols,
-        };
+        let total = axis.extent(area);
         let (current, divider, _) = split_extent(total, *ratio);
         if divider == 0 {
             // Two rows or fewer: there is no divider to move.
@@ -168,6 +165,16 @@ impl PaneLayout {
 pub(super) enum SplitAxis {
     Horizontal,
     Vertical,
+}
+
+impl SplitAxis {
+    /// How far `area` reaches along the direction this axis splits.
+    fn extent(self, area: Rect) -> u16 {
+        match self {
+            Self::Horizontal => area.rows,
+            Self::Vertical => area.cols,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -419,28 +426,23 @@ fn collect_pane_layout(
         } => {
             let (first_area, second_area) = split_areas(*axis, *ratio, area);
             collect_pane_layout(first, first_area, panes, dividers);
-            let divider = match axis {
-                SplitAxis::Horizontal => Divider {
-                    row: area.row + first_area.rows,
-                    col: area.col,
-                    rows: 1,
-                    cols: area.cols,
-                    axis: *axis,
-                },
-                SplitAxis::Vertical => Divider {
-                    row: area.row,
-                    col: area.col + first_area.cols,
-                    rows: area.rows,
-                    cols: 1,
-                    axis: *axis,
-                },
-            };
-            let has_divider = match axis {
-                SplitAxis::Horizontal => split_extent(area.rows, *ratio).1 > 0,
-                SplitAxis::Vertical => split_extent(area.cols, *ratio).1 > 0,
-            };
-            if has_divider {
-                dividers.push(divider);
+            if split_extent(axis.extent(area), *ratio).1 > 0 {
+                dividers.push(match axis {
+                    SplitAxis::Horizontal => Divider {
+                        row: area.row + first_area.rows,
+                        col: area.col,
+                        rows: 1,
+                        cols: area.cols,
+                        axis: *axis,
+                    },
+                    SplitAxis::Vertical => Divider {
+                        row: area.row,
+                        col: area.col + first_area.cols,
+                        rows: area.rows,
+                        cols: 1,
+                        axis: *axis,
+                    },
+                });
             }
             collect_pane_layout(second, second_area, panes, dividers);
         }
@@ -502,48 +504,37 @@ pub(super) fn neighboring_pane(
     previous_pane: Option<usize>,
     direction: PaneDirection,
 ) -> Option<usize> {
+    // A rect's span along the direction of travel, then across it.
+    let spans = |rect: &Rect| match direction {
+        PaneDirection::Left | PaneDirection::Right => {
+            ((rect.col, rect.cols), (rect.row, rect.rows))
+        }
+        PaneDirection::Up | PaneDirection::Down => ((rect.row, rect.rows), (rect.col, rect.cols)),
+    };
+    let forward = matches!(direction, PaneDirection::Right | PaneDirection::Down);
     let active = regions
         .iter()
         .find_map(|(pane_id, rect)| (*pane_id == active_pane).then_some(*rect))?;
+    let ((active_start, active_length), (active_cross, active_cross_length)) = spans(&active);
     regions
         .iter()
         .filter(|(pane_id, rect)| *pane_id != active_pane && rect.rows > 0 && rect.cols > 0)
         .filter_map(|(pane_id, rect)| {
-            let (in_direction, distance, overlap, center_distance) = match direction {
-                PaneDirection::Left => (
-                    rect.col + rect.cols <= active.col,
-                    active.col.saturating_sub(rect.col + rect.cols),
-                    ranges_overlap(rect.row, rect.rows, active.row, active.rows),
-                    center_distance(rect.row, rect.rows, active.row, active.rows),
-                ),
-                PaneDirection::Right => (
-                    active.col + active.cols <= rect.col,
-                    rect.col.saturating_sub(active.col + active.cols),
-                    ranges_overlap(rect.row, rect.rows, active.row, active.rows),
-                    center_distance(rect.row, rect.rows, active.row, active.rows),
-                ),
-                PaneDirection::Up => (
-                    rect.row + rect.rows <= active.row,
-                    active.row.saturating_sub(rect.row + rect.rows),
-                    ranges_overlap(rect.col, rect.cols, active.col, active.cols),
-                    center_distance(rect.col, rect.cols, active.col, active.cols),
-                ),
-                PaneDirection::Down => (
-                    active.row + active.rows <= rect.row,
-                    rect.row.saturating_sub(active.row + active.rows),
-                    ranges_overlap(rect.col, rect.cols, active.col, active.cols),
-                    center_distance(rect.col, rect.cols, active.col, active.cols),
-                ),
+            let ((start, length), (cross, cross_length)) = spans(rect);
+            // The edge nearer the active pane must not pass the far one.
+            let (near, far) = if forward {
+                (active_start + active_length, start)
+            } else {
+                (start + length, active_start)
             };
-            in_direction.then_some((
-                (
-                    !overlap,
-                    distance,
-                    Some(*pane_id) != previous_pane,
-                    center_distance,
-                ),
-                *pane_id,
-            ))
+            let overlap = ranges_overlap(cross, cross_length, active_cross, active_cross_length);
+            let score = (
+                !overlap,
+                far.saturating_sub(near),
+                Some(*pane_id) != previous_pane,
+                center_distance(cross, cross_length, active_cross, active_cross_length),
+            );
+            (near <= far).then_some((score, *pane_id))
         })
         .min_by_key(|(score, _)| *score)
         .map(|(_, pane_id)| pane_id)

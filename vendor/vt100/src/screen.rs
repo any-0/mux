@@ -1,4 +1,4 @@
-use crate::term::BufWrite as _;
+use crate::grid::Pos;
 use unicode_width::UnicodeWidthChar as _;
 
 const MODE_APPLICATION_KEYPAD: u8 = 0b0000_0001;
@@ -24,50 +24,16 @@ enum Charset {
 
 impl Charset {
     fn translate(self, c: char) -> char {
-        match self {
-            Self::Ascii => c,
-            Self::Uk => {
-                if c == '#' {
-                    '£'
-                } else {
-                    c
-                }
+        match (self, c) {
+            (Self::Uk, '#') => '£',
+            (Self::DecGraphics, '_'..='~') => {
+                const GRAPHICS: [char; 32] = [
+                    ' ', '◆', '▒', '␉', '␌', '␍', '␊', '°', '±', '␤', '␋', '┘', '┐', '┌', '└', '┼',
+                    '⎺', '⎻', '─', '⎼', '⎽', '├', '┤', '┴', '┬', '│', '≤', '≥', 'π', '≠', '£', '·',
+                ];
+                GRAPHICS[usize::from(u8::try_from(c).unwrap() - b'_')]
             }
-            Self::DecGraphics => match c {
-                '_' => ' ',
-                '`' => '◆',
-                'a' => '▒',
-                'b' => '␉',
-                'c' => '␌',
-                'd' => '␍',
-                'e' => '␊',
-                'f' => '°',
-                'g' => '±',
-                'h' => '␤',
-                'i' => '␋',
-                'j' => '┘',
-                'k' => '┐',
-                'l' => '┌',
-                'm' => '└',
-                'n' => '┼',
-                'o' => '⎺',
-                'p' => '⎻',
-                'q' => '─',
-                'r' => '⎼',
-                's' => '⎽',
-                't' => '├',
-                'u' => '┤',
-                'v' => '┴',
-                'w' => '┬',
-                'x' => '│',
-                'y' => '≤',
-                'z' => '≥',
-                '{' => 'π',
-                '|' => '≠',
-                '}' => '£',
-                '~' => '·',
-                _ => c,
-            },
+            _ => c,
         }
     }
 }
@@ -80,7 +46,7 @@ struct Charsets {
 }
 
 impl Charsets {
-    fn translate(&self, c: char) -> char {
+    fn translate(self, c: char) -> char {
         if c.is_ascii() {
             self.designated[usize::from(self.shifted_out)].translate(c)
         } else {
@@ -89,8 +55,8 @@ impl Charsets {
     }
 }
 
-fn default_tab_stops(cols: u16) -> Vec<bool> {
-    (0..cols).map(|col| col > 0 && col % 8 == 0).collect()
+fn default_tab_stop(col: usize) -> bool {
+    col > 0 && col % 8 == 0
 }
 
 /// The xterm mouse handling mode currently in use.
@@ -108,7 +74,6 @@ pub enum MouseProtocolMode {
     /// Also known as VT200 mouse mode.
     PressRelease,
 
-    // Highlight,
     /// Mouse button events should be reported on button press and release, as
     /// well as when the mouse moves between cells while a button is held
     /// down.
@@ -118,7 +83,6 @@ pub enum MouseProtocolMode {
     /// and mouse motion events should be reported when the mouse moves
     /// between cells regardless of whether a button is held down or not.
     AnyMotion,
-    // DecLocator,
 }
 
 /// The encoding to use for the enabled [`MouseProtocolMode`].
@@ -133,7 +97,17 @@ pub enum MouseProtocolEncoding {
 
     /// SGR-like encoding.
     Sgr,
-    // Urxvt,
+}
+
+/// How an extended colour SGR (38, 48 or 58) turned out.
+enum ExtendedColor {
+    Color(crate::Color),
+    /// Not understood; the rest of the SGR still applies.
+    Unhandled,
+    /// Malformed; the rest of the SGR is dropped.
+    Abort,
+    /// Not understood, and the rest of the SGR is dropped.
+    UnhandledAbort,
 }
 
 /// Represents the overall terminal state.
@@ -154,7 +128,7 @@ pub struct Screen {
     /// Where the last character with a width was drawn. Without autowrap the
     /// cursor stays on the last column after drawing there, and a combining
     /// mark that follows belongs to that cell rather than the one before it.
-    last_drawn: Option<crate::grid::Pos>,
+    last_drawn: Option<Pos>,
 
     modes: u8,
     mouse_protocol_mode: MouseProtocolMode,
@@ -162,23 +136,19 @@ pub struct Screen {
 }
 
 impl Screen {
-    pub(crate) fn new(
-        size: crate::grid::Size,
-        scrollback_len: usize,
-    ) -> Self {
-        let mut grid = crate::grid::Grid::new(size, scrollback_len);
+    pub(crate) fn new(size: crate::grid::Size, scrollback_len: usize) -> Self {
+        let mut grid = crate::grid::Grid::new(size, scrollback_len, true);
         grid.allocate_rows();
-        grid.set_reflow(true);
         Self {
             grid,
-            alternate_grid: crate::grid::Grid::new(size, 0),
+            alternate_grid: crate::grid::Grid::new(size, 0, false),
 
             attrs: crate::attrs::Attrs::default(),
             saved_attrs: [crate::attrs::Attrs::default(); 2],
 
             charsets: Charsets::default(),
             saved_charsets: [Charsets::default(); 2],
-            tab_stops: default_tab_stops(size.cols),
+            tab_stops: (0..usize::from(size.cols)).map(default_tab_stop).collect(),
             last_char: None,
             last_drawn: None,
 
@@ -194,10 +164,9 @@ impl Screen {
         self.alternate_grid
             .set_size(crate::grid::Size { rows, cols });
         let old_cols = self.tab_stops.len();
-        self.tab_stops.resize(usize::from(cols), false);
-        for col in old_cols..usize::from(cols) {
-            self.tab_stops[col] = col > 0 && col % 8 == 0;
-        }
+        self.tab_stops.truncate(usize::from(cols));
+        self.tab_stops
+            .extend((old_cols..usize::from(cols)).map(default_tab_stop));
     }
 
     /// Returns the current size of the terminal.
@@ -255,12 +224,8 @@ impl Screen {
     #[must_use]
     pub fn contents(&self) -> String {
         let mut contents = String::new();
-        self.write_contents(&mut contents);
+        self.grid().write_contents(&mut contents);
         contents
-    }
-
-    fn write_contents(&self, contents: &mut String) {
-        self.grid().write_contents(contents);
     }
 
     /// Returns the text contents of the terminal by row, restricted to the
@@ -270,11 +235,7 @@ impl Screen {
     /// text format.
     ///
     /// Newlines will not be included.
-    pub fn rows(
-        &self,
-        start: u16,
-        width: u16,
-    ) -> impl Iterator<Item = String> + '_ {
+    pub fn rows(&self, start: u16, width: u16) -> impl Iterator<Item = String> + '_ {
         self.grid().visible_rows().map(move |row| {
             let mut contents = String::new();
             row.write_contents(&mut contents, start, width, false);
@@ -282,86 +243,35 @@ impl Screen {
         })
     }
 
-    /// Returns the text contents of the terminal logically between two cells.
-    /// This will include the remainder of the starting row after `start_col`,
-    /// followed by the entire contents of the rows between `start_row` and
-    /// `end_row`, followed by the beginning of the `end_row` up until
-    /// `end_col`. This is useful for things like determining the contents of
-    /// a clipboard selection.
-    #[must_use]
-    pub fn contents_between(
-        &self,
-        start_row: u16,
-        start_col: u16,
-        end_row: u16,
-        end_col: u16,
-    ) -> String {
-        match start_row.cmp(&end_row) {
-            std::cmp::Ordering::Less => {
-                let (_, cols) = self.size();
-                let mut contents = String::new();
-                for (i, row) in self
-                    .grid()
-                    .visible_rows()
-                    .enumerate()
-                    .skip(usize::from(start_row))
-                    .take(usize::from(end_row) - usize::from(start_row) + 1)
-                {
-                    if i == usize::from(start_row) {
-                        row.write_contents(
-                            &mut contents,
-                            start_col,
-                            cols - start_col,
-                            false,
-                        );
-                        if !row.wrapped() {
-                            contents.push('\n');
-                        }
-                    } else if i == usize::from(end_row) {
-                        row.write_contents(&mut contents, 0, end_col, false);
-                    } else {
-                        row.write_contents(&mut contents, 0, cols, false);
-                        if !row.wrapped() {
-                            contents.push('\n');
-                        }
-                    }
-                }
-                contents
-            }
-            std::cmp::Ordering::Equal => {
-                if start_col < end_col {
-                    self.rows(start_col, end_col - start_col)
-                        .nth(usize::from(start_row))
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                }
-            }
-            std::cmp::Ordering::Greater => String::new(),
-        }
-    }
-
     /// Return escape codes sufficient to reproduce the entire contents of the
-    /// current terminal state. This is a convenience wrapper around
-    /// [`contents_formatted`](Self::contents_formatted) and
-    /// [`input_mode_formatted`](Self::input_mode_formatted).
+    /// current terminal state: its visible contents and its input modes
+    /// (application keypad and cursor, bracketed paste and xterm mouse
+    /// support).
     #[must_use]
     pub fn state_formatted(&self) -> Vec<u8> {
-        let mut contents = vec![];
-        self.write_contents_formatted(&mut contents);
-        self.write_input_mode_formatted(&mut contents);
+        let mut contents = self.contents_formatted();
+        self.write_input_mode(&mut contents, None);
         contents
     }
 
     /// Return escape codes sufficient to turn the terminal state of the
-    /// screen `prev` into the current terminal state. This is a convenience
-    /// wrapper around [`contents_diff`](Self::contents_diff) and
-    /// [`input_mode_diff`](Self::input_mode_diff).
+    /// screen `prev` into the current terminal state. This is the
+    /// [`contents_diff`](Self::contents_diff) followed by whatever input
+    /// modes changed.
     #[must_use]
     pub fn state_diff(&self, prev: &Self) -> Vec<u8> {
+        let mut contents = self.contents_diff(prev);
+        self.write_input_mode(&mut contents, Some(prev));
+        contents
+    }
+
+    /// The current drawing attributes as SGR sequences, relative to the
+    /// default attributes.
+    #[must_use]
+    pub fn attributes_formatted(&self) -> Vec<u8> {
         let mut contents = vec![];
-        self.write_contents_diff(&mut contents, prev);
-        self.write_input_mode_diff(&mut contents, prev);
+        self.attrs
+            .write_escape_code_diff(&mut contents, &crate::attrs::Attrs::default());
         contents
     }
 
@@ -373,53 +283,11 @@ impl Screen {
     #[must_use]
     pub fn contents_formatted(&self) -> Vec<u8> {
         let mut contents = vec![];
-        self.write_contents_formatted(&mut contents);
+        crate::term::hide_cursor(&mut contents, self.hide_cursor());
+        let prev_attrs = self.grid().write_contents_formatted(&mut contents);
+        self.attrs
+            .write_escape_code_diff(&mut contents, &prev_attrs);
         contents
-    }
-
-    fn write_contents_formatted(&self, contents: &mut Vec<u8>) {
-        crate::term::HideCursor::new(self.hide_cursor()).write_buf(contents);
-        let prev_attrs = self.grid().write_contents_formatted(contents);
-        self.attrs.write_escape_code_diff(contents, &prev_attrs);
-    }
-
-    /// Returns the formatted visible contents of the terminal by row,
-    /// restricted to the given subset of columns.
-    ///
-    /// Formatting information will be included inline as terminal escape
-    /// codes. The result will be suitable for feeding directly to a raw
-    /// terminal parser, and will result in the same visual output.
-    ///
-    /// You are responsible for positioning the cursor before printing each
-    /// row, and the final cursor position after displaying each row is
-    /// unspecified.
-    // the unwraps in this method shouldn't be reachable
-    #[allow(clippy::missing_panics_doc)]
-    pub fn rows_formatted(
-        &self,
-        start: u16,
-        width: u16,
-    ) -> impl Iterator<Item = Vec<u8>> + '_ {
-        let mut wrapping = false;
-        self.grid().visible_rows().enumerate().map(move |(i, row)| {
-            // number of rows in a grid is stored in a u16 (see Size), so
-            // visible_rows can never return enough rows to overflow here
-            let i = i.try_into().unwrap();
-            let mut contents = vec![];
-            row.write_contents_formatted(
-                &mut contents,
-                start,
-                width,
-                i,
-                wrapping,
-                None,
-                None,
-            );
-            if start == 0 && width == self.grid.size().cols {
-                wrapping = row.wrapped();
-            }
-            contents
-        })
     }
 
     /// Returns a terminal byte stream sufficient to turn the visible contents
@@ -435,175 +303,41 @@ impl Screen {
     #[must_use]
     pub fn contents_diff(&self, prev: &Self) -> Vec<u8> {
         let mut contents = vec![];
-        self.write_contents_diff(&mut contents, prev);
-        contents
-    }
-
-    fn write_contents_diff(&self, contents: &mut Vec<u8>, prev: &Self) {
         if self.hide_cursor() != prev.hide_cursor() {
-            crate::term::HideCursor::new(self.hide_cursor())
-                .write_buf(contents);
+            crate::term::hide_cursor(&mut contents, self.hide_cursor());
         }
-        let prev_attrs = self.grid().write_contents_diff(
+        let prev_attrs = self
+            .grid()
+            .write_contents_diff(&mut contents, prev.grid(), prev.attrs);
+        self.attrs
+            .write_escape_code_diff(&mut contents, &prev_attrs);
+        contents
+    }
+
+    /// Writes the input modes that differ from `prev`, or all of them.
+    fn write_input_mode(&self, contents: &mut Vec<u8>, prev: Option<&Self>) {
+        let modes: [(u8, &[u8], &[u8]); 3] = [
+            (MODE_APPLICATION_KEYPAD, b"\x1b=", b"\x1b>"),
+            (MODE_APPLICATION_CURSOR, b"\x1b[?1h", b"\x1b[?1l"),
+            (MODE_BRACKETED_PASTE, b"\x1b[?2004h", b"\x1b[?2004l"),
+        ];
+        for (mode, set, reset) in modes {
+            let on = self.mode(mode);
+            if prev.is_none_or(|prev| prev.mode(mode) != on) {
+                contents.extend_from_slice(if on { set } else { reset });
+            }
+        }
+        crate::term::mouse_protocol_mode(
             contents,
-            prev.grid(),
-            prev.attrs,
+            self.mouse_protocol_mode,
+            prev.map_or(MouseProtocolMode::None, |prev| prev.mouse_protocol_mode),
         );
-        self.attrs.write_escape_code_diff(contents, &prev_attrs);
-    }
-
-    /// Returns a sequence of terminal byte streams sufficient to turn the
-    /// visible contents of the subset of each row from `prev` (as described
-    /// by `start` and `width`) into the visible contents of the corresponding
-    /// row subset in `self`.
-    ///
-    /// You are responsible for positioning the cursor before printing each
-    /// row, and the final cursor position after displaying each row is
-    /// unspecified.
-    // the unwraps in this method shouldn't be reachable
-    #[allow(clippy::missing_panics_doc)]
-    pub fn rows_diff<'a>(
-        &'a self,
-        prev: &'a Self,
-        start: u16,
-        width: u16,
-    ) -> impl Iterator<Item = Vec<u8>> + 'a {
-        self.grid()
-            .visible_rows()
-            .zip(prev.grid().visible_rows())
-            .enumerate()
-            .map(move |(i, (row, prev_row))| {
-                // number of rows in a grid is stored in a u16 (see Size), so
-                // visible_rows can never return enough rows to overflow here
-                let i = i.try_into().unwrap();
-                let mut contents = vec![];
-                row.write_contents_diff(
-                    &mut contents,
-                    prev_row,
-                    start,
-                    width,
-                    i,
-                    false,
-                    false,
-                    crate::grid::Pos { row: i, col: start },
-                    crate::attrs::Attrs::default(),
-                );
-                contents
-            })
-    }
-
-    /// Returns terminal escape sequences sufficient to set the current
-    /// terminal's input modes.
-    ///
-    /// Supported modes are:
-    /// * application keypad
-    /// * application cursor
-    /// * bracketed paste
-    /// * xterm mouse support
-    #[must_use]
-    pub fn input_mode_formatted(&self) -> Vec<u8> {
-        let mut contents = vec![];
-        self.write_input_mode_formatted(&mut contents);
-        contents
-    }
-
-    fn write_input_mode_formatted(&self, contents: &mut Vec<u8>) {
-        crate::term::ApplicationKeypad::new(
-            self.mode(MODE_APPLICATION_KEYPAD),
-        )
-        .write_buf(contents);
-        crate::term::ApplicationCursor::new(
-            self.mode(MODE_APPLICATION_CURSOR),
-        )
-        .write_buf(contents);
-        crate::term::BracketedPaste::new(self.mode(MODE_BRACKETED_PASTE))
-            .write_buf(contents);
-        crate::term::MouseProtocolMode::new(
-            self.mouse_protocol_mode,
-            MouseProtocolMode::None,
-        )
-        .write_buf(contents);
-        crate::term::MouseProtocolEncoding::new(
-            self.mouse_protocol_encoding,
-            MouseProtocolEncoding::Default,
-        )
-        .write_buf(contents);
-    }
-
-    /// Returns terminal escape sequences sufficient to change the previous
-    /// terminal's input modes to the input modes enabled in the current
-    /// terminal.
-    #[must_use]
-    pub fn input_mode_diff(&self, prev: &Self) -> Vec<u8> {
-        let mut contents = vec![];
-        self.write_input_mode_diff(&mut contents, prev);
-        contents
-    }
-
-    fn write_input_mode_diff(&self, contents: &mut Vec<u8>, prev: &Self) {
-        if self.mode(MODE_APPLICATION_KEYPAD)
-            != prev.mode(MODE_APPLICATION_KEYPAD)
-        {
-            crate::term::ApplicationKeypad::new(
-                self.mode(MODE_APPLICATION_KEYPAD),
-            )
-            .write_buf(contents);
-        }
-        if self.mode(MODE_APPLICATION_CURSOR)
-            != prev.mode(MODE_APPLICATION_CURSOR)
-        {
-            crate::term::ApplicationCursor::new(
-                self.mode(MODE_APPLICATION_CURSOR),
-            )
-            .write_buf(contents);
-        }
-        if self.mode(MODE_BRACKETED_PASTE) != prev.mode(MODE_BRACKETED_PASTE)
-        {
-            crate::term::BracketedPaste::new(self.mode(MODE_BRACKETED_PASTE))
-                .write_buf(contents);
-        }
-        crate::term::MouseProtocolMode::new(
-            self.mouse_protocol_mode,
-            prev.mouse_protocol_mode,
-        )
-        .write_buf(contents);
-        crate::term::MouseProtocolEncoding::new(
-            self.mouse_protocol_encoding,
-            prev.mouse_protocol_encoding,
-        )
-        .write_buf(contents);
-    }
-
-    /// Returns terminal escape sequences sufficient to set the current
-    /// terminal's drawing attributes.
-    ///
-    /// Supported drawing attributes are:
-    /// * fgcolor
-    /// * bgcolor
-    /// * bold
-    /// * dim
-    /// * italic
-    /// * underline
-    /// * inverse
-    ///
-    /// This is not typically necessary, since
-    /// [`contents_formatted`](Self::contents_formatted) will leave
-    /// the current active drawing attributes in the correct state, but this
-    /// can be useful in the case of drawing additional things on top of a
-    /// terminal output, since you will need to restore the terminal state
-    /// without the terminal contents necessarily being the same.
-    #[must_use]
-    pub fn attributes_formatted(&self) -> Vec<u8> {
-        let mut contents = vec![];
-        self.write_attributes_formatted(&mut contents);
-        contents
-    }
-
-    fn write_attributes_formatted(&self, contents: &mut Vec<u8>) {
-        crate::term::ClearAttrs.write_buf(contents);
-        self.attrs.write_escape_code_diff(
+        crate::term::mouse_protocol_encoding(
             contents,
-            &crate::attrs::Attrs::default(),
+            self.mouse_protocol_encoding,
+            prev.map_or(MouseProtocolEncoding::Default, |prev| {
+                prev.mouse_protocol_encoding
+            }),
         );
     }
 
@@ -616,55 +350,15 @@ impl Screen {
         (pos.row, pos.col)
     }
 
-    /// Returns terminal escape sequences sufficient to set the current
-    /// cursor state of the terminal.
-    ///
-    /// This is not typically necessary, since
-    /// [`contents_formatted`](Self::contents_formatted) will leave
-    /// the cursor in the correct state, but this can be useful in the case of
-    /// drawing additional things on top of a terminal output, since you will
-    /// need to restore the terminal state without the terminal contents
-    /// necessarily being the same.
-    ///
-    /// Note that the bytes returned by this function may alter the active
-    /// drawing attributes, because it may require redrawing existing cells in
-    /// order to position the cursor correctly (for instance, in the case
-    /// where the cursor is past the end of a row). Therefore, you should
-    /// ensure to reset the active drawing attributes if necessary after
-    /// processing this data, for instance by using
-    /// [`attributes_formatted`](Self::attributes_formatted).
-    #[must_use]
-    pub fn cursor_state_formatted(&self) -> Vec<u8> {
-        let mut contents = vec![];
-        self.write_cursor_state_formatted(&mut contents);
-        contents
-    }
-
-    fn write_cursor_state_formatted(&self, contents: &mut Vec<u8>) {
-        crate::term::HideCursor::new(self.hide_cursor()).write_buf(contents);
-        self.grid()
-            .write_cursor_position_formatted(contents, None, None);
-
-        // we don't just call write_attributes_formatted here, because that
-        // would still be confusing - consider the case where the user sets
-        // their own unrelated drawing attributes (on a different parser
-        // instance) and then calls cursor_state_formatted. just documenting
-        // it and letting the user handle it on their own is more
-        // straightforward.
-    }
-
     /// Returns the [`Cell`](crate::Cell) object at the given location in the
     /// terminal, if it exists.
     #[must_use]
     pub fn cell(&self, row: u16, col: u16) -> Option<crate::Cell> {
-        self.grid().visible_cell(crate::grid::Pos { row, col })
+        self.grid().visible_cell(Pos { row, col })
     }
 
     /// Returns the cells in one visible row.
-    pub fn row_cells(
-        &self,
-        row: u16,
-    ) -> impl Iterator<Item = crate::Cell> + '_ {
+    pub fn row_cells(&self, row: u16) -> impl Iterator<Item = crate::Cell> + '_ {
         self.grid()
             .visible_row(row)
             .into_iter()
@@ -717,12 +411,6 @@ impl Screen {
         self.mode(MODE_ALTERNATE_SCREEN)
     }
 
-    /// Returns whether the terminal should be in application keypad mode.
-    #[must_use]
-    pub fn application_keypad(&self) -> bool {
-        self.mode(MODE_APPLICATION_KEYPAD)
-    }
-
     /// Returns whether the terminal should be in application cursor mode.
     #[must_use]
     pub fn application_cursor(&self) -> bool {
@@ -741,6 +429,13 @@ impl Screen {
         self.mode(MODE_BRACKETED_PASTE)
     }
 
+    /// Whether the program asked to be told when the terminal gains or loses
+    /// focus (mode 1004).
+    #[must_use]
+    pub fn focus_reporting(&self) -> bool {
+        self.mode(MODE_FOCUS_REPORTING)
+    }
+
     /// Returns the currently active [`MouseProtocolMode`].
     #[must_use]
     pub fn mouse_protocol_mode(&self) -> MouseProtocolMode {
@@ -751,53 +446,6 @@ impl Screen {
     #[must_use]
     pub fn mouse_protocol_encoding(&self) -> MouseProtocolEncoding {
         self.mouse_protocol_encoding
-    }
-
-    /// Returns the currently active foreground color.
-    #[must_use]
-    pub fn fgcolor(&self) -> crate::Color {
-        self.attrs.fgcolor
-    }
-
-    /// Returns the currently active background color.
-    #[must_use]
-    pub fn bgcolor(&self) -> crate::Color {
-        self.attrs.bgcolor
-    }
-
-    /// Returns whether newly drawn text should be rendered with the bold text
-    /// attribute.
-    #[must_use]
-    pub fn bold(&self) -> bool {
-        self.attrs.bold()
-    }
-
-    /// Returns whether newly drawn text should be rendered with the dim text
-    /// attribute.
-    #[must_use]
-    pub fn dim(&self) -> bool {
-        self.attrs.dim()
-    }
-
-    /// Returns whether newly drawn text should be rendered with the italic
-    /// text attribute.
-    #[must_use]
-    pub fn italic(&self) -> bool {
-        self.attrs.italic()
-    }
-
-    /// Returns whether newly drawn text should be rendered with the
-    /// underlined text attribute.
-    #[must_use]
-    pub fn underline(&self) -> bool {
-        self.attrs.underline()
-    }
-
-    /// Returns whether newly drawn text should be rendered with the inverse
-    /// text attribute.
-    #[must_use]
-    pub fn inverse(&self) -> bool {
-        self.attrs.inverse()
     }
 
     pub(crate) fn grid(&self) -> &crate::grid::Grid {
@@ -859,21 +507,6 @@ impl Screen {
         usize::from(self.mode(MODE_ALTERNATE_SCREEN))
     }
 
-    fn save_cursor(&mut self) {
-        self.grid_mut().save_cursor();
-        let slot = self.buffer();
-        self.saved_attrs[slot] = self.attrs;
-        self.saved_charsets[slot] = self.charsets;
-    }
-
-    fn restore_cursor(&mut self) {
-        self.grid_mut().restore_cursor();
-        let slot = self.buffer();
-        self.attrs = self.saved_attrs[slot];
-        self.charsets = self.saved_charsets[slot];
-        self.sync_fill();
-    }
-
     fn set_mode(&mut self, mode: u8) {
         self.modes |= mode;
     }
@@ -886,18 +519,10 @@ impl Screen {
         self.modes & mode != 0
     }
 
-    fn set_mouse_mode(&mut self, mode: MouseProtocolMode) {
-        self.mouse_protocol_mode = mode;
-    }
-
     fn clear_mouse_mode(&mut self, mode: MouseProtocolMode) {
         if self.mouse_protocol_mode == mode {
             self.mouse_protocol_mode = MouseProtocolMode::default();
         }
-    }
-
-    fn set_mouse_encoding(&mut self, encoding: MouseProtocolEncoding) {
-        self.mouse_protocol_encoding = encoding;
     }
 
     fn clear_mouse_encoding(&mut self, encoding: MouseProtocolEncoding) {
@@ -916,6 +541,8 @@ impl Screen {
         self.put_char(c);
     }
 
+    // The grid keeps the cursor row valid, and col_wrap() leaves room for
+    // the character at the cursor, so the unwraps below cannot fail.
     fn put_char(&mut self, c: char) {
         let pos = self.grid().pos();
         let size = self.grid().size();
@@ -926,11 +553,8 @@ impl Screen {
             // don't even try to draw control characters
             return;
         }
-        let width: u16 = width
-            .unwrap_or(1)
-            .try_into()
-            // width() can only return 0, 1, or 2
-            .unwrap();
+        // width() can only return 0, 1, or 2
+        let width: u16 = width.unwrap_or(1).try_into().unwrap();
         if width > size.cols {
             // A grid narrower than the character has no pair of columns to
             // hold it. Everything below assumes the second half of a wide
@@ -938,19 +562,7 @@ impl Screen {
             return;
         }
 
-        // it doesn't make any sense to wrap if the last column in a row
-        // didn't already have contents. don't try to handle the case where a
-        // character wraps because there was only one column left in the
-        // previous row - literally everything handles this case differently,
-        // and this is tmux behavior (and also the simplest). i'm open to
-        // reconsidering this behavior, but only with a really good reason
-        // (xterm handles this by introducing the concept of triple width
-        // cells, which i really don't want to do).
-        let mut wrap = false;
-        if width > 0
-            && self.mode(MODE_NO_AUTOWRAP)
-            && pos.col > size.cols.saturating_sub(width)
-        {
+        if width > 0 && self.mode(MODE_NO_AUTOWRAP) && pos.col > size.cols - width {
             // Without autowrap, text at the right margin overwrites the last
             // column rather than moving to the next row, and a wide character
             // that no longer fits is dropped (as tmux and alacritty do).
@@ -961,19 +573,21 @@ impl Screen {
             self.grid_mut().col_set(size.cols - width);
         }
         let pos = self.grid().pos();
-        // A grid narrower than the character being drawn leaves no column for
-        // it to have come from, so there is nothing to wrap out of.
-        if pos.col > size.cols.saturating_sub(width) {
-            let last_cell = self.grid().drawing_cell(crate::grid::Pos {
+        // it doesn't make any sense to wrap if the last column in a row
+        // didn't already have contents. don't try to handle the case where a
+        // character wraps because there was only one column left in the
+        // previous row - literally everything handles this case differently,
+        // and this is tmux behavior (and also the simplest).
+        let mut wrap = false;
+        if pos.col > size.cols - width {
+            let last_cell = self.grid().drawing_cell(Pos {
                 row: pos.row,
-                col: size.cols.saturating_sub(1),
+                col: size.cols - 1,
             });
             // A wide character that does not fit in the last column continues
             // the same line on the next row, so that row is wrapped too.
             if pos.col < size.cols
-                || last_cell.is_some_and(|cell| {
-                    cell.has_contents() || cell.is_wide_continuation()
-                })
+                || last_cell.is_some_and(|cell| cell.has_contents() || cell.is_wide_continuation())
             {
                 wrap = true;
             }
@@ -982,22 +596,19 @@ impl Screen {
             // A wide character that does not fit wraps whole, and the column
             // it left behind is blanked, as if a space had been written there,
             // rather than keeping a stale glyph.
-            let fill = attrs;
             for col in pos.col..size.cols {
-                let cell = crate::grid::Pos { row: pos.row, col };
-                if let Some(cell) = self.grid_mut().drawing_cell_mut(cell) {
-                    if cell.is_wide_continuation() {
-                        cell.clear(fill);
-                        if let Some(base) = col.checked_sub(1).and_then(|col| {
-                            self.grid_mut().drawing_cell_mut(crate::grid::Pos {
-                                row: pos.row,
-                                col,
-                            })
-                        }) {
-                            base.clear(fill);
-                        }
-                    } else {
-                        cell.clear(fill);
+                let grid = self.grid_mut();
+                let Some(cell) = grid.drawing_cell_mut(Pos { row: pos.row, col }) else {
+                    continue;
+                };
+                let continuation = cell.is_wide_continuation();
+                cell.clear(attrs);
+                if continuation && col > 0 {
+                    if let Some(base) = grid.drawing_cell_mut(Pos {
+                        row: pos.row,
+                        col: col - 1,
+                    }) {
+                        base.clear(attrs);
                     }
                 }
             }
@@ -1010,231 +621,109 @@ impl Screen {
                 && pos.col + 1 == size.cols
                 && self.last_drawn == Some(pos)
             {
-                let base = if self
-                    .grid()
-                    .drawing_cell(pos)
-                    .is_some_and(|cell| cell.is_wide_continuation())
-                {
-                    pos.col.checked_sub(1).map(|col| crate::grid::Pos {
-                        row: pos.row,
-                        col,
-                    })
-                } else {
-                    Some(pos)
-                };
-                if let Some(cell) =
-                    base.and_then(|base| self.grid_mut().drawing_cell_mut(base))
-                {
-                    cell.append(c);
-                }
+                self.append_combining(pos, c);
             } else if pos.col > 0 {
-                let mut prev_cell = self
-                    .grid_mut()
-                    .drawing_cell_mut(crate::grid::Pos {
+                self.append_combining(
+                    Pos {
                         row: pos.row,
                         col: pos.col - 1,
-                    })
-                    // pos.row is valid, since it comes directly from
-                    // self.grid().pos() which we assume to always have a
-                    // valid row value. pos.col - 1 is valid because we just
-                    // checked for pos.col > 0.
-                    .unwrap();
-                if prev_cell.is_wide_continuation() && pos.col >= 2 {
-                    prev_cell = self
-                        .grid_mut()
-                        .drawing_cell_mut(crate::grid::Pos {
-                            row: pos.row,
-                            col: pos.col - 2,
-                        })
-                        // pos.row is valid, since it comes directly from
-                        // self.grid().pos() which we assume to always have a
-                        // valid row value. we know pos.col - 2 is valid
-                        // because the cell at pos.col - 1 is a wide
-                        // continuation character, which means there must be
-                        // the first half of the wide character before it.
-                        .unwrap();
-                }
-                // A combining mark belongs to a character. The second half of a
-                // wide one whose first half is on another row (a one-column
-                // screen) has none to give it, and must never hold text.
-                if !prev_cell.is_wide_continuation() {
-                    prev_cell.append(c);
-                }
-            } else if pos.row > 0 {
-                let prev_row = self
-                    .grid()
-                    .drawing_row(pos.row - 1)
-                    // pos.row is valid, since it comes directly from
-                    // self.grid().pos() which we assume to always have a
-                    // valid row value. pos.row - 1 is valid because we just
-                    // checked for pos.row > 0.
-                    .unwrap();
-                if prev_row.wrapped() {
-                    let mut prev_cell = self
-                        .grid_mut()
-                        .drawing_cell_mut(crate::grid::Pos {
-                            row: pos.row - 1,
-                            col: size.cols - 1,
-                        })
-                        // pos.row is valid, since it comes directly from
-                        // self.grid().pos() which we assume to always have a
-                        // valid row value. pos.row - 1 is valid because we
-                        // just checked for pos.row > 0. col of size.cols - 1
-                        // is always valid.
-                        .unwrap();
-                    if prev_cell.is_wide_continuation() && size.cols >= 2 {
-                        prev_cell = self
-                            .grid_mut()
-                            .drawing_cell_mut(crate::grid::Pos {
-                                row: pos.row - 1,
-                                col: size.cols - 2,
-                            })
-                            // pos.row is valid, since it comes directly from
-                            // self.grid().pos() which we assume to always
-                            // have a valid row value. pos.row - 1 is valid
-                            // because we just checked for pos.row > 0. col of
-                            // size.cols - 2 is valid because the cell at
-                            // size.cols - 1 is a wide continuation character,
-                            // so it must have the first half of the wide
-                            // character before it.
-                            .unwrap();
-                    }
-                    // A combining mark belongs to a character. The second half of a
-                    // wide one whose first half is on another row (a one-column
-                    // screen) has none to give it, and must never hold text.
-                    if !prev_cell.is_wide_continuation() {
-                        prev_cell.append(c);
-                    }
-                }
+                    },
+                    c,
+                );
+            } else if pos.row > 0 && self.grid().drawing_row(pos.row - 1).unwrap().wrapped() {
+                self.append_combining(
+                    Pos {
+                        row: pos.row - 1,
+                        col: size.cols - 1,
+                    },
+                    c,
+                );
             }
-        } else {
-            if self.mode(MODE_INSERT) {
-                self.grid_mut().insert_cells(width);
-            }
-            if self
-                .grid()
-                .drawing_cell(pos)
-                // pos.row is valid because we assume self.grid().pos() to
-                // always have a valid row value. pos.col is valid because we
-                // called col_wrap() immediately before this, which ensures
-                // that self.grid().pos().col has a valid value.
-                .unwrap()
-                .is_wide_continuation()
-            {
-                // The orphaned first half becomes a blank in its own colours.
-                // A continuation with nothing before it should not exist, but
-                // must never be a reason to panic the terminal.
-                if let Some(prev_cell) =
-                    pos.col.checked_sub(1).and_then(|col| {
-                        self.grid_mut().drawing_cell_mut(crate::grid::Pos {
-                            row: pos.row,
-                            col,
-                        })
-                    })
-                {
-                    let own = *prev_cell.attrs();
-                    prev_cell.clear(own);
-                }
-            }
+            return;
+        }
 
-            if self
-                .grid()
-                .drawing_cell(pos)
-                // pos.row is valid because we assume self.grid().pos() to
-                // always have a valid row value. pos.col is valid because we
-                // called col_wrap() immediately before this, which ensures
-                // that self.grid().pos().col has a valid value.
-                .unwrap()
-                .is_wide()
+        if self.mode(MODE_INSERT) {
+            self.grid_mut().insert_cells(width);
+        }
+        let grid = self.grid_mut();
+        let cell = grid.drawing_cell(pos).unwrap();
+        if cell.is_wide_continuation() {
+            // The orphaned first half becomes a blank in its own colours.
+            // A continuation with nothing before it should not exist, but
+            // must never be a reason to panic the terminal.
+            if let Some(prev_cell) = pos
+                .col
+                .checked_sub(1)
+                .and_then(|col| grid.drawing_cell_mut(Pos { row: pos.row, col }))
             {
-                // The second half normally follows; a one-column screen keeps
-                // it on the next row instead, where it is left alone.
-                if let Some(next_cell) =
-                    self.grid_mut().drawing_cell_mut(crate::grid::Pos {
-                        row: pos.row,
-                        col: pos.col + 1,
-                    })
-                {
-                    let own = *next_cell.attrs();
-                    next_cell.clear(own);
-                }
+                let own = *prev_cell.attrs();
+                prev_cell.clear(own);
             }
+        }
+        if cell.is_wide() {
+            // The second half normally follows; a one-column screen keeps
+            // it on the next row instead, where it is left alone.
+            if let Some(next_cell) = grid.drawing_cell_mut(Pos {
+                row: pos.row,
+                col: pos.col + 1,
+            }) {
+                let own = *next_cell.attrs();
+                next_cell.clear(own);
+            }
+        }
 
-            let cell = self
-                .grid_mut()
-                .drawing_cell_mut(pos)
-                // pos.row is valid because we assume self.grid().pos() to
-                // always have a valid row value. pos.col is valid because we
-                // called col_wrap() immediately before this, which ensures
-                // that self.grid().pos().col has a valid value.
-                .unwrap();
-            cell.set(c, attrs);
-            self.grid_mut().col_inc(1);
-            if width > 1 {
-                let pos = self.grid().pos();
-                if self
-                    .grid()
-                    .drawing_cell(pos)
-                    // pos.row is valid because we assume self.grid().pos() to
-                    // always have a valid row value. pos.col is valid because
-                    // we called col_wrap() earlier, which ensures that
-                    // self.grid().pos().col has a valid value. this is true
-                    // even though we just called col_inc, because this branch
-                    // only happens if width > 1, and col_wrap takes width
-                    // into account.
-                    .unwrap()
-                    .is_wide()
-                {
-                    let next_next_pos = crate::grid::Pos {
-                        row: pos.row,
-                        col: pos.col + 1,
-                    };
-                    if let Some(next_next_cell) =
-                        self.grid_mut().drawing_cell_mut(next_next_pos)
-                    {
-                        next_next_cell.clear(attrs);
-                    }
-                    if next_next_pos.col == size.cols - 1 {
-                        self.grid_mut()
-                            .drawing_row_mut(pos.row)
-                            // we assume self.grid().pos().row is always valid
-                            .unwrap()
-                            .wrap(false);
-                    }
+        grid.drawing_cell_mut(pos).unwrap().set(c, attrs);
+        grid.col_inc(1);
+        if width > 1 {
+            // col_wrap() took the width into account, so this is still on
+            // the grid.
+            let pos = grid.pos();
+            if grid.drawing_cell(pos).unwrap().is_wide() {
+                let next_next_pos = Pos {
+                    row: pos.row,
+                    col: pos.col + 1,
+                };
+                if let Some(next_next_cell) = grid.drawing_cell_mut(next_next_pos) {
+                    next_next_cell.clear(attrs);
                 }
-                let next_cell = self
-                    .grid_mut()
-                    .drawing_cell_mut(pos)
-                    // pos.row is valid because we assume self.grid().pos() to
-                    // always have a valid row value. pos.col is valid because
-                    // we called col_wrap() earlier, which ensures that
-                    // self.grid().pos().col has a valid value. this is true
-                    // even though we just called col_inc, because this branch
-                    // only happens if width > 1, and col_wrap takes width
-                    // into account.
-                    .unwrap();
-                // The right half carries the character's rendition, which is
-                // what it shows if the left half is ever overwritten.
-                next_cell.clear(attrs);
-                next_cell.set_wide_continuation(true);
-                self.grid_mut().col_inc(1);
+                if next_next_pos.col == size.cols - 1 {
+                    grid.drawing_row_mut(pos.row).unwrap().wrap(false);
+                }
             }
-            if self.mode(MODE_NO_AUTOWRAP) {
-                // Without autowrap there is no pending wrap: the cursor stays
-                // on the last column.
-                self.grid_mut().clear_pending_wrap();
-            }
-            self.last_drawn = Some(pos);
+            let next_cell = grid.drawing_cell_mut(pos).unwrap();
+            // The right half carries the character's rendition, which is
+            // what it shows if the left half is ever overwritten.
+            next_cell.clear(attrs);
+            next_cell.set_wide_continuation();
+            grid.col_inc(1);
+        }
+        if self.mode(MODE_NO_AUTOWRAP) {
+            // Without autowrap there is no pending wrap: the cursor stays
+            // on the last column.
+            self.grid_mut().clear_pending_wrap();
+        }
+        self.last_drawn = Some(pos);
+    }
+
+    /// Attaches the combining mark `c` to the character at `pos`, or whose
+    /// second half is at `pos`.
+    fn append_combining(&mut self, mut pos: Pos, c: char) {
+        let grid = self.grid_mut();
+        if pos.col > 0 && grid.drawing_cell(pos).unwrap().is_wide_continuation() {
+            pos.col -= 1;
+        }
+        // The second half of a wide character whose first half is on
+        // another row (a one-column screen) has no character to give the
+        // mark to, and must never hold text.
+        let cell = grid.drawing_cell_mut(pos).unwrap();
+        if !cell.is_wide_continuation() {
+            cell.append(c);
         }
     }
 
     /// Designates `charset` (the final byte of `ESC (` or `ESC )`) into G0
     /// or G1. Returns false for a set this emulator does not know.
-    pub(crate) fn designate_charset(
-        &mut self,
-        slot: usize,
-        charset: u8,
-    ) -> bool {
+    pub(crate) fn designate_charset(&mut self, slot: usize, charset: u8) -> bool {
         self.charsets.designated[slot] = match charset {
             b'0' => Charset::DecGraphics,
             b'A' => Charset::Uk,
@@ -1244,14 +733,9 @@ impl Screen {
         true
     }
 
-    // SO
-    pub(crate) fn shift_out(&mut self) {
-        self.charsets.shifted_out = true;
-    }
-
-    // SI
-    pub(crate) fn shift_in(&mut self) {
-        self.charsets.shifted_out = false;
+    // SO and SI
+    pub(crate) fn shift_out(&mut self, out: bool) {
+        self.charsets.shifted_out = out;
     }
 
     // CSI b
@@ -1261,18 +745,10 @@ impl Screen {
         };
         let (rows, cols) = self.size();
         // Anything beyond a screenful only scrolls the same line past.
-        let count =
-            usize::from(count).min(usize::from(rows) * usize::from(cols));
+        let count = usize::from(count).min(usize::from(rows) * usize::from(cols));
         for _ in 0..count {
             self.put_char(c);
         }
-    }
-
-    /// Whether the program asked to be told when the terminal gains or loses
-    /// focus (mode 1004).
-    #[must_use]
-    pub fn focus_reporting(&self) -> bool {
-        self.mode(MODE_FOCUS_REPORTING)
     }
 
     // control codes
@@ -1282,19 +758,11 @@ impl Screen {
         self.grid_mut().col_dec(1);
     }
 
-    pub(crate) fn tab(&mut self) {
-        self.cht(1);
-    }
-
-    // A line feed keeps a pending wrap, as in tmux and alacritty: the next
-    // character still goes to the start of the following row.
+    // LF, VT, FF and IND. A line feed keeps a pending wrap, as in tmux and
+    // alacritty: the next character still goes to the start of the
+    // following row.
     pub(crate) fn lf(&mut self) {
         self.grid_mut().row_inc_scroll(1);
-    }
-
-    // ESC D
-    pub(crate) fn ind(&mut self) {
-        self.lf();
     }
 
     // ESC E
@@ -1320,12 +788,12 @@ impl Screen {
                     *stop = false;
                 }
             }
-            3 => self.tab_stops.iter_mut().for_each(|stop| *stop = false),
+            3 => self.tab_stops.fill(false),
             _ => {}
         }
     }
 
-    // CSI I
+    // HT and CSI I
     pub(crate) fn cht(&mut self, count: u16) {
         let cols = self.grid().size().cols;
         // At the right margin a tab has nowhere to go, and it leaves a
@@ -1333,7 +801,7 @@ impl Screen {
         if self.grid().pos().col + 1 >= cols {
             return;
         }
-        let mut col = self.grid().pos().col.min(cols - 1);
+        let mut col = self.grid().pos().col;
         for _ in 0..count {
             col = (col + 1..cols)
                 .find(|col| self.tab_stops[usize::from(*col)])
@@ -1355,38 +823,36 @@ impl Screen {
         self.grid_mut().col_set(col);
     }
 
-    pub(crate) fn vt(&mut self) {
-        self.lf();
-    }
-
-    pub(crate) fn ff(&mut self) {
-        self.lf();
-    }
-
     pub(crate) fn cr(&mut self) {
         self.grid_mut().col_set(0);
     }
 
     // escape codes
 
-    // ESC 7
+    // ESC 7 and CSI s
     pub(crate) fn decsc(&mut self) {
-        self.save_cursor();
+        self.grid_mut().save_cursor();
+        let slot = self.buffer();
+        self.saved_attrs[slot] = self.attrs;
+        self.saved_charsets[slot] = self.charsets;
     }
 
-    // ESC 8
+    // ESC 8 and CSI u
     pub(crate) fn decrc(&mut self) {
-        self.restore_cursor();
+        self.grid_mut().restore_cursor();
+        let slot = self.buffer();
+        self.attrs = self.saved_attrs[slot];
+        self.charsets = self.saved_charsets[slot];
+        self.sync_fill();
     }
 
-    // ESC =
-    pub(crate) fn deckpam(&mut self) {
-        self.set_mode(MODE_APPLICATION_KEYPAD);
-    }
-
-    // ESC >
-    pub(crate) fn deckpnm(&mut self) {
-        self.clear_mode(MODE_APPLICATION_KEYPAD);
+    // ESC = and ESC >
+    pub(crate) fn set_application_keypad(&mut self, on: bool) {
+        if on {
+            self.set_mode(MODE_APPLICATION_KEYPAD);
+        } else {
+            self.clear_mode(MODE_APPLICATION_KEYPAD);
+        }
     }
 
     // ESC M
@@ -1410,18 +876,14 @@ impl Screen {
     // CSI ! p
     pub(crate) fn decstr(&mut self) {
         self.clear_mode(
-            MODE_INSERT | MODE_HIDE_CURSOR | MODE_APPLICATION_CURSOR,
+            MODE_INSERT | MODE_HIDE_CURSOR | MODE_APPLICATION_CURSOR | MODE_APPLICATION_KEYPAD,
         );
-        self.clear_mode(MODE_APPLICATION_KEYPAD);
-        self.grid_mut().set_origin_mode_only(false);
-        let rows = self.grid().size().rows;
-        self.grid_mut().set_scroll_region_only(0, rows - 1);
+        self.grid_mut().soft_reset();
         self.attrs = crate::attrs::Attrs::default();
         self.charsets = Charsets::default();
         let slot = self.buffer();
         self.saved_charsets[slot] = Charsets::default();
         self.saved_attrs[slot] = crate::attrs::Attrs::default();
-        self.grid_mut().reset_saved_cursor();
         self.sync_fill();
     }
 
@@ -1475,18 +937,14 @@ impl Screen {
 
     // CSI H
     pub(crate) fn cup(&mut self, (row, col): (u16, u16)) {
-        self.grid_mut().set_pos(crate::grid::Pos {
+        self.grid_mut().set_pos(Pos {
             row: row - 1,
             col: col - 1,
         });
     }
 
-    // CSI J
-    pub(crate) fn ed(
-        &mut self,
-        mode: u16,
-        mut unhandled: impl FnMut(&mut Self),
-    ) {
+    // CSI J and CSI ? J
+    pub(crate) fn ed(&mut self, mode: u16, mut unhandled: impl FnMut(&mut Self)) {
         let attrs = self.erase_attrs();
         match mode {
             0 => self.grid_mut().erase_all_forward(attrs),
@@ -1497,21 +955,8 @@ impl Screen {
         }
     }
 
-    // CSI ? J
-    pub(crate) fn decsed(
-        &mut self,
-        mode: u16,
-        unhandled: impl FnMut(&mut Self),
-    ) {
-        self.ed(mode, unhandled);
-    }
-
-    // CSI K
-    pub(crate) fn el(
-        &mut self,
-        mode: u16,
-        mut unhandled: impl FnMut(&mut Self),
-    ) {
+    // CSI K and CSI ? K
+    pub(crate) fn el(&mut self, mode: u16, mut unhandled: impl FnMut(&mut Self)) {
         let attrs = self.erase_attrs();
         match mode {
             0 => self.grid_mut().erase_row_forward(attrs),
@@ -1519,15 +964,6 @@ impl Screen {
             2 => self.grid_mut().erase_row(attrs),
             _ => unhandled(self),
         }
-    }
-
-    // CSI ? K
-    pub(crate) fn decsel(
-        &mut self,
-        mode: u16,
-        unhandled: impl FnMut(&mut Self),
-    ) {
-        self.el(mode, unhandled);
     }
 
     // CSI L
@@ -1567,17 +1003,6 @@ impl Screen {
         self.grid_mut().row_set(row - 1);
     }
 
-    // CSI s (SCOSC); only without parameters, which is all it means without
-    // left and right margins.
-    pub(crate) fn scosc(&mut self) {
-        self.save_cursor();
-    }
-
-    // CSI u (SCORC)
-    pub(crate) fn scorc(&mut self) {
-        self.restore_cursor();
-    }
-
     // CSI h / CSI l, the ANSI (non-private) modes.
     pub(crate) fn sm(
         &mut self,
@@ -1587,48 +1012,40 @@ impl Screen {
     ) {
         for param in params {
             match param {
-                [4] => {
-                    if set {
-                        self.set_mode(MODE_INSERT);
-                    } else {
-                        self.clear_mode(MODE_INSERT);
-                    }
-                }
+                [4] if set => self.set_mode(MODE_INSERT),
+                [4] => self.clear_mode(MODE_INSERT),
                 _ => unhandled(self),
             }
         }
     }
 
     // CSI ? h
-    pub(crate) fn decset(
-        &mut self,
-        params: &vte::Params,
-        mut unhandled: impl FnMut(&mut Self),
-    ) {
+    pub(crate) fn decset(&mut self, params: &vte::Params, mut unhandled: impl FnMut(&mut Self)) {
         for param in params {
             match param {
                 [1] => self.set_mode(MODE_APPLICATION_CURSOR),
                 [6] => self.grid_mut().set_origin_mode(true),
                 [7] => self.clear_mode(MODE_NO_AUTOWRAP),
-                [1004] => self.set_mode(MODE_FOCUS_REPORTING),
-                [1047] => self.enter_alternate_grid(),
-                [1048] => self.decsc(),
-                [9] => self.set_mouse_mode(MouseProtocolMode::Press),
+                [9] => self.mouse_protocol_mode = MouseProtocolMode::Press,
                 [25] => self.clear_mode(MODE_HIDE_CURSOR),
-                [47] => self.enter_alternate_grid(),
+                [47 | 1047] => self.enter_alternate_grid(),
                 [1000] => {
-                    self.set_mouse_mode(MouseProtocolMode::PressRelease);
+                    self.mouse_protocol_mode = MouseProtocolMode::PressRelease;
                 }
                 [1002] => {
-                    self.set_mouse_mode(MouseProtocolMode::ButtonMotion);
+                    self.mouse_protocol_mode = MouseProtocolMode::ButtonMotion;
                 }
-                [1003] => self.set_mouse_mode(MouseProtocolMode::AnyMotion),
+                [1003] => {
+                    self.mouse_protocol_mode = MouseProtocolMode::AnyMotion;
+                }
+                [1004] => self.set_mode(MODE_FOCUS_REPORTING),
                 [1005] => {
-                    self.set_mouse_encoding(MouseProtocolEncoding::Utf8);
+                    self.mouse_protocol_encoding = MouseProtocolEncoding::Utf8;
                 }
                 [1006] => {
-                    self.set_mouse_encoding(MouseProtocolEncoding::Sgr);
+                    self.mouse_protocol_encoding = MouseProtocolEncoding::Sgr;
                 }
+                [1048] => self.decsc(),
                 [1049] => {
                     if !self.mode(MODE_ALTERNATE_SCREEN) {
                         self.decsc();
@@ -1646,29 +1063,15 @@ impl Screen {
     }
 
     // CSI ? l
-    pub(crate) fn decrst(
-        &mut self,
-        params: &vte::Params,
-        mut unhandled: impl FnMut(&mut Self),
-    ) {
+    pub(crate) fn decrst(&mut self, params: &vte::Params, mut unhandled: impl FnMut(&mut Self)) {
         for param in params {
             match param {
                 [1] => self.clear_mode(MODE_APPLICATION_CURSOR),
                 [6] => self.grid_mut().set_origin_mode(false),
                 [7] => self.set_mode(MODE_NO_AUTOWRAP),
-                [1004] => self.clear_mode(MODE_FOCUS_REPORTING),
-                [1047] => {
-                    if self.mode(MODE_ALTERNATE_SCREEN) {
-                        self.alternate_grid.clear();
-                    }
-                    self.exit_alternate_grid();
-                }
-                [1048] => self.decrc(),
                 [9] => self.clear_mouse_mode(MouseProtocolMode::Press),
                 [25] => self.set_mode(MODE_HIDE_CURSOR),
-                [47] => {
-                    self.exit_alternate_grid();
-                }
+                [47] => self.exit_alternate_grid(),
                 [1000] => {
                     self.clear_mouse_mode(MouseProtocolMode::PressRelease);
                 }
@@ -1678,12 +1081,20 @@ impl Screen {
                 [1003] => {
                     self.clear_mouse_mode(MouseProtocolMode::AnyMotion);
                 }
+                [1004] => self.clear_mode(MODE_FOCUS_REPORTING),
                 [1005] => {
                     self.clear_mouse_encoding(MouseProtocolEncoding::Utf8);
                 }
                 [1006] => {
                     self.clear_mouse_encoding(MouseProtocolEncoding::Sgr);
                 }
+                [1047] => {
+                    if self.mode(MODE_ALTERNATE_SCREEN) {
+                        self.alternate_grid.clear();
+                    }
+                    self.exit_alternate_grid();
+                }
+                [1048] => self.decrc(),
                 [1049] => {
                     if self.mode(MODE_ALTERNATE_SCREEN) {
                         self.exit_alternate_grid();
@@ -1697,78 +1108,37 @@ impl Screen {
     }
 
     // CSI m
-    pub(crate) fn sgr(
-        &mut self,
-        params: &vte::Params,
-        unhandled: impl FnMut(&mut Self),
-    ) {
+    pub(crate) fn sgr(&mut self, params: &vte::Params, unhandled: impl FnMut(&mut Self)) {
         self.apply_sgr(params, unhandled);
         self.sync_fill();
     }
 
-    fn apply_sgr(
-        &mut self,
-        params: &vte::Params,
-        mut unhandled: impl FnMut(&mut Self),
-    ) {
-        // XXX really i want to just be able to pass in a default Params
-        // instance with a 0 in it, but vte doesn't allow creating new Params
-        // instances
+    fn apply_sgr(&mut self, params: &vte::Params, mut unhandled: impl FnMut(&mut Self)) {
+        // vte gives no parameters at all for a bare `CSI m`
         if params.is_empty() {
             self.attrs = crate::attrs::Attrs::default();
             return;
         }
 
         let mut iter = params.iter();
-
-        macro_rules! next_param {
-            () => {
-                match iter.next() {
-                    Some(n) => n,
-                    _ => return,
-                }
-            };
-        }
-
-        macro_rules! to_u8 {
-            ($n:expr) => {
-                if let Some(n) = u16_to_u8($n) {
-                    n
-                } else {
-                    return;
-                }
-            };
-        }
-
-        macro_rules! next_param_u8 {
-            () => {
-                if let &[n] = next_param!() {
-                    to_u8!(n)
-                } else {
-                    return;
-                }
-            };
-        }
-
-        loop {
-            match next_param!() {
+        while let Some(param) = iter.next() {
+            match param {
                 [0] => self.attrs = crate::attrs::Attrs::default(),
                 [1] => self.attrs.set_bold(),
                 [2] => self.attrs.set_dim(),
                 [3] => self.attrs.set_italic(true),
                 [4] => self.attrs.set_underline(true),
-                [4, style] => {
-                    if !self.attrs.set_underline_style_sgr(*style) {
-                        unhandled(self);
-                    }
-                }
-                [5] | [6] => self.attrs.set_blink(true),
+                [4, style] => match crate::attrs::UnderlineStyle::from_sgr(*style) {
+                    Some(style) => self.attrs.set_underline_style(style),
+                    None => unhandled(self),
+                },
+                [5 | 6] => self.attrs.set_blink(true),
                 [7] => self.attrs.set_inverse(true),
                 [8] => self.attrs.set_hidden(true),
                 [9] => self.attrs.set_strikethrough(true),
-                [21] => self.attrs.set_underline_style(
-                    crate::attrs::UnderlineStyle::Double,
-                ),
+                [21] => self
+                    .attrs
+                    .set_underline_style(crate::attrs::UnderlineStyle::Double),
                 [22] => self.attrs.set_normal_intensity(),
                 [23] => self.attrs.set_italic(false),
                 [24] => self.attrs.set_underline(false),
@@ -1778,106 +1148,31 @@ impl Screen {
                 [29] => self.attrs.set_strikethrough(false),
                 [53] => self.attrs.set_overline(true),
                 [55] => self.attrs.set_overline(false),
-                [n] if (30..=37).contains(n) => {
-                    self.attrs.fgcolor = crate::Color::Idx(to_u8!(*n) - 30);
-                }
-                [38, 2, r, g, b] => {
-                    self.attrs.fgcolor =
-                        crate::Color::Rgb(to_u8!(*r), to_u8!(*g), to_u8!(*b));
-                }
-                [38, 2, _, r, g, b] => {
-                    self.attrs.fgcolor =
-                        crate::Color::Rgb(to_u8!(*r), to_u8!(*g), to_u8!(*b));
-                }
-                [38, 5, i] => {
-                    self.attrs.fgcolor = crate::Color::Idx(to_u8!(*i));
-                }
-                [38] => match next_param!() {
-                    [2] => {
-                        let r = next_param_u8!();
-                        let g = next_param_u8!();
-                        let b = next_param_u8!();
-                        self.attrs.fgcolor = crate::Color::Rgb(r, g, b);
-                    }
-                    [5] => {
-                        self.attrs.fgcolor =
-                            crate::Color::Idx(next_param_u8!());
-                    }
-                    _ => {
-                        unhandled(self);
-                        return;
-                    }
-                },
-                [39] => {
-                    self.attrs.fgcolor = crate::Color::Default;
-                }
-                [58, 2, r, g, b] => {
-                    self.attrs.underline_color =
-                        crate::Color::Rgb(to_u8!(*r), to_u8!(*g), to_u8!(*b));
-                }
-                [58, 2, _, r, g, b] => {
-                    self.attrs.underline_color =
-                        crate::Color::Rgb(to_u8!(*r), to_u8!(*g), to_u8!(*b));
-                }
-                [58, 5, i] => {
-                    self.attrs.underline_color = crate::Color::Idx(to_u8!(*i));
-                }
-                [58] => match next_param!() {
-                    [2] => {
-                        let r = next_param_u8!();
-                        let g = next_param_u8!();
-                        let b = next_param_u8!();
-                        self.attrs.underline_color = crate::Color::Rgb(r, g, b);
-                    }
-                    [5] => {
-                        self.attrs.underline_color = crate::Color::Idx(next_param_u8!());
-                    }
-                    _ => {
-                        unhandled(self);
-                        return;
-                    }
-                },
-                [59] => {
-                    self.attrs.underline_color = crate::Color::Default;
-                }
-                [n] if (40..=47).contains(n) => {
-                    self.attrs.bgcolor = crate::Color::Idx(to_u8!(*n) - 40);
-                }
-                [48, 2, r, g, b] => {
-                    self.attrs.bgcolor =
-                        crate::Color::Rgb(to_u8!(*r), to_u8!(*g), to_u8!(*b));
-                }
-                [48, 2, _, r, g, b] => {
-                    self.attrs.bgcolor =
-                        crate::Color::Rgb(to_u8!(*r), to_u8!(*g), to_u8!(*b));
-                }
-                [48, 5, i] => {
-                    self.attrs.bgcolor = crate::Color::Idx(to_u8!(*i));
-                }
-                [48] => match next_param!() {
-                    [2] => {
-                        let r = next_param_u8!();
-                        let g = next_param_u8!();
-                        let b = next_param_u8!();
-                        self.attrs.bgcolor = crate::Color::Rgb(r, g, b);
-                    }
-                    [5] => {
-                        self.attrs.bgcolor =
-                            crate::Color::Idx(next_param_u8!());
-                    }
-                    _ => {
-                        unhandled(self);
-                        return;
-                    }
-                },
-                [49] => {
-                    self.attrs.bgcolor = crate::Color::Default;
-                }
-                [n] if (90..=97).contains(n) => {
-                    self.attrs.fgcolor = crate::Color::Idx(to_u8!(*n) - 82);
-                }
-                [n] if (100..=107).contains(n) => {
-                    self.attrs.bgcolor = crate::Color::Idx(to_u8!(*n) - 92);
+                [n @ 30..=37] => self.attrs.fgcolor = indexed(*n - 30),
+                [39] => self.attrs.fgcolor = crate::Color::Default,
+                [n @ 40..=47] => self.attrs.bgcolor = indexed(*n - 40),
+                [49] => self.attrs.bgcolor = crate::Color::Default,
+                [59] => self.attrs.underline_color = crate::Color::Default,
+                [n @ 90..=97] => self.attrs.fgcolor = indexed(*n - 82),
+                [n @ 100..=107] => self.attrs.bgcolor = indexed(*n - 92),
+                [selector @ (38 | 48 | 58), rest @ ..] => {
+                    let color = match extended_color(rest, &mut iter) {
+                        ExtendedColor::Color(color) => color,
+                        ExtendedColor::Unhandled => {
+                            unhandled(self);
+                            continue;
+                        }
+                        ExtendedColor::Abort => return,
+                        ExtendedColor::UnhandledAbort => {
+                            unhandled(self);
+                            return;
+                        }
+                    };
+                    *match selector {
+                        38 => &mut self.attrs.fgcolor,
+                        48 => &mut self.attrs.bgcolor,
+                        _ => &mut self.attrs.underline_color,
+                    } = color;
                 }
                 _ => unhandled(self),
             }
@@ -1890,11 +1185,34 @@ impl Screen {
     }
 }
 
-fn u16_to_u8(i: u16) -> Option<u8> {
-    if i > u16::from(u8::MAX) {
-        None
-    } else {
-        // safe because we just ensured that the value fits in a u8
-        Some(i.try_into().unwrap())
-    }
+/// An indexed colour whose index the caller has already bounded.
+fn indexed(index: u16) -> crate::Color {
+    crate::Color::Idx(u8::try_from(index).unwrap())
+}
+
+/// Parses SGR 38, 48 or 58: `rest` holds what follows the selector in
+/// colon form (`38:2::r:g:b`, `38:5:i`); when it is empty, the semicolon
+/// form takes its parameters from `iter` instead.
+fn extended_color<'a>(rest: &[u16], iter: &mut impl Iterator<Item = &'a [u16]>) -> ExtendedColor {
+    let byte = |n: u16| u8::try_from(n).ok();
+    let rgb = |r: Option<u8>, g: Option<u8>, b: Option<u8>| Some(crate::Color::Rgb(r?, g?, b?));
+    let color = match rest {
+        [2, r, g, b] | [2, _, r, g, b] => rgb(byte(*r), byte(*g), byte(*b)),
+        [5, i] => byte(*i).map(crate::Color::Idx),
+        [] => {
+            let kind = iter.next();
+            let mut next = || match iter.next() {
+                Some(&[n]) => byte(n),
+                _ => None,
+            };
+            match kind {
+                Some([2]) => rgb(next(), next(), next()),
+                Some([5]) => next().map(crate::Color::Idx),
+                Some(_) => return ExtendedColor::UnhandledAbort,
+                None => None,
+            }
+        }
+        _ => return ExtendedColor::Unhandled,
+    };
+    color.map_or(ExtendedColor::Abort, ExtendedColor::Color)
 }

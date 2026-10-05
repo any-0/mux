@@ -13,14 +13,7 @@ impl Parser {
     /// amount of scrollback.
     #[must_use]
     pub fn new(rows: u16, cols: u16, scrollback_len: usize) -> Self {
-        Self {
-            parser: vte::Parser::default(),
-            screen: crate::perform::WrappedScreen::new(
-                rows,
-                cols,
-                scrollback_len,
-            ),
-        }
+        Self::new_with_callbacks(rows, cols, scrollback_len, ())
     }
 }
 
@@ -29,20 +22,10 @@ impl<CB: crate::callbacks::Callbacks> Parser<CB> {
     /// amount of scrollback. Terminal events will be reported via method
     /// calls on the provided [`Callbacks`](crate::callbacks::Callbacks)
     /// implementation.
-    pub fn new_with_callbacks(
-        rows: u16,
-        cols: u16,
-        scrollback_len: usize,
-        callbacks: CB,
-    ) -> Self {
+    pub fn new_with_callbacks(rows: u16, cols: u16, scrollback_len: usize, callbacks: CB) -> Self {
         Self {
             parser: vte::Parser::default(),
-            screen: crate::perform::WrappedScreen::new_with_callbacks(
-                rows,
-                cols,
-                scrollback_len,
-                callbacks,
-            ),
+            screen: crate::perform::WrappedScreen::new(rows, cols, scrollback_len, callbacks),
         }
     }
 
@@ -77,23 +60,5 @@ impl<CB: crate::callbacks::Callbacks> Parser<CB> {
     /// the constructor.
     pub fn callbacks_mut(&mut self) -> &mut CB {
         &mut self.screen.callbacks
-    }
-}
-
-impl Default for Parser {
-    /// Returns a parser with dimensions 80x24 and no scrollback.
-    fn default() -> Self {
-        Self::new(24, 80, 0)
-    }
-}
-
-impl std::io::Write for Parser {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.process(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
     }
 }

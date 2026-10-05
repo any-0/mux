@@ -1,3 +1,0 @@
-{"index": 0, "kind": "attach", "name": "client", "rows": 24, "cols": 85}
-{"index": 1, "kind": "input", "hex": "63617420696e74656e736974792e616e73690d"}
-{"index": 2, "kind": "checkpoint", "name": "witness-styled-intensity", "capture_file": "8000.jsonl", "capture_offset": 679, "bar": 5, "rows": 24, "cols": 85, "clients": [{"name": "client", "offset": 3621}]}

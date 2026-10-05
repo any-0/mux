@@ -1,92 +1,62 @@
-This is `vt100` 0.16.2 from crates.io.
+This is `vt100` 0.16.2 from crates.io with the following mux changes.
 
-Mux changes one rule in `Grid::scroll_up`: a scroll region whose top margin is
-the first terminal row still contributes removed rows to scrollback. Codex uses
-that terminal behavior when inserting resumed transcript lines above its live
-viewport. Regions that start below the first row, such as editor and status
-regions, remain excluded from scrollback.
+## Scrollback
 
-Rows are also converted to a lossless compact representation when they enter
-scrollback. UTF-8 cell contents are stored contiguously, repeated cell shapes
-are run-length encoded, default attributes take no space, and non-default
-attributes are stored as spans. Groups of 128 immutable rows are then encoded
-together and compressed independently with zstd; incompressible blocks retain
-the smaller terminal encoding directly. The newest partial block remains as
-individual rows.
+- A scroll region whose top margin is the first row still sends removed rows
+  to scrollback (Codex inserts resumed transcript lines above its viewport this
+  way); regions starting lower, such as editor and status regions, do not.
+- Rows entering scrollback are packed losslessly: text stored contiguously,
+  cell shapes run-length encoded, non-default attributes kept as spans. Every
+  128 rows form a block compressed with zstd (kept raw if that is no smaller);
+  the newest partial block stays as individual rows. Cold blocks are decoded on
+  demand and dropped again on returning to the live screen.
+- The mux daemon can spill blocks to an unlinked backing file. One background
+  writer with a fixed job and byte budget does the writing, so terminal
+  processing never waits for storage: when the budget is full, blocks stay in
+  memory. File extents are reused once no block (in a clone or snapshot
+  either) refers to them, so steady-state scrollback does not grow the file.
+- `encode_history`/`restore_history` persist scrollback in the same packed
+  form. Restoring validates every row and streams one bounded row at a time.
+  A row's span gains an 18th byte (flag bit 1) only when it uses the extended
+  renditions below, so history written before them still reads the same.
 
-Reading a cold block decodes it on demand. Returning to the live screen drops
-decoded blocks, while resizing streams every row through reflow and immediately
-rebuilds compact blocks. Active screen rows keep the original mutable cell
-vectors. Reading, cloning, reflowing, and restoring scrollback exposes the same
-cells as before, including wide and combining characters, wrapping, colors, and
-styled blank cells.
+## Emulation
 
-Immutable blocks can be spilled to an unlinked backing file by the mux daemon.
-The background writer has a fixed job and byte budget, so terminal processing
-never waits for storage; blocks remain compressed in memory when that budget is
-full. File extents are reused after their last block reference is dropped. A
-cloned screen or persistence snapshot therefore keeps its extents readable, while
-steady-state scrollback no longer grows the backing file as old rows expire.
+Checked against alacritty by the differential fuzzer in `harness/`, and against
+xterm and tmux where those disagree:
 
-## Terminal emulation
+- DEC Special Graphics and UK character sets in G0/G1, SI/SO, saved by DECSC.
+- REP (bounded to a screenful), IRM, DECAWM off, tab stops (HTS, TBC, CHT,
+  CBT), IND, NEL, HPA, HPR, VPR, `CSI s`/`CSI u`, DECSTR, ED 3, modes 1047,
+  1048 and 1004 (recorded so mux can report focus).
+- SGR 5/6, 8, 9, 21 and 53 with their resets, colon forms of 38/48/58, and
+  bold and faint as independent bits (SGR 22 clears both; formatted output
+  resets intensity before setting a new combination).
+- Blanks from scrolling, inserting and deleting take the current background
+  (BCE); erasing keeps only the background.
+- Cursor movement, but not a line feed or an edit, ends a pending wrap; a tab
+  at the right margin keeps it. IL/DL act only inside the scroll region, VPA
+  honours origin mode, RI above the region does not scroll it, and a DECSTBM
+  of fewer than two rows is ignored.
+- Both buffers share one cursor, margins and origin mode; DECSC is saved per
+  buffer. A second `?1049h` does nothing. RIS keeps the scrollback.
+- Every counted CSI is bounded by what it can affect (`CSI 65535 @` used to
+  freeze the daemon).
 
-Mux extends the emulator to what the programs it hosts actually send, checked
-against alacritty by a differential fuzzer in `harness/` and, where the two
-disagree, against xterm and tmux:
+## Resizing and wide characters
 
-- Character sets: DEC Special Graphics and the UK set in G0 and G1, SI/SO, and
-  both saved and restored by DECSC/DECRC. Curses draws its borders with them.
-- REP (repeat the last character, at most a screenful), IRM (insert mode),
-  DECAWM (autowrap off overwrites the last column and drops a wide character
-  that no longer fits), tab stops (HTS, TBC, CHT, CBT), IND, NEL, HPA, HPR, VPR,
-  `CSI s`/`CSI u`, DECSTR (soft reset), ED 3 (erase saved lines), and the 1047
-  and 1048 alternate screen modes. Mode 1004 is recorded so mux can report focus.
-- SGR 5/6 (blink), 8 (hidden), 9 (strikethrough), 21 (double underline) and 53
-  (overline) with their resets, and the colon forms of 38 and 48 with a color
-  space field. Bold and faint combine as in xterm instead of replacing each
-  other. These renditions live in a new `Attrs::extra` byte; a packed row only
-  uses the longer (18-byte) span form, flagged in bit 1 of its flag byte, when
-  one of its spans needs it, so history written before and read by older
-  versions is unchanged.
-- Blank cells made by scrolling, inserting and deleting take the current
-  background (xterm's BCE), and erasing uses only the background.
-- Cursor movement (but not a line feed or an edit) ends a pending wrap; a tab
-  at the right margin leaves it pending, as tmux does. IL and DL only act inside
-  the scroll region and reset the column; VPA honours origin mode; RI above the
-  region no longer scrolls it; a DECSTBM with fewer than two rows is ignored.
-- One cursor, one pair of margins and one origin mode are shared by both
-  buffers, while DECSC keeps a saved cursor per buffer, as in xterm. A second
-  `?1049h` does nothing.
-- RIS keeps the scrollback (and its backing file), like xterm.
-- Every CSI with a count is bounded by what it can affect. ICH used to insert
-  one cell at a time without a bound: `CSI 65535 @` took seconds, freezing the
-  daemon and every pane with it.
+- The normal screen resizes like tmux: a new width rewraps history and screen
+  together with the cursor kept in its text; a new height drops rows below the
+  cursor before pushing rows into history, and growing pulls at most that many
+  back. Whether the newest history row continues onto the screen is tracked
+  explicitly, so text printed after a `clear` never joins the line before it.
+  The alternate screen is only cropped.
+- Both halves of a wide character stay together, except on a one-column
+  screen, which keeps them on consecutive rows so widening rejoins them.
+  Whatever splits a pair blanks both halves; a broken pair is never a reason
+  to panic, and a combining mark never attaches to a second half.
 
-## Resizing
-
-The normal screen is resized the way tmux does it. A new width rewraps the
-history and the screen together, and the cursor keeps its place in the text,
-including just after a line that exactly fills the width. A new height gives up
-the rows below the cursor (as tmux does) before sending rows off the top into the history,
-and a taller screen takes rows back out of it, at most as many as it grew by.
-Whether the newest history row continues onto the first screen row is tracked
-explicitly, because a wrap flag alone would join text printed after a `clear`
-onto the line before it. The alternate screen is only cropped.
-
-## Wide characters
-
-Every half of a wide character has its other half beside it, except on a
-one-column screen, which keeps them on consecutive rows so that widening joins
-them again. Anything that splits a pair (an insertion, a deletion, a resize)
-blanks both halves, and no path assumes the invariant holds: a broken pair is
-blanked or skipped, never a reason to panic. A combining mark never attaches to
-a continuation half.
-
-Bold (SGR 1) and faint (SGR 2) are retained independently, matching xterm's
-attribute bits. SGR 22 clears both. Formatted output resets intensity before
-setting a changed combination so moving from bold to faint does not accumulate
-both attributes in the terminal receiving that output. Recorded real-shell
-cat/head stress exposed the original mutually-exclusive intensity assumption.
-Persisted compact rows also accept the combined bold/faint bits. The parser now
-produces that valid state, so rejecting it during history restore would discard
-the pane's journal after styled output had entered scrollback.
+Unused upstream API (`rows_formatted`, `rows_diff`, `contents_between`,
+`input_mode_*`, `attributes_formatted`, `cursor_state_formatted`,
+`application_keypad`, the screen's own attribute getters, and `Parser`'s
+`Default` and `io::Write`) was removed.

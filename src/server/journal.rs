@@ -2,7 +2,7 @@
 
 use std::{
     fs::{self, File, OpenOptions},
-    io::{BufReader, BufWriter, ErrorKind, Read, Write},
+    io::{self, BufReader, BufWriter, ErrorKind, Read, Write},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender, SyncSender},
@@ -15,7 +15,6 @@ use anyhow::{Context, Result, bail};
 use super::{output_budget::OutputPermit, terminal::process_terminal_bytes};
 
 pub(super) const JOURNAL_OUTPUT: u8 = 1;
-
 pub(super) const JOURNAL_RESIZE: u8 = 2;
 /// A pane's scrollback, packed the way the scrollback itself stores it. It
 /// costs a read and a decompression to restore, where the same rows written as
@@ -25,8 +24,8 @@ pub(super) const JOURNAL_HISTORY: u8 = 3;
 const MAX_JOURNAL_RECORD: usize = 16 * 1024 * 1024;
 const JOURNAL_FLUSH_DELAY: Duration = Duration::from_millis(8);
 const JOURNAL_SYNC_INTERVAL: Duration = Duration::from_secs(1);
+const JOURNAL_BUFFER: usize = 64 * 1024;
 
-/// Journal size that triggers compaction before the next event loop starts.
 /// How large a journal may grow before it is worth rewriting. A pane's whole
 /// scrollback compacts to a few megabytes, and every byte over that is replayed
 /// again at every startup, so the bar is low and compaction is frequent.
@@ -48,8 +47,6 @@ fn resize_payload(rows: u16, cols: u16) -> [u8; 4] {
     payload
 }
 
-/// A pane's append-only record of everything its terminal has shown.
-///
 /// Records are written on a worker so storage latency never stalls terminal
 /// parsing, input, or rendering in the daemon thread.
 pub(super) struct PaneJournal {
@@ -70,11 +67,9 @@ pub(super) struct PaneJournal {
 
 enum JournalCommand {
     Write(Vec<u8>, Option<OutputPermit>),
-    Flush(SyncSender<std::io::Result<()>>),
-    #[cfg(test)]
-    Replace(PathBuf, Vec<u8>, SyncSender<std::io::Result<()>>),
-    ReplaceAsync(PathBuf, Vec<u8>, Sender<()>),
-    Truncate(u64, SyncSender<std::io::Result<()>>),
+    Flush(SyncSender<io::Result<()>>),
+    Replace(PathBuf, Vec<u8>, Sender<()>),
+    Truncate(u64, SyncSender<io::Result<()>>),
 }
 
 impl PaneJournal {
@@ -95,24 +90,20 @@ impl PaneJournal {
         }
     }
 
-    /// Appends a record. The first failure is reported; after that the journal
-    /// stays quiet, so a full disk does not repeat itself on every chunk of
-    /// terminal output.
-    pub(super) fn append(&mut self, kind: u8, payload: &[u8]) -> Result<()> {
-        if self.abandoned {
-            return Ok(());
-        }
-        if let Some(error) = self.worker_failure() {
+    /// Reports the worker's first failure, abandoning the journal.
+    fn check_worker(&mut self) -> Result<()> {
+        if let Ok(error) = self.failures.try_recv() {
             self.abandoned = true;
-            return Err(anyhow::anyhow!(error));
+            bail!(error);
         }
-        match self.queue_record(kind, payload, None) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                self.abandoned = true;
-                Err(error)
-            }
+        Ok(())
+    }
+
+    fn abandon_on_error(&mut self, result: Result<()>) -> Result<()> {
+        if result.is_err() {
+            self.abandoned = true;
         }
+        result
     }
 
     fn queue_record(
@@ -130,6 +121,8 @@ impl PaneJournal {
         Ok(())
     }
 
+    /// The first failure is reported; after that the journal stays quiet, so
+    /// a full disk does not repeat itself on every chunk of terminal output.
     pub(super) fn append_output(
         &mut self,
         bytes: &[u8],
@@ -138,15 +131,17 @@ impl PaneJournal {
         if self.abandoned {
             return Ok(());
         }
-        if let Some(error) = self.worker_failure() {
-            self.abandoned = true;
-            return Err(anyhow::anyhow!(error));
-        }
+        self.check_worker()?;
         self.queue_record(JOURNAL_OUTPUT, bytes, permit)
     }
 
     pub(super) fn append_resize(&mut self, rows: u16, cols: u16) -> Result<()> {
-        self.append(JOURNAL_RESIZE, &resize_payload(rows, cols))
+        if self.abandoned {
+            return Ok(());
+        }
+        self.check_worker()?;
+        let result = self.queue_record(JOURNAL_RESIZE, &resize_payload(rows, cols), None);
+        self.abandon_on_error(result)
     }
 
     pub(super) fn flush(&mut self) -> Result<()> {
@@ -164,13 +159,7 @@ impl PaneJournal {
                     .context("pane journal writer stopped")?
                     .context("flush pane journal")
             });
-        match result {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                self.abandoned = true;
-                Err(error)
-            }
-        }
+        self.abandon_on_error(result)
     }
 
     /// Asks for this journal to be rewritten at the next quiet moment, however
@@ -192,48 +181,48 @@ impl PaneJournal {
         if self.abandoned {
             return Ok(());
         }
-        if let Some(error) = self.worker_failure() {
-            self.abandoned = true;
-            return Err(anyhow::anyhow!(error));
-        }
-        Ok(())
+        self.check_worker()
+    }
+
+    /// Queues a replacement journal, `done` hearing when the worker is through
+    /// with it. Writes queued after it remain ordered behind the replacement.
+    fn queue_replacement(
+        &mut self,
+        path: PathBuf,
+        records: Vec<u8>,
+        done: Sender<()>,
+    ) -> Result<()> {
+        self.sender
+            .send(JournalCommand::Replace(path, records, done))
+            .context("pane journal writer stopped")
+    }
+
+    fn replaced(&mut self, length: u64) {
+        self.length = length;
+        self.compact_at = MAX_JOURNAL_BYTES.max(length.saturating_mul(2));
     }
 
     /// Replaces the journal with `records`, which must replay to the same
-    /// screen the pane is showing now.
+    /// screen the pane is showing now, and waits for the outcome.
     #[cfg(test)]
     pub(super) fn replace(&mut self, path: PathBuf, records: &[u8]) -> Result<()> {
-        let (sender, receiver) = mpsc::sync_channel(0);
-        self.sender
-            .send(JournalCommand::Replace(path, records.to_vec(), sender))
-            .context("pane journal writer stopped")?;
-        receiver
-            .recv()
-            .context("pane journal writer stopped")?
-            .context("replace pane journal")?;
-        self.length = records.len() as u64;
-        self.compact_at = MAX_JOURNAL_BYTES.max(self.length.saturating_mul(2));
+        let (done, finished) = mpsc::channel();
+        self.queue_replacement(path, records.to_vec(), done)?;
+        finished.recv().context("pane journal writer stopped")?;
+        if let Ok(error) = self.failures.try_recv() {
+            bail!("replace pane journal: {error}");
+        }
+        self.replaced(records.len() as u64);
         Ok(())
     }
 
-    /// Queues a compacted replacement without waiting for its fsyncs. Writes
-    /// queued after it remain ordered behind the replacement.
+    /// Queues a compacted replacement without waiting for its fsyncs.
     pub(super) fn replace_async(&mut self, path: PathBuf, records: Vec<u8>) -> Result<()> {
-        if let Some(error) = self.worker_failure() {
-            self.abandoned = true;
-            return Err(anyhow::anyhow!(error));
-        }
+        self.check_worker()?;
         let length = records.len() as u64;
-        self.sender
-            .send(JournalCommand::ReplaceAsync(
-                path,
-                records,
-                self.compaction_sender.clone(),
-            ))
-            .context("pane journal writer stopped")?;
+        self.queue_replacement(path, records, self.compaction_sender.clone())?;
         self.compacting = true;
-        self.length = length;
-        self.compact_at = MAX_JOURNAL_BYTES.max(length.saturating_mul(2));
+        self.replaced(length);
         Ok(())
     }
 
@@ -249,145 +238,146 @@ impl PaneJournal {
         self.length = length;
         Ok(())
     }
+}
 
-    fn worker_failure(&self) -> Option<String> {
-        self.failures.try_recv().ok()
+/// The worker's side of a journal. After the first failure every write is
+/// dropped, and the failure is reported through `failures`.
+struct JournalWriter {
+    file: BufWriter<File>,
+    failure: Option<String>,
+    failures: Sender<String>,
+    buffered: bool,
+    unsynced: bool,
+    flush_at: Option<Instant>,
+    sync_at: Option<Instant>,
+}
+
+impl JournalWriter {
+    /// Records `error` as the journal's failure, returning a copy of it.
+    fn fail(&mut self, error: io::Error) -> io::Error {
+        let message = error.to_string();
+        self.failure = Some(message.clone());
+        let _ = self.failures.send(message.clone());
+        io::Error::new(error.kind(), message)
+    }
+
+    fn write(&mut self, record: &[u8]) {
+        if self.failure.is_some() {
+            return;
+        }
+        match self.file.write_all(record) {
+            Ok(()) => {
+                self.buffered = true;
+                self.unsynced = true;
+                self.flush_at
+                    .get_or_insert_with(|| Instant::now() + JOURNAL_FLUSH_DELAY);
+                self.sync_at
+                    .get_or_insert_with(|| Instant::now() + JOURNAL_SYNC_INTERVAL);
+            }
+            Err(error) => {
+                self.fail(error);
+            }
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if let Some(error) = &self.failure {
+            return Err(io::Error::other(error.clone()));
+        }
+        if self.buffered {
+            self.file.flush().map_err(|error| self.fail(error))?;
+            self.buffered = false;
+        }
+        Ok(())
+    }
+
+    fn sync(&mut self) -> io::Result<()> {
+        self.flush()?;
+        if self.unsynced {
+            self.file
+                .get_ref()
+                .sync_data()
+                .map_err(|error| self.fail(error))?;
+            self.unsynced = false;
+        }
+        Ok(())
+    }
+
+    /// Syncs ahead of a command that needs everything so far on disk, which
+    /// also settles both pending deadlines.
+    fn sync_now(&mut self) -> io::Result<()> {
+        let result = self.sync();
+        self.flush_at = None;
+        self.sync_at = None;
+        result
     }
 }
 
 fn journal_writer(file: File, receiver: Receiver<JournalCommand>, failures: Sender<String>) {
-    let mut file = BufWriter::with_capacity(64 * 1024, file);
-    let mut failure = None;
-    let mut buffered = false;
-    let mut unsynced = false;
-    let mut flush_at = None;
-    let mut sync_at = None;
+    let mut writer = JournalWriter {
+        file: BufWriter::with_capacity(JOURNAL_BUFFER, file),
+        failure: None,
+        failures,
+        buffered: false,
+        unsynced: false,
+        flush_at: None,
+        sync_at: None,
+    };
     loop {
         let now = Instant::now();
-        if flush_at.is_some_and(|deadline| now >= deadline) {
-            let _ = flush_journal(&mut file, &mut buffered, &mut failure, &failures);
-            flush_at = None;
+        if writer.flush_at.is_some_and(|deadline| now >= deadline) {
+            let _ = writer.flush();
+            writer.flush_at = None;
         }
-        if sync_at.is_some_and(|deadline| now >= deadline) {
-            let _ = sync_journal(
-                &mut file,
-                &mut buffered,
-                &mut unsynced,
-                &mut failure,
-                &failures,
-            );
-            sync_at = None;
+        if writer.sync_at.is_some_and(|deadline| now >= deadline) {
+            let _ = writer.sync();
+            writer.sync_at = None;
         }
-        let deadline = match (flush_at, sync_at) {
-            (Some(flush), Some(sync)) => Some(flush.min(sync)),
-            (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
-            (None, None) => None,
-        };
-        let command = if let Some(deadline) = deadline {
-            receiver.recv_timeout(deadline.saturating_duration_since(now))
-        } else {
-            receiver
+        let deadline = [writer.flush_at, writer.sync_at]
+            .into_iter()
+            .flatten()
+            .min();
+        let command = match deadline {
+            Some(deadline) => receiver.recv_timeout(deadline.saturating_duration_since(now)),
+            None => receiver
                 .recv()
-                .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+                .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
         };
         match command {
-            Ok(JournalCommand::Write(record, _permit)) => {
-                if failure.is_none() {
-                    match file.write_all(&record) {
-                        Ok(()) => {
-                            buffered = true;
-                            unsynced = true;
-                            flush_at.get_or_insert_with(|| Instant::now() + JOURNAL_FLUSH_DELAY);
-                            sync_at.get_or_insert_with(|| Instant::now() + JOURNAL_SYNC_INTERVAL);
-                        }
-                        Err(error) => record_failure(&mut failure, &failures, error),
-                    }
-                }
-            }
+            Ok(JournalCommand::Write(record, _permit)) => writer.write(&record),
             Ok(JournalCommand::Flush(reply)) => {
-                let result = sync_journal(
-                    &mut file,
-                    &mut buffered,
-                    &mut unsynced,
-                    &mut failure,
-                    &failures,
-                );
-                flush_at = None;
-                sync_at = None;
-                let _ = reply.send(result);
+                let _ = reply.send(writer.sync_now());
             }
-            #[cfg(test)]
-            Ok(JournalCommand::Replace(path, records, reply)) => {
+            Ok(JournalCommand::Replace(path, records, done)) => {
                 // Drain earlier writes before replacing the inode. The old
                 // journal remains intact until the complete new one is synced.
-                let result = sync_journal(
-                    &mut file,
-                    &mut buffered,
-                    &mut unsynced,
-                    &mut failure,
-                    &failures,
-                )
-                .and_then(|()| replace_journal_file(&path, &records))
-                .map(|new_file| {
-                    file = BufWriter::with_capacity(64 * 1024, new_file);
-                });
-                if let Err(error) = &result {
-                    record_failure(
-                        &mut failure,
-                        &failures,
-                        std::io::Error::new(error.kind(), error.to_string()),
-                    );
+                match writer
+                    .sync_now()
+                    .and_then(|()| replace_journal_file(&path, &records))
+                {
+                    Ok(file) => writer.file = BufWriter::with_capacity(JOURNAL_BUFFER, file),
+                    Err(error) => {
+                        writer.fail(error);
+                    }
                 }
-                flush_at = None;
-                sync_at = None;
-                let _ = reply.send(result);
-            }
-            Ok(JournalCommand::ReplaceAsync(path, records, completion)) => {
-                let result = sync_journal(
-                    &mut file,
-                    &mut buffered,
-                    &mut unsynced,
-                    &mut failure,
-                    &failures,
-                )
-                .and_then(|()| replace_journal_file(&path, &records))
-                .map(|new_file| file = BufWriter::with_capacity(64 * 1024, new_file));
-                if let Err(error) = result {
-                    record_failure(&mut failure, &failures, error);
-                }
-                flush_at = None;
-                sync_at = None;
-                let _ = completion.send(());
+                let _ = done.send(());
             }
             Ok(JournalCommand::Truncate(length, reply)) => {
-                let result = sync_journal(
-                    &mut file,
-                    &mut buffered,
-                    &mut unsynced,
-                    &mut failure,
-                    &failures,
-                )
-                .and_then(|()| file.get_ref().set_len(length));
-                flush_at = None;
-                sync_at = None;
+                let result = writer
+                    .sync_now()
+                    .and_then(|()| writer.file.get_ref().set_len(length));
                 let _ = reply.send(result);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = sync_journal(
-                    &mut file,
-                    &mut buffered,
-                    &mut unsynced,
-                    &mut failure,
-                    &failures,
-                );
+                let _ = writer.sync();
                 return;
             }
         }
     }
 }
 
-fn replace_journal_file(path: &Path, records: &[u8]) -> std::io::Result<File> {
+fn replace_journal_file(path: &Path, records: &[u8]) -> io::Result<File> {
     let temporary = path.with_extension("ansi.tmp");
     let mut file = OpenOptions::new()
         .create(true)
@@ -400,61 +390,6 @@ fn replace_journal_file(path: &Path, records: &[u8]) -> std::io::Result<File> {
     fs::rename(&temporary, path)?;
     File::open(path.parent().unwrap())?.sync_all()?;
     Ok(file)
-}
-
-fn flush_journal(
-    file: &mut BufWriter<File>,
-    buffered: &mut bool,
-    failure: &mut Option<String>,
-    failures: &Sender<String>,
-) -> std::io::Result<()> {
-    if let Some(error) = failure.as_ref() {
-        return Err(std::io::Error::other(error.clone()));
-    }
-    if !*buffered {
-        return Ok(());
-    }
-    match file.flush() {
-        Ok(()) => {
-            *buffered = false;
-            Ok(())
-        }
-        Err(error) => {
-            let returned = std::io::Error::new(error.kind(), error.to_string());
-            record_failure(failure, failures, error);
-            Err(returned)
-        }
-    }
-}
-
-fn sync_journal(
-    file: &mut BufWriter<File>,
-    buffered: &mut bool,
-    unsynced: &mut bool,
-    failure: &mut Option<String>,
-    failures: &Sender<String>,
-) -> std::io::Result<()> {
-    flush_journal(file, buffered, failure, failures)?;
-    if !*unsynced {
-        return Ok(());
-    }
-    match file.get_ref().sync_data() {
-        Ok(()) => {
-            *unsynced = false;
-            Ok(())
-        }
-        Err(error) => {
-            let returned = std::io::Error::new(error.kind(), error.to_string());
-            record_failure(failure, failures, error);
-            Err(returned)
-        }
-    }
-}
-
-fn record_failure(failure: &mut Option<String>, failures: &Sender<String>, error: std::io::Error) {
-    let message = error.to_string();
-    *failure = Some(message.clone());
-    let _ = failures.send(message);
 }
 
 /// Builds a journal that restores the current screen and scrollback.
@@ -473,37 +408,31 @@ pub(super) fn compacted_journal_records(screen: &mut vt100::Screen) -> Result<Ve
     Ok(records)
 }
 
+/// Replays records into `parser`, returning the length of the readable prefix:
+/// a torn final record is left for the caller to cut off.
 pub(super) fn replay_pane_journal<CB: vt100::Callbacks>(
     parser: &mut vt100::Parser<CB>,
     reader: impl Read,
 ) -> Result<u64> {
-    let mut reader = BufReader::with_capacity(64 * 1024, reader);
+    let mut reader = BufReader::with_capacity(JOURNAL_BUFFER, reader);
     let mut offset = 0u64;
     loop {
-        let record_start = offset;
         let mut header = [0; 5];
-        if let Err(error) = reader.read_exact(&mut header) {
-            return if error.kind() == ErrorKind::UnexpectedEof {
-                Ok(record_start)
-            } else {
-                Err(error.into())
-            };
+        let mut payload = Vec::new();
+        let read = reader.read_exact(&mut header).and_then(|()| {
+            let length = u32::from_be_bytes(header[1..].try_into().unwrap()) as usize;
+            if length > MAX_JOURNAL_RECORD {
+                return Err(io::Error::other("pane journal record exceeds 16 MiB"));
+            }
+            payload.resize(length, 0);
+            reader.read_exact(&mut payload)
+        });
+        match read {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::UnexpectedEof => return Ok(offset),
+            Err(error) => return Err(error.into()),
         }
-        let kind = header[0];
-        let length = u32::from_be_bytes(header[1..].try_into().unwrap()) as usize;
-        if length > MAX_JOURNAL_RECORD {
-            bail!("pane journal record exceeds 16 MiB");
-        }
-        offset += 5;
-        let mut payload = vec![0; length];
-        if let Err(error) = reader.read_exact(&mut payload) {
-            return if error.kind() == ErrorKind::UnexpectedEof {
-                Ok(record_start)
-            } else {
-                Err(error.into())
-            };
-        }
-        match kind {
+        match header[0] {
             JOURNAL_OUTPUT => process_terminal_bytes(parser, &payload),
             JOURNAL_HISTORY => {
                 if !parser.screen_mut().restore_history(&payload) {
@@ -518,9 +447,9 @@ pub(super) fn replay_pane_journal<CB: vt100::Callbacks>(
                 let cols = u16::from_be_bytes(payload[2..].try_into().unwrap()).max(1);
                 parser.screen_mut().set_size(rows, cols);
             }
-            _ => bail!("pane journal contains unknown record type {kind}"),
+            kind => bail!("pane journal contains unknown record type {kind}"),
         }
-        offset += u64::try_from(length).unwrap();
+        offset += 5 + payload.len() as u64;
     }
 }
 

@@ -2,10 +2,11 @@ use std::{
     env,
     ffi::OsStr,
     io::{Read, Write, stdout},
+    ops::ControlFlow,
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::mpsc,
+    sync::mpsc::{self, SyncSender},
     thread,
     time::{Duration, Instant},
 };
@@ -31,7 +32,8 @@ use crate::{
     frame::TerminalFeatures,
     protocol::{
         ALT, CTRL, ClientMessage, Hello, Key, KeyCode, Mouse, MouseButton, MouseKind, MuxCommand,
-        MuxQuery, SHIFT, ServerMessage, read_message, write_message,
+        MuxQuery, SHIFT, ServerMessage, read_message, read_shutdown_response, write_message,
+        write_shutdown,
     },
 };
 
@@ -56,7 +58,7 @@ enum ClientEvent {
 /// The fallback lives in a per-user directory rather than directly in `/tmp`,
 /// so the daemon can keep the socket and its startup files out of reach of
 /// other local accounts; see `server::persist::prepare_socket_directory`.
-pub fn socket_path() -> PathBuf {
+fn socket_path() -> PathBuf {
     if let Some(socket) = env::var_os("MUX") {
         PathBuf::from(socket)
     } else if let Some(runtime) = env::var_os("XDG_RUNTIME_DIR") {
@@ -64,6 +66,15 @@ pub fn socket_path() -> PathBuf {
     } else {
         PathBuf::from(format!("/tmp/mux-{}", nix::unistd::getuid().as_raw())).join("mux.sock")
     }
+}
+
+fn is_set(value: Option<&OsStr>) -> bool {
+    value.is_some_and(|value| !value.is_empty())
+}
+
+/// Whether this is an SSH login, whose terminal is on another machine.
+pub fn over_ssh() -> bool {
+    is_set(env::var_os("SSH_TTY").as_deref())
 }
 
 /// Whether attaching would put a client inside the daemon it belongs to.
@@ -89,7 +100,14 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
     // mask must be in place before any thread starts, since they inherit it,
     // and only after the daemon has been started: a blocked mask survives
     // exec, and every shell the daemon ever spawns would inherit it.
-    let signals = client_signals();
+    let signals = SigSet::from_iter([
+        Signal::SIGTERM,
+        Signal::SIGHUP,
+        Signal::SIGINT,
+        Signal::SIGQUIT,
+        Signal::SIGTSTP,
+        Signal::SIGCONT,
+    ]);
     signals.thread_block().context("block client signals")?;
     let (cols, rows) = terminal_size()?;
     let cwd = env::current_dir().context("read current directory")?;
@@ -102,14 +120,20 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
             session,
             bindings: settings.bindings,
             clipboard_command: settings.clipboard_command,
-            terminal_clipboard: env::var_os("SSH_TTY").is_some_and(|value| !value.is_empty()),
+            terminal_clipboard: over_ssh(),
             theme: settings.theme,
             theme_command: settings.theme_command,
             theme_directory: settings.theme_directory,
             mouse: settings.mouse,
             bell_style: settings.bell_style,
             terminal: TerminalFeatures {
-                truecolor: settings.truecolor.unwrap_or_else(terminal_has_truecolor),
+                truecolor: settings.truecolor.unwrap_or_else(|| {
+                    truecolor_from(
+                        env::var_os("COLORTERM").as_deref(),
+                        env::var_os("TERM").as_deref(),
+                        env::var_os("WT_SESSION").as_deref(),
+                    )
+                }),
                 styled_underlines: settings
                     .styled_underlines
                     .unwrap_or_else(|| styled_underlines_from(|name| env::var(name).ok())),
@@ -119,127 +143,116 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
         })),
     )?;
 
-    let mut reader = stream.try_clone()?;
     // Bounded, so a terminal that stops reading stops this client reading
     // the socket too. The daemon then skips the frames in between and paints
     // the present in full once the terminal drains, instead of the client
     // buffering and replaying everything it missed.
     let (sender, receiver) = mpsc::sync_channel(CLIENT_EVENT_QUEUE);
-    let server_sender = sender.clone();
-    thread::spawn(move || {
-        loop {
-            match read_message(&mut reader) {
-                Ok(Some(message)) => {
-                    if server_sender.send(ClientEvent::Server(message)).is_err() {
-                        return;
-                    }
-                }
-                Ok(None) => {
-                    let _ = server_sender.send(ClientEvent::ServerDisconnected);
-                    return;
-                }
-                Err(error) => {
-                    let _ = server_sender.send(ClientEvent::ServerError(error.to_string()));
-                    return;
-                }
-            }
-        }
+    let mut reader = stream.try_clone()?;
+    forward(&sender, move || match read_message(&mut reader) {
+        Ok(Some(message)) => ControlFlow::Continue(ClientEvent::Server(message)),
+        Ok(None) => ControlFlow::Break(Some(ClientEvent::ServerDisconnected)),
+        Err(error) => ControlFlow::Break(Some(ClientEvent::ServerError(error.to_string()))),
+    });
+    let mut terminal = TerminalGuard::enter(settings.mouse)?;
+    forward(&sender, move || match signals.wait() {
+        Ok(Signal::SIGTSTP) => ControlFlow::Continue(ClientEvent::Suspend),
+        Ok(Signal::SIGCONT) => ControlFlow::Continue(ClientEvent::Resume),
+        Ok(_) => ControlFlow::Continue(ClientEvent::Terminate),
+        Err(_) => ControlFlow::Break(None),
+    });
+    forward(&sender, || match event::read() {
+        Ok(event) => ControlFlow::Continue(ClientEvent::Terminal(event)),
+        Err(error) => ControlFlow::Break(Some(ClientEvent::TerminalError(error.to_string()))),
     });
 
-    let mut terminal = TerminalGuard::enter(settings.mouse)?;
-    let signal_sender = sender.clone();
-    thread::spawn(move || {
-        while let Ok(signal) = signals.wait() {
-            let event = match signal {
-                Signal::SIGTSTP => ClientEvent::Suspend,
-                Signal::SIGCONT => ClientEvent::Resume,
-                _ => ClientEvent::Terminate,
-            };
-            if signal_sender.send(event).is_err() {
-                return;
-            }
-        }
-    });
-    let input_sender = sender.clone();
-    thread::spawn(move || {
-        loop {
-            match event::read() {
-                Ok(event) => {
-                    if input_sender.send(ClientEvent::Terminal(event)).is_err() {
-                        return;
-                    }
-                }
-                Err(error) => {
-                    let _ = input_sender.send(ClientEvent::TerminalError(error.to_string()));
-                    return;
-                }
-            }
-        }
-    });
     let mut output = stdout();
     loop {
-        match receiver.recv() {
-            Ok(ClientEvent::Server(ServerMessage::Render(bytes))) => {
+        let message = match receiver.recv().unwrap_or(ClientEvent::ServerDisconnected) {
+            ClientEvent::Server(ServerMessage::Render(bytes)) => {
                 output.write_all(&bytes)?;
                 output.flush()?;
+                continue;
             }
-            Ok(ClientEvent::Server(ServerMessage::Clipboard { selection, data })) => {
+            ClientEvent::Server(ServerMessage::Clipboard { selection, data }) => {
                 write_terminal_clipboard(&mut output, &selection, &data)?;
+                continue;
             }
-            Ok(ClientEvent::Server(ServerMessage::Detached)) => return Ok(()),
+            ClientEvent::Server(ServerMessage::Detached) | ClientEvent::Terminate => return Ok(()),
             // Only a query asks for a listing, and an attached client never does.
-            Ok(ClientEvent::Server(ServerMessage::Done | ServerMessage::Listing(_))) => {}
-            Ok(ClientEvent::Server(ServerMessage::Error(error))) => bail!("server: {error}"),
-            Ok(ClientEvent::ServerDisconnected) | Err(_) => {
-                bail!(
-                    "multiplexer server disconnected; if mux was just updated, restart the daemon so client and daemon use the same version"
-                )
-            }
-            Ok(ClientEvent::ServerError(error)) => bail!("multiplexer server protocol: {error}"),
-            Ok(ClientEvent::Terminal(Event::Key(key)))
-                if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
-            {
-                if let Some(key) = convert_key(key.code, key.modifiers) {
-                    write_message(&mut stream, &ClientMessage::Key(key))?;
-                }
-            }
-            Ok(ClientEvent::Terminal(Event::Mouse(mouse))) => {
-                if let Some(mouse) = convert_mouse(mouse) {
-                    write_message(&mut stream, &ClientMessage::Mouse(mouse))?;
-                }
-            }
-            Ok(ClientEvent::Terminal(Event::Paste(text))) => {
-                write_message(&mut stream, &ClientMessage::Paste(text))?
-            }
-            Ok(ClientEvent::Terminal(Event::Resize(cols, rows))) => {
-                let (cols, rows) = usable_terminal_size(cols, rows);
-                write_message(&mut stream, &ClientMessage::Resize { cols, rows })?
-            }
-            Ok(ClientEvent::Terminal(Event::FocusGained)) => {
-                write_message(&mut stream, &ClientMessage::Focus(true))?
-            }
-            Ok(ClientEvent::Terminal(Event::FocusLost)) => {
-                write_message(&mut stream, &ClientMessage::Focus(false))?
-            }
-            Ok(ClientEvent::Terminate) => return Ok(()),
-            Ok(ClientEvent::Suspend) => {
+            ClientEvent::Server(ServerMessage::Done | ServerMessage::Listing(_)) => continue,
+            ClientEvent::Server(ServerMessage::Error(error)) => bail!("server: {error}"),
+            ClientEvent::ServerDisconnected => bail!(
+                "multiplexer server disconnected; if mux was just updated, restart the daemon so client and daemon use the same version"
+            ),
+            ClientEvent::ServerError(error) => bail!("multiplexer server protocol: {error}"),
+            ClientEvent::TerminalError(error) => bail!("terminal input: {error}"),
+            ClientEvent::Suspend => {
                 terminal.leave();
                 // SIGSTOP cannot be caught or blocked, so this really stops;
                 // SIGCONT then arrives as Resume.
                 let _ = nix::sys::signal::raise(Signal::SIGSTOP);
+                continue;
             }
-            Ok(ClientEvent::Resume) => {
+            ClientEvent::Resume => {
                 terminal.reenter()?;
                 // Whatever ran in the meantime drew over the screen, and the
                 // terminal may have been resized: a resize, even to the same
                 // size, makes the daemon repaint everything.
                 let (cols, rows) = terminal_size()?;
-                write_message(&mut stream, &ClientMessage::Resize { cols, rows })?
+                ClientMessage::Resize { cols, rows }
             }
-            Ok(ClientEvent::Terminal(_)) => {}
-            Ok(ClientEvent::TerminalError(error)) => bail!("terminal input: {error}"),
-        }
+            ClientEvent::Terminal(event) => match terminal_message(event) {
+                Some(message) => message,
+                None => continue,
+            },
+        };
+        write_message(&mut stream, &message)?;
     }
+}
+
+/// Runs `next` on a thread of its own, sending each event it produces until it
+/// breaks, with an optional last event, or the client has gone.
+fn forward(
+    sender: &SyncSender<ClientEvent>,
+    mut next: impl FnMut() -> ControlFlow<Option<ClientEvent>, ClientEvent> + Send + 'static,
+) {
+    let sender = sender.clone();
+    thread::spawn(move || {
+        loop {
+            match next() {
+                ControlFlow::Continue(event) => {
+                    if sender.send(event).is_err() {
+                        return;
+                    }
+                }
+                ControlFlow::Break(last) => {
+                    if let Some(last) = last {
+                        let _ = sender.send(last);
+                    }
+                    return;
+                }
+            }
+        }
+    });
+}
+
+/// What the daemon needs to hear about a terminal event, if anything.
+fn terminal_message(event: Event) -> Option<ClientMessage> {
+    Some(match event {
+        Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+            ClientMessage::Key(convert_key(key.code, key.modifiers)?)
+        }
+        Event::Mouse(mouse) => ClientMessage::Mouse(convert_mouse(mouse)?),
+        Event::Paste(text) => ClientMessage::Paste(text),
+        Event::Resize(cols, rows) => {
+            let (cols, rows) = usable_terminal_size(cols, rows);
+            ClientMessage::Resize { cols, rows }
+        }
+        Event::FocusGained => ClientMessage::Focus(true),
+        Event::FocusLost => ClientMessage::Focus(false),
+        _ => return None,
+    })
 }
 
 fn write_terminal_clipboard(
@@ -269,30 +282,18 @@ fn usable_terminal_size(cols: u16, rows: u16) -> (u16, u16) {
 /// written in. The daemon paints for whatever the client reports, so an
 /// unannounced terminal gets the nearest 256-colour approximation instead of
 /// escape sequences it will not understand.
-fn terminal_has_truecolor() -> bool {
-    truecolor_from(
-        env::var_os("COLORTERM").as_deref(),
-        env::var_os("TERM").as_deref(),
-        env::var_os("WT_SESSION").as_deref(),
-    )
-}
-
 fn truecolor_from(
     colorterm: Option<&OsStr>,
     term: Option<&OsStr>,
     wt_session: Option<&OsStr>,
 ) -> bool {
     // Windows Terminal exposes WT_SESSION in WSL but may omit COLORTERM.
-    if wt_session.is_some_and(|value| !value.is_empty()) {
-        return true;
-    }
-    if colorterm.is_some_and(|value| value == "truecolor" || value == "24bit") {
-        return true;
-    }
-    // Some terminals say so in TERM instead of setting COLORTERM at all.
-    term.and_then(OsStr::to_str).is_some_and(|term| {
-        term == "xterm-kitty" || term.contains("direct") || term.contains("truecolor")
-    })
+    is_set(wt_session)
+        || colorterm.is_some_and(|value| value == "truecolor" || value == "24bit")
+        // Some terminals say so in TERM instead of setting COLORTERM at all.
+        || term.and_then(OsStr::to_str).is_some_and(|term| {
+            term == "xterm-kitty" || term.contains("direct") || term.contains("truecolor")
+        })
 }
 
 /// Whether the terminal draws curly, dotted and dashed underlines and SGR 58
@@ -308,62 +309,45 @@ fn styled_underlines_from(var: impl Fn(&str) -> Option<String>) -> bool {
         Some("0") => return false,
         _ => {}
     }
+    let term = var("TERM").unwrap_or_default();
     // A client inside a mux pane draws into mux, which understands them and
     // passes them on as its own client's terminal allows.
-    if var("MUX").is_some_and(|value| !value.is_empty()) {
-        return true;
-    }
-    let term = var("TERM").unwrap_or_default();
-    if [
-        "kitty",
-        "wezterm",
-        "foot",
-        "ghostty",
-        "alacritty",
-        "contour",
-        "rio",
-    ]
-    .iter()
-    .any(|name| term.contains(name))
-    {
-        return true;
-    }
-    if var("TERM_PROGRAM").is_some_and(|program| {
-        matches!(
-            program.as_str(),
-            "WezTerm" | "ghostty" | "iTerm.app" | "vscode" | "rio"
-        )
-    }) {
-        return true;
-    }
-    if [
-        "KITTY_WINDOW_ID",
-        "WEZTERM_EXECUTABLE",
-        "GHOSTTY_RESOURCES_DIR",
-        "ALACRITTY_WINDOW_ID",
-    ]
-    .iter()
-    .any(|name| var(name).is_some())
-    {
-        return true;
-    }
-    // VTE (GNOME Terminal, Tilix, ...) has had both since 0.52.
-    var("VTE_VERSION")
-        .and_then(|version| version.parse::<u32>().ok())
-        .is_some_and(|version| version >= 5200)
+    var("MUX").is_some_and(|value| !value.is_empty())
+        || ["kitty", "wezterm", "foot", "ghostty", "alacritty", "contour", "rio"]
+            .iter()
+            .any(|name| term.contains(name))
+        || var("TERM_PROGRAM").is_some_and(|program| {
+            matches!(
+                program.as_str(),
+                "WezTerm" | "ghostty" | "iTerm.app" | "vscode" | "rio"
+            )
+        })
+        || [
+            "KITTY_WINDOW_ID",
+            // Windows Terminal, since 1.21; in WSL TERM is just xterm-256color.
+            "WT_SESSION",
+            "WEZTERM_EXECUTABLE",
+            "GHOSTTY_RESOURCES_DIR",
+            "ALACRITTY_WINDOW_ID",
+        ]
+        .iter()
+        .any(|name| var(name).is_some())
+        // VTE (GNOME Terminal, Tilix, ...) has had both since 0.52.
+        || var("VTE_VERSION")
+            .and_then(|version| version.parse::<u32>().ok())
+            .is_some_and(|version| version >= 5200)
 }
 
-/// Connects to a daemon that is already running. Unlike attaching, a one-shot
-/// message is never worth starting one for: there would be no sessions in it.
-fn connect() -> Result<UnixStream> {
-    let path = socket_path();
-    UnixStream::connect(&path).with_context(|| format!("connect to {}", path.display()))
+fn connect(path: &Path) -> Result<UnixStream> {
+    UnixStream::connect(path).with_context(|| format!("connect to {}", path.display()))
 }
 
-/// Sends one message and waits for the daemon's single reply, which is `None`
-/// when the daemon hung up before sending one.
+/// Sends one message to a running daemon and waits for its single reply,
+/// which is `None` when the daemon hung up before sending one. Unlike
+/// attaching, a one-shot message is never worth starting a daemon for: there
+/// would be no sessions in it.
 fn request(message: ClientMessage) -> Result<Option<ServerMessage>> {
-    let mut stream = connect()?;
+    let mut stream = connect(&socket_path())?;
     write_message(&mut stream, &message)?;
     read_message(&mut stream).context(
         "read daemon response; if mux was just updated, restart the daemon so client and daemon use the same version",
@@ -381,29 +365,27 @@ pub fn stop() -> Result<()> {
 }
 
 fn stop_at(path: &Path) -> Result<()> {
-    let mut stream =
-        UnixStream::connect(path).with_context(|| format!("connect to {}", path.display()))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let connect = || -> Result<UnixStream> {
+        let stream = connect(path)?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        Ok(stream)
+    };
     // Existing version 2 daemons predate the stable shutdown control message.
     // Try their ordinary request first, then reconnect using version 1's
     // permanent encoding if the daemon rejects our interactive protocol.
-    let response = (|| -> Result<Option<ServerMessage>> {
-        write_message(&mut stream, &ClientMessage::Shutdown)?;
-        read_message(&mut stream)
-    })();
+    let mut stream = connect()?;
+    let response = write_message(&mut stream, &ClientMessage::Shutdown)
+        .and_then(|()| read_message(&mut stream));
     match response {
         Ok(Some(ServerMessage::Detached)) => return Ok(()),
         Ok(Some(ServerMessage::Error(error))) => bail!("server: {error}"),
         _ => {}
     }
     drop(stream);
-    let mut stream =
-        UnixStream::connect(path).with_context(|| format!("connect to {}", path.display()))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    crate::protocol::write_shutdown(&mut stream)?;
-    crate::protocol::read_shutdown_response(&mut stream)
+    let mut stream = connect()?;
+    write_shutdown(&mut stream)?;
+    read_shutdown_response(&mut stream)
 }
 
 pub fn command(command: MuxCommand, pane: Option<usize>) -> Result<()> {
@@ -478,34 +460,25 @@ fn wait_for_daemon(
                 let _ = child.kill();
                 let _ = child.wait();
                 let stderr = stderr.join().unwrap_or_default();
-                return daemon_start_error(path, error, &stderr);
+                let stderr = stderr.trim();
+                let detail = if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {stderr}")
+                };
+                return Err(error)
+                    .with_context(|| format!("daemon did not open {}{detail}", path.display()));
             }
         }
     }
 }
 
-fn daemon_start_error(
-    path: &Path,
-    connect_error: std::io::Error,
-    stderr: &str,
-) -> Result<UnixStream> {
-    let stderr = stderr.trim();
-    if stderr.is_empty() {
-        Err(connect_error).with_context(|| format!("daemon did not open {}", path.display()))
-    } else {
-        Err(connect_error)
-            .with_context(|| format!("daemon did not open {}: {stderr}", path.display()))
-    }
-}
-
+/// The last 64 KiB the daemon wrote to stderr.
 fn capture_stderr(mut stderr: impl Read) -> String {
     const LIMIT: usize = 64 * 1024;
     let mut captured = Vec::new();
     let mut chunk = [0; 4096];
-    while let Ok(length) = stderr.read(&mut chunk) {
-        if length == 0 {
-            break;
-        }
+    while let Ok(length @ 1..) = stderr.read(&mut chunk) {
         captured.extend_from_slice(&chunk[..length]);
         if captured.len() > LIMIT {
             captured.drain(..captured.len() - LIMIT);
@@ -514,17 +487,19 @@ fn capture_stderr(mut stderr: impl Read) -> String {
     String::from_utf8_lossy(&captured).into_owned()
 }
 
+fn modifier_bits(modifiers: KeyModifiers) -> u8 {
+    [
+        (KeyModifiers::SHIFT, SHIFT),
+        (KeyModifiers::ALT, ALT),
+        (KeyModifiers::CONTROL, CTRL),
+    ]
+    .into_iter()
+    .filter(|(modifier, _)| modifiers.contains(*modifier))
+    .fold(0, |bits, (_, bit)| bits | bit)
+}
+
 fn convert_key(code: CrosstermKeyCode, modifiers: KeyModifiers) -> Option<Key> {
-    let mut modifier_bits = 0;
-    if modifiers.contains(KeyModifiers::SHIFT) {
-        modifier_bits |= SHIFT;
-    }
-    if modifiers.contains(KeyModifiers::ALT) {
-        modifier_bits |= ALT;
-    }
-    if modifiers.contains(KeyModifiers::CONTROL) {
-        modifier_bits |= CTRL;
-    }
+    let mut modifier_bits = modifier_bits(modifiers);
     let code = match code {
         // Ctrl-[ is Escape's own byte, and the only way to type it on a
         // keyboard whose Escape key is broken; mux reads the two as one key.
@@ -546,13 +521,10 @@ fn convert_key(code: CrosstermKeyCode, modifiers: KeyModifiers) -> Option<Key> {
             })
         }
         CrosstermKeyCode::Char(mut character) => {
-            if modifier_bits & (ALT | CTRL) != 0
-                && modifier_bits & SHIFT != 0
-                && character.is_uppercase()
-            {
-                character = character.to_lowercase().next().unwrap_or(character);
-            } else if modifier_bits & (ALT | CTRL) == 0 {
+            if modifier_bits & (ALT | CTRL) == 0 {
                 modifier_bits &= !SHIFT;
+            } else if modifier_bits & SHIFT != 0 && character.is_uppercase() {
+                character = character.to_lowercase().next().unwrap_or(character);
             }
             KeyCode::Char(character)
         }
@@ -586,7 +558,7 @@ fn convert_mouse(event: MouseEvent) -> Option<Mouse> {
         CrosstermMouseButton::Middle => MouseButton::Middle,
         CrosstermMouseButton::Right => MouseButton::Right,
     };
-    let (kind, pressed) = match event.kind {
+    let (kind, button) = match event.kind {
         MouseEventKind::Down(pressed) => (MouseKind::Down, button(pressed)),
         MouseEventKind::Up(pressed) => (MouseKind::Up, button(pressed)),
         MouseEventKind::Drag(pressed) => (MouseKind::Drag, button(pressed)),
@@ -595,39 +567,13 @@ fn convert_mouse(event: MouseEvent) -> Option<Mouse> {
         // Plain movement is noise unless something asked for it.
         _ => return None,
     };
-    let mut modifiers = 0;
-    if event.modifiers.contains(KeyModifiers::SHIFT) {
-        modifiers |= SHIFT;
-    }
-    if event.modifiers.contains(KeyModifiers::ALT) {
-        modifiers |= ALT;
-    }
-    if event.modifiers.contains(KeyModifiers::CONTROL) {
-        modifiers |= CTRL;
-    }
     Some(Mouse {
         kind,
-        button: pressed,
+        button,
         col: event.column,
         row: event.row,
-        modifiers,
+        modifiers: modifier_bits(event.modifiers),
     })
-}
-
-/// The signals the client handles itself rather than dying of.
-fn client_signals() -> SigSet {
-    let mut signals = SigSet::empty();
-    for signal in [
-        Signal::SIGTERM,
-        Signal::SIGHUP,
-        Signal::SIGINT,
-        Signal::SIGQUIT,
-        Signal::SIGTSTP,
-        Signal::SIGCONT,
-    ] {
-        signals.add(signal);
-    }
-    signals
 }
 
 /// The terminal set up for mux, and put back when the client ends or stops.
@@ -673,7 +619,8 @@ impl TerminalGuard {
         if self.mouse {
             let _ = execute!(stdout(), DisableMouseCapture);
         }
-        let _ = stdout().write_all(b"\x1b[?7h");
+        // Autowrap back on, and the terminal's own cursor colour.
+        let _ = stdout().write_all(b"\x1b[?7h\x1b]112\x1b\\");
         let _ = execute!(
             stdout(),
             SetCursorStyle::DefaultUserShape,
@@ -694,6 +641,8 @@ impl Drop for TerminalGuard {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn stop_retries_with_the_old_daemons_shutdown_encoding() {
         let directory = env::temp_dir().join(format!("mux-stop-test-{}", std::process::id()));
@@ -721,36 +670,50 @@ mod tests {
         result.unwrap();
     }
 
-    use super::*;
-
     #[test]
-    fn control_digits_from_crossterm_are_the_punctuation_that_sent_them() {
-        let control =
-            |character| convert_key(CrosstermKeyCode::Char(character), KeyModifiers::CONTROL);
+    fn keys_are_canonicalized_for_bindings() {
+        let key = |code, modifiers| Some(Key { code, modifiers });
+        // crossterm's names for the control bytes are the punctuation that sent them.
         for (digit, meant) in [('4', '\\'), ('5', ']'), ('6', '^'), ('7', '_')] {
             assert_eq!(
-                control(digit),
-                Some(Key {
-                    code: KeyCode::Char(meant),
-                    modifiers: CTRL,
-                }),
+                convert_key(CrosstermKeyCode::Char(digit), KeyModifiers::CONTROL),
+                key(KeyCode::Char(meant), CTRL),
                 "Ctrl-{digit}"
             );
         }
+        assert_eq!(
+            convert_key(CrosstermKeyCode::Char('['), KeyModifiers::CONTROL),
+            key(KeyCode::Escape, 0)
+        );
+        assert_eq!(
+            convert_key(
+                CrosstermKeyCode::Char('T'),
+                KeyModifiers::ALT | KeyModifiers::SHIFT
+            ),
+            Some(crate::config::parse_key("Alt-Shift-t").unwrap())
+        );
+        assert_eq!(
+            convert_key(CrosstermKeyCode::Char('W'), KeyModifiers::SHIFT),
+            Some(crate::config::parse_key("W").unwrap())
+        );
+        assert_eq!(
+            convert_key(CrosstermKeyCode::F(12), KeyModifiers::CONTROL),
+            key(KeyCode::F(12), CTRL)
+        );
+        assert_eq!(
+            convert_key(CrosstermKeyCode::F(13), KeyModifiers::NONE),
+            None
+        );
     }
 
     #[test]
     fn styled_underlines_are_detected_only_for_terminals_known_to_draw_them() {
         let with = |pairs: &[(&str, &str)]| {
-            let pairs: Vec<(String, String)> = pairs
-                .iter()
-                .map(|(key, value)| (key.to_string(), value.to_string()))
-                .collect();
-            styled_underlines_from(move |name| {
+            styled_underlines_from(|name| {
                 pairs
                     .iter()
-                    .find(|(key, _)| key == name)
-                    .map(|(_, value)| value.clone())
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.to_string())
             })
         };
         assert!(!with(&[("TERM", "xterm-256color")]));
@@ -763,6 +726,11 @@ mod tests {
             ("TERM_PROGRAM", "WezTerm")
         ]));
         assert!(with(&[("TERM", "xterm-256color"), ("VTE_VERSION", "7600")]));
+        assert!(with(&[
+            ("TERM", "xterm-256color"),
+            ("KITTY_WINDOW_ID", "1")
+        ]));
+        assert!(with(&[("TERM", "xterm-256color"), ("WT_SESSION", "6aae")]));
         assert!(with(&[("MUX", "/run/user/1/mux.sock")]));
         assert!(with(&[
             ("TERM", "xterm-256color"),
@@ -775,58 +743,17 @@ mod tests {
     }
 
     #[test]
-    fn shifted_alt_letters_are_canonicalized_for_bindings() {
-        assert_eq!(
-            convert_key(
-                CrosstermKeyCode::Char('T'),
-                KeyModifiers::ALT | KeyModifiers::SHIFT
-            ),
-            Some(crate::config::parse_key("Alt-Shift-t").unwrap())
-        );
-        assert_eq!(
-            convert_key(CrosstermKeyCode::Char('W'), KeyModifiers::SHIFT),
-            Some(crate::config::parse_key("W").unwrap())
-        );
-    }
-
-    #[test]
-    fn function_keys_are_forwarded_through_the_protocol() {
-        assert_eq!(
-            convert_key(CrosstermKeyCode::F(12), KeyModifiers::CONTROL),
-            Some(Key {
-                code: KeyCode::F(12),
-                modifiers: CTRL,
-            })
-        );
-        assert_eq!(
-            convert_key(CrosstermKeyCode::F(13), KeyModifiers::NONE),
-            None
-        );
-    }
-
-    #[test]
-    fn truecolor_is_taken_from_colorterm_or_a_direct_term() {
-        let colorterm = |value| Some(OsStr::new(value));
-        assert!(truecolor_from(colorterm("truecolor"), None, None));
-        assert!(truecolor_from(colorterm("24bit"), None, None));
-        assert!(truecolor_from(None, colorterm("xterm-direct"), None));
-        assert!(truecolor_from(None, colorterm("xterm-kitty"), None));
+    fn truecolor_is_taken_from_colorterm_term_or_windows_terminal() {
+        let set = |value| Some(OsStr::new(value));
+        assert!(truecolor_from(set("truecolor"), None, None));
+        assert!(truecolor_from(set("24bit"), None, None));
+        assert!(truecolor_from(None, set("xterm-direct"), None));
+        assert!(truecolor_from(None, set("xterm-kitty"), None));
+        assert!(truecolor_from(None, set("xterm-256color"), set("session")));
         // Anything that has not said so is painted for 256 colours.
         assert!(!truecolor_from(None, None, None));
-        assert!(!truecolor_from(None, colorterm("xterm-256color"), None));
-        assert!(!truecolor_from(
-            colorterm("8bit"),
-            colorterm("screen"),
-            None
-        ));
-    }
-
-    #[test]
-    fn windows_terminal_session_enables_truecolor_without_colorterm() {
-        let term = Some(OsStr::new("xterm-256color"));
-        assert!(truecolor_from(None, term, Some(OsStr::new("session-id"))));
-        assert!(!truecolor_from(None, term, Some(OsStr::new(""))));
-        assert!(!truecolor_from(None, term, None));
+        assert!(!truecolor_from(None, set("xterm-256color"), set("")));
+        assert!(!truecolor_from(set("8bit"), set("screen"), None));
     }
 
     #[test]

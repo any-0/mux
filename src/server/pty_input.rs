@@ -39,27 +39,26 @@ impl PtyInput {
 
     /// Reject the entire input when full; never send a truncated paste.
     pub(super) fn send(&self, bytes: &[u8]) -> Result<()> {
+        const FULL: &str = "pane input is full; input was not sent";
+        let reserve = |pending: usize| {
+            pending
+                .checked_add(bytes.len())
+                .filter(|total| *total <= MAX_PENDING_BYTES)
+        };
         if self
             .pending
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |pending| {
-                pending
-                    .checked_add(bytes.len())
-                    .filter(|total| *total <= MAX_PENDING_BYTES)
-            })
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, reserve)
             .is_err()
         {
-            bail!("pane input is full; input was not sent");
+            bail!(FULL);
         }
-        match self.sender.try_send(bytes.to_vec()) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                self.pending.fetch_sub(bytes.len(), Ordering::Relaxed);
-                match error {
-                    mpsc::TrySendError::Full(_) => bail!("pane input is full; input was not sent"),
-                    mpsc::TrySendError::Disconnected(_) => bail!("pane input writer has stopped"),
-                }
+        self.sender.try_send(bytes.to_vec()).or_else(|error| {
+            self.pending.fetch_sub(bytes.len(), Ordering::Relaxed);
+            match error {
+                mpsc::TrySendError::Full(_) => bail!(FULL),
+                mpsc::TrySendError::Disconnected(_) => bail!("pane input writer has stopped"),
             }
-        }
+        })
     }
 }
 

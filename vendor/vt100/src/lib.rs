@@ -34,7 +34,6 @@
 //! ```
 
 #![warn(missing_docs)]
-#![warn(clippy::cargo)]
 #![warn(clippy::pedantic)]
 #![warn(clippy::nursery)]
 #![warn(clippy::as_conversions)]
@@ -61,9 +60,11 @@ mod term;
 pub use attrs::{Color, UnderlineStyle};
 pub use callbacks::Callbacks;
 pub use cell::Cell;
-pub use parser::{MAX_OSC_BYTES, Parser};
+pub use parser::{Parser, MAX_OSC_BYTES};
 pub use row::{Cells, Row};
 pub use screen::{MouseProtocolEncoding, MouseProtocolMode, Screen};
 
 #[cfg(test)]
 mod emulation_tests;
+#[cfg(test)]
+mod panic_tests;

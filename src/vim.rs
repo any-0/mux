@@ -17,7 +17,7 @@ pub struct Position {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SelectionKind {
+enum SelectionKind {
     Character,
     Line,
     Block,
@@ -42,6 +42,8 @@ struct Search {
     forward: bool,
 }
 
+/// A command waiting for its next key. `yank_from` is set when the command is
+/// the motion of a `y` operator, and holds where the yank starts.
 #[derive(Clone, Debug)]
 enum Pending {
     None,
@@ -52,17 +54,13 @@ enum Pending {
     },
     GoTop {
         count: usize,
+        yank_from: Option<Position>,
     },
     Find {
         forward: bool,
         till: bool,
         count: usize,
-    },
-    YankFind {
-        forward: bool,
-        till: bool,
-        count: usize,
-        start: Position,
+        yank_from: Option<Position>,
     },
     Search {
         forward: bool,
@@ -72,13 +70,9 @@ enum Pending {
     Yank {
         count: usize,
     },
-    YankGoTop {
-        count: usize,
-        start: Position,
-    },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 struct JumpTarget {
     label: String,
     position: Position,
@@ -141,6 +135,32 @@ fn assign_jump_labels(positions: &[Position], prefix: &str, targets: &mut Vec<Ju
     }
 }
 
+/// `(forward, till)` for the `f`, `F`, `t` and `T` actions.
+fn find_direction(action: Action) -> Option<(bool, bool)> {
+    match action {
+        Action::FindForward => Some((true, false)),
+        Action::FindBackward => Some((false, false)),
+        Action::TillForward => Some((true, true)),
+        Action::TillBackward => Some((false, true)),
+        _ => None,
+    }
+}
+
+/// `(down, lines)` for the actions that move the cursor straight up or down.
+fn vertical_step(action: Action, half_page: usize) -> Option<(bool, usize)> {
+    match action {
+        Action::CursorDown => Some((true, 1)),
+        Action::CursorUp => Some((false, 1)),
+        Action::CursorDown3 => Some((true, 3)),
+        Action::CursorUp3 => Some((false, 3)),
+        Action::CursorDown10 => Some((true, 10)),
+        Action::CursorUp10 => Some((false, 10)),
+        Action::HalfPageDown | Action::HalfPageDownCenter => Some((true, half_page)),
+        Action::HalfPageUp | Action::HalfPageUpCenter => Some((false, half_page)),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum VimOutcome {
     None,
@@ -164,9 +184,6 @@ pub struct VimMode {
     /// column ranges. Recomputed as the pattern is typed so the highlight
     /// follows the prompt.
     search_matches: HashMap<usize, Vec<Range<usize>>>,
-    /// Length of the highlighted pattern, used to mark the match under the
-    /// cursor.
-    search_length: usize,
     jump_list: Vec<Position>,
     jump_index: usize,
 }
@@ -179,7 +196,6 @@ struct Motion {
 }
 
 impl VimMode {
-    /// The buffer a mode reads, for whoever draws it.
     pub fn buffer(&self) -> &VimBuffer {
         &self.buffer
     }
@@ -202,12 +218,11 @@ impl VimMode {
             last_search: None,
             message: None,
             search_matches: HashMap::new(),
-            search_length: 0,
             jump_list: Vec::new(),
             jump_index: 0,
         };
         mode.cursor = mode.clamp(mode.cursor);
-        mode.viewport_top = mode.buffer.len().saturating_sub(mode.viewport_height);
+        mode.viewport_top = mode.lowest_top();
         mode.ensure_visible();
         mode
     }
@@ -244,7 +259,6 @@ impl VimMode {
     /// Whether `position` falls inside the match the cursor is sitting on.
     pub fn current_search_match(&self, position: Position) -> bool {
         position.row == self.cursor.row
-            && self.search_match(position)
             && self
                 .search_matches
                 .get(&position.row)
@@ -255,54 +269,61 @@ impl VimMode {
                 })
     }
 
-    /// Indexes every match of `query` so the renderer can highlight them.
-    fn highlight_search(&mut self, query: &str) {
+    /// Indexes every match of `query` for the renderer, returning where each
+    /// one starts in buffer order.
+    fn highlight_search(&mut self, query: &str) -> Vec<Position> {
         self.search_matches.clear();
-        self.search_length = query.chars().count();
         if query.is_empty() {
-            return;
+            return Vec::new();
         }
-        for (row, line) in self.buffer.texts().enumerate() {
-            let mut byte_start = 0;
-            while let Some(offset) = line[byte_start..].find(query) {
-                let byte = byte_start + offset;
-                let start = line[..byte].chars().count();
-                self.search_matches
-                    .entry(row)
-                    .or_default()
-                    .push(start..start + self.search_length);
-                byte_start = byte + query.len();
-            }
+        let matches: Vec<_> = self
+            .buffer
+            .texts()
+            .enumerate()
+            .flat_map(|(row, line)| {
+                line.match_indices(query).map(move |(byte, _)| Position {
+                    row,
+                    col: line[..byte].chars().count(),
+                })
+            })
+            .collect();
+        let length = query.chars().count();
+        for start in &matches {
+            self.search_matches
+                .entry(start.row)
+                .or_default()
+                .push(start.col..start.col + length);
         }
+        matches
     }
 
-    fn clear_search_highlight(&mut self) {
-        self.search_matches.clear();
-        self.search_length = 0;
+    /// The selection's top-left and bottom-right corners, as a block.
+    fn selection_corners(&self, selection: &Selection) -> (Position, Position) {
+        let (a, b) = (selection.anchor, self.cursor);
+        (
+            Position {
+                row: min(a.row, b.row),
+                col: min(a.col, b.col),
+            },
+            Position {
+                row: max(a.row, b.row),
+                col: max(a.col, b.col),
+            },
+        )
     }
 
     pub fn selected(&self, position: Position) -> bool {
         let Some(selection) = &self.selection else {
             return false;
         };
+        let (top, bottom) = self.selection_corners(selection);
+        let rows = (top.row..=bottom.row).contains(&position.row);
         match selection.kind {
-            SelectionKind::Character => {
-                let start = min(selection.anchor, self.cursor);
-                let end = max(selection.anchor, self.cursor);
-                position >= start && position <= end
-            }
-            SelectionKind::Line => {
-                let start = min(selection.anchor.row, self.cursor.row);
-                let end = max(selection.anchor.row, self.cursor.row);
-                (start..=end).contains(&position.row)
-            }
-            SelectionKind::Block => {
-                let rows = min(selection.anchor.row, self.cursor.row)
-                    ..=max(selection.anchor.row, self.cursor.row);
-                let cols = min(selection.anchor.col, self.cursor.col)
-                    ..=max(selection.anchor.col, self.cursor.col);
-                rows.contains(&position.row) && cols.contains(&position.col)
-            }
+            SelectionKind::Character => (min(selection.anchor, self.cursor)
+                ..=max(selection.anchor, self.cursor))
+                .contains(&position),
+            SelectionKind::Line => rows,
+            SelectionKind::Block => rows && (top.col..=bottom.col).contains(&position.col),
         }
     }
 
@@ -316,35 +337,25 @@ impl VimMode {
     pub fn handle(&mut self, action: Option<Action>, key: &Key) -> VimOutcome {
         self.message = None;
 
-        if matches!(self.pending, Pending::Search { .. }) {
-            return self.handle_search_prompt(key);
-        }
-        if matches!(
-            self.pending,
-            Pending::JumpCharacter | Pending::JumpTarget { .. }
-        ) {
-            return self.handle_jump(key);
-        }
-        if matches!(
-            self.pending,
-            Pending::Find { .. } | Pending::YankFind { .. }
-        ) {
-            return self.handle_find_character(key);
+        match self.pending {
+            Pending::Search { .. } => return self.handle_search_prompt(key),
+            Pending::JumpCharacter | Pending::JumpTarget { .. } => return self.handle_jump(key),
+            Pending::Find { .. } => return self.handle_find_character(key),
+            _ => {}
         }
 
-        let count_digit = match key {
-            Key {
-                code: KeyCode::Char(digit @ '0'..='9'),
-                modifiers: 0,
-            } if *digit != '0' || self.count.is_some() => digit.to_digit(10),
-            _ => None,
-        };
-        if let Some(digit) = count_digit {
+        if let Key {
+            code: KeyCode::Char(digit @ '0'..='9'),
+            modifiers: 0,
+        } = key
+            && (*digit != '0' || self.count.is_some())
+        {
+            let digit = digit.to_digit(10).unwrap() as usize;
             self.count = Some(
                 self.count
                     .unwrap_or(0)
                     .saturating_mul(10)
-                    .saturating_add(digit as usize),
+                    .saturating_add(digit),
             );
             return VimOutcome::None;
         }
@@ -357,86 +368,65 @@ impl VimMode {
 
         if let Pending::Yank {
             count: operator_count,
-        } = self.pending.clone()
+        } = self.pending
         {
+            let count = operator_count.saturating_mul(self.take_count());
             if action == Action::Yank {
-                let count = operator_count.saturating_mul(self.take_count());
+                self.pending = Pending::None;
                 return VimOutcome::Yank(self.yank_lines(self.cursor.row, count));
             }
-            let motion_count = operator_count.saturating_mul(self.take_count());
-            if matches!(
-                action,
-                Action::FindForward
-                    | Action::FindBackward
-                    | Action::TillForward
-                    | Action::TillBackward
-            ) {
-                self.pending = Pending::YankFind {
-                    forward: matches!(action, Action::FindForward | Action::TillForward),
-                    till: matches!(action, Action::TillForward | Action::TillBackward),
-                    count: motion_count,
-                    start: self.cursor,
+            let start = Some(self.cursor);
+            if let Some((forward, till)) = find_direction(action) {
+                self.pending = Pending::Find {
+                    forward,
+                    till,
+                    count,
+                    yank_from: start,
                 };
                 return VimOutcome::None;
             }
             if action == Action::GoTop {
-                self.pending = Pending::YankGoTop {
-                    count: motion_count,
-                    start: self.cursor,
+                self.pending = Pending::GoTop {
+                    count,
+                    yank_from: start,
                 };
                 return VimOutcome::None;
             }
-            if let Some(motion) = self.motion(action, motion_count) {
-                self.pending = Pending::None;
-                return VimOutcome::Yank(self.yank_motion(self.cursor, motion));
-            }
             self.pending = Pending::None;
-            return VimOutcome::None;
+            return match self.motion(action, count) {
+                Some(motion) => VimOutcome::Yank(self.yank_motion(self.cursor, motion)),
+                None => VimOutcome::None,
+            };
         }
 
-        if let Pending::YankGoTop { count, start } = self.pending.clone() {
+        if let Pending::GoTop { count, yank_from } = self.pending {
             self.pending = Pending::None;
-            if action == Action::GoTop {
-                let row = if count == 1 {
-                    0
-                } else {
-                    count.saturating_sub(1).min(self.buffer.len() - 1)
-                };
-                return VimOutcome::Yank(self.yank_motion(
-                    start,
-                    Motion {
-                        destination: Position {
-                            row,
-                            col: self.first_nonblank(row),
-                        },
-                        inclusive: false,
-                        linewise: true,
-                    },
-                ));
+            let motion = self.line_motion(count, 0);
+            match yank_from {
+                Some(start) if action == Action::GoTop => {
+                    return VimOutcome::Yank(self.yank_motion(start, motion));
+                }
+                // A yank waiting for `gg` swallows any other key.
+                Some(_) => return VimOutcome::None,
+                None if action == Action::GoTop => {
+                    let start = self.cursor;
+                    self.move_cursor(motion);
+                    self.record_jump(start);
+                    return VimOutcome::None;
+                }
+                None => {}
             }
-            return VimOutcome::None;
         }
 
-        if let Pending::GoTop { count } = self.pending.clone() {
-            self.pending = Pending::None;
-            if action == Action::GoTop {
-                let start = self.cursor;
-                let row = if count == 1 {
-                    0
-                } else {
-                    count.saturating_sub(1).min(self.buffer.len() - 1)
-                };
-                self.move_cursor(Motion {
-                    destination: Position {
-                        row,
-                        col: self.first_nonblank(row),
-                    },
-                    inclusive: false,
-                    linewise: true,
-                });
-                self.record_jump(start);
-                return VimOutcome::None;
-            }
+        if let Some((forward, till)) = find_direction(action) {
+            let count = self.take_count();
+            self.pending = Pending::Find {
+                forward,
+                till,
+                count,
+                yank_from: None,
+            };
+            return VimOutcome::None;
         }
 
         match action {
@@ -444,23 +434,19 @@ impl VimMode {
                 self.count = None;
                 self.pending = Pending::None;
                 let highlighted = !self.search_matches.is_empty();
-                self.clear_search_highlight();
+                self.search_matches.clear();
                 if self.selection.take().is_some() || highlighted {
                     VimOutcome::None
                 } else {
                     VimOutcome::Exit
                 }
             }
-            Action::Visual => {
-                self.toggle_selection(SelectionKind::Character);
-                VimOutcome::None
-            }
-            Action::VisualLine => {
-                self.toggle_selection(SelectionKind::Line);
-                VimOutcome::None
-            }
-            Action::VisualBlock => {
-                self.toggle_selection(SelectionKind::Block);
+            Action::Visual | Action::VisualLine | Action::VisualBlock => {
+                self.toggle_selection(match action {
+                    Action::Visual => SelectionKind::Character,
+                    Action::VisualLine => SelectionKind::Line,
+                    _ => SelectionKind::Block,
+                });
                 VimOutcome::None
             }
             Action::Yank => {
@@ -478,7 +464,7 @@ impl VimMode {
                     .cursor
                     .row
                     .saturating_add(count - 1)
-                    .min(self.buffer.len() - 1);
+                    .min(self.last_row());
                 VimOutcome::Yank(self.yank_motion(
                     self.cursor,
                     Motion {
@@ -493,18 +479,9 @@ impl VimMode {
             }
             Action::GoTop => {
                 let count = self.take_count();
-                self.pending = Pending::GoTop { count };
-                VimOutcome::None
-            }
-            Action::FindForward
-            | Action::FindBackward
-            | Action::TillForward
-            | Action::TillBackward => {
-                let count = self.take_count();
-                self.pending = Pending::Find {
-                    forward: matches!(action, Action::FindForward | Action::TillForward),
-                    till: matches!(action, Action::TillForward | Action::TillBackward),
+                self.pending = Pending::GoTop {
                     count,
+                    yank_from: None,
                 };
                 VimOutcome::None
             }
@@ -531,11 +508,7 @@ impl VimMode {
                 let count = self.take_count();
                 if let Some(search) = self.last_search.clone() {
                     let start = self.cursor;
-                    let forward = if action == Action::RepeatSearch {
-                        search.forward
-                    } else {
-                        !search.forward
-                    };
+                    let forward = search.forward == (action == Action::RepeatSearch);
                     self.apply_search(&search.query, forward, count);
                     self.record_jump(start);
                 }
@@ -559,7 +532,7 @@ impl VimMode {
                         .cursor
                         .row
                         .saturating_sub(self.viewport_height / 2)
-                        .min(self.buffer.len().saturating_sub(self.viewport_height));
+                        .min(self.lowest_top());
                     self.record_jump(start);
                 }
                 VimOutcome::None
@@ -575,7 +548,7 @@ impl VimMode {
                     } else {
                         self.viewport_top.saturating_sub(distance)
                     }
-                    .min(self.buffer.len().saturating_sub(self.viewport_height));
+                    .min(self.lowest_top());
                     self.ensure_visible();
                     self.record_jump(start);
                 }
@@ -596,26 +569,20 @@ impl VimMode {
     }
 
     fn handle_jump(&mut self, key: &Key) -> VimOutcome {
-        if matches!(key.code, KeyCode::Escape) {
-            self.pending = Pending::None;
-            return VimOutcome::None;
-        }
-
+        let pending = std::mem::replace(&mut self.pending, Pending::None);
         let Key {
             code: KeyCode::Char(character),
             modifiers: 0,
         } = key
         else {
-            self.pending = Pending::None;
             return VimOutcome::None;
         };
 
-        let pending = std::mem::replace(&mut self.pending, Pending::None);
         match pending {
             Pending::JumpCharacter => {
                 let targets = self.jump_targets(*character);
                 if targets.is_empty() {
-                    self.message = Some(format!("character {:?} not visible", character));
+                    self.message = Some(format!("character {character:?} not visible"));
                 } else {
                     self.pending = Pending::JumpTarget {
                         targets,
@@ -642,6 +609,8 @@ impl VimMode {
         VimOutcome::None
     }
 
+    /// Every visible occurrence of `character`, labelled nearest first,
+    /// alternating forward and backward from the cursor.
     fn jump_targets(&self, character: char) -> Vec<JumpTarget> {
         let visible_end = min(
             self.viewport_top.saturating_add(self.viewport_height),
@@ -651,13 +620,13 @@ impl VimMode {
         let mut backward = Vec::new();
         for row in self.viewport_top..visible_end {
             for (col, candidate) in self.buffer.text(row).chars().enumerate() {
-                if candidate != character {
+                let position = Position { row, col };
+                if candidate != character || position == self.cursor {
                     continue;
                 }
-                let position = Position { row, col };
                 if position > self.cursor {
                     forward.push(position);
-                } else if position < self.cursor {
+                } else {
                     backward.push(position);
                 }
             }
@@ -666,12 +635,8 @@ impl VimMode {
 
         let mut positions = Vec::with_capacity(forward.len() + backward.len());
         for index in 0..max(forward.len(), backward.len()) {
-            if let Some(position) = forward.get(index) {
-                positions.push(*position);
-            }
-            if let Some(position) = backward.get(index) {
-                positions.push(*position);
-            }
+            positions.extend(forward.get(index));
+            positions.extend(backward.get(index));
         }
         let mut targets = Vec::with_capacity(positions.len());
         assign_jump_labels(&positions, "", &mut targets);
@@ -679,28 +644,25 @@ impl VimMode {
     }
 
     fn handle_search_prompt(&mut self, key: &Key) -> VimOutcome {
-        match key {
-            Key {
-                code: KeyCode::Escape,
-                ..
-            } => {
+        let Pending::Search { query, .. } = &mut self.pending else {
+            return VimOutcome::None;
+        };
+        match &key.code {
+            KeyCode::Escape => {
                 self.pending = Pending::None;
-                self.clear_search_highlight();
+                self.search_matches.clear();
             }
-            Key {
-                code: KeyCode::Backspace,
-                ..
-            } => {
-                if let Pending::Search { query, .. } = &mut self.pending {
-                    query.pop();
-                    let query = query.clone();
-                    self.highlight_search(&query);
-                }
+            KeyCode::Backspace => {
+                query.pop();
+                let query = query.clone();
+                self.highlight_search(&query);
             }
-            Key {
-                code: KeyCode::Enter,
-                ..
-            } => {
+            KeyCode::Char(character) if key.modifiers == 0 => {
+                query.push(*character);
+                let query = query.clone();
+                self.highlight_search(&query);
+            }
+            KeyCode::Enter => {
                 let pending = std::mem::replace(&mut self.pending, Pending::None);
                 if let Pending::Search {
                     forward,
@@ -710,23 +672,9 @@ impl VimMode {
                     && !query.is_empty()
                 {
                     let start = self.cursor;
-                    self.last_search = Some(Search {
-                        query: query.clone(),
-                        forward,
-                    });
                     self.apply_search(&query, forward, count);
+                    self.last_search = Some(Search { query, forward });
                     self.record_jump(start);
-                }
-            }
-            Key {
-                code: KeyCode::Char(character),
-                modifiers: 0,
-                ..
-            } => {
-                if let Pending::Search { query, .. } = &mut self.pending {
-                    query.push(*character);
-                    let query = query.clone();
-                    self.highlight_search(&query);
                 }
             }
             _ => {}
@@ -736,53 +684,37 @@ impl VimMode {
 
     fn handle_find_character(&mut self, key: &Key) -> VimOutcome {
         let pending = std::mem::replace(&mut self.pending, Pending::None);
-        let Key {
-            code: KeyCode::Char(character),
-            modifiers: 0,
-        } = key
-        else {
-            return VimOutcome::None;
-        };
-        match pending {
+        let (
+            Key {
+                code: KeyCode::Char(character),
+                modifiers: 0,
+            },
             Pending::Find {
                 forward,
                 till,
                 count,
-            } => {
-                let find = Find {
-                    character: *character,
-                    forward,
-                    till,
-                };
-                self.last_find = Some(find);
-                self.apply_find(find, count);
-                VimOutcome::None
-            }
-            Pending::YankFind {
-                forward,
-                till,
-                count,
+                yank_from,
+            },
+        ) = (key, pending)
+        else {
+            return VimOutcome::None;
+        };
+        let find = Find {
+            character: *character,
+            forward,
+            till,
+        };
+        self.last_find = Some(find);
+        let found = self.apply_find(find, count);
+        match yank_from {
+            Some(start) if found => VimOutcome::Yank(self.yank_motion(
                 start,
-            } => {
-                let find = Find {
-                    character: *character,
-                    forward,
-                    till,
-                };
-                self.last_find = Some(find);
-                if self.apply_find(find, count) {
-                    VimOutcome::Yank(self.yank_motion(
-                        start,
-                        Motion {
-                            destination: self.cursor,
-                            inclusive: true,
-                            linewise: false,
-                        },
-                    ))
-                } else {
-                    VimOutcome::None
-                }
-            }
+                Motion {
+                    destination: self.cursor,
+                    inclusive: true,
+                    linewise: false,
+                },
+            )),
             _ => VimOutcome::None,
         }
     }
@@ -793,17 +725,13 @@ impl VimMode {
 
     fn toggle_selection(&mut self, kind: SelectionKind) {
         match &mut self.selection {
-            Some(selection) if selection.kind == kind => {
-                self.selection = None;
-            }
-            Some(selection) => {
-                selection.kind = kind;
-            }
+            Some(selection) if selection.kind == kind => self.selection = None,
+            Some(selection) => selection.kind = kind,
             None => {
                 self.selection = Some(Selection {
                     anchor: self.cursor,
                     kind,
-                });
+                })
             }
         }
     }
@@ -813,11 +741,12 @@ impl VimMode {
     /// Reports whether it moved: at the bottom of the buffer there is nothing
     /// left to scroll to, which is the caller's cue to leave vim mode.
     pub fn scroll(&mut self, up: bool, lines: usize) -> bool {
-        let lowest = self.buffer.len().saturating_sub(self.viewport_height);
         let target = if up {
             self.viewport_top.saturating_sub(lines)
         } else {
-            self.viewport_top.saturating_add(lines).min(lowest)
+            self.viewport_top
+                .saturating_add(lines)
+                .min(self.lowest_top())
         };
         if target == self.viewport_top {
             return false;
@@ -828,7 +757,7 @@ impl VimMode {
             .cursor
             .row
             .clamp(target, target + self.viewport_height.saturating_sub(1))
-            .min(self.buffer.len().saturating_sub(1));
+            .min(self.last_row());
         self.cursor = self.clamp(self.cursor);
         true
     }
@@ -843,16 +772,14 @@ impl VimMode {
             return;
         }
         self.jump_list.truncate(self.jump_index.saturating_add(1));
-        if self.jump_list.get(self.jump_index).copied() != Some(start) {
+        if self.jump_list.get(self.jump_index) != Some(&start) {
             self.jump_list.push(start);
         }
-        if self.jump_list.last().copied() != Some(self.cursor) {
+        if self.jump_list.last() != Some(&self.cursor) {
             self.jump_list.push(self.cursor);
         }
-        if self.jump_list.len() > JUMP_LIST_CAPACITY {
-            let excess = self.jump_list.len() - JUMP_LIST_CAPACITY;
-            self.jump_list.drain(..excess);
-        }
+        let excess = self.jump_list.len().saturating_sub(JUMP_LIST_CAPACITY);
+        self.jump_list.drain(..excess);
         self.jump_index = self.jump_list.len().saturating_sub(1);
     }
 
@@ -878,13 +805,20 @@ impl VimMode {
         if self.cursor.row >= self.viewport_top + self.viewport_height {
             self.viewport_top = self.cursor.row + 1 - self.viewport_height;
         }
-        self.viewport_top = self
-            .viewport_top
-            .min(self.buffer.len().saturating_sub(self.viewport_height));
+        self.viewport_top = self.viewport_top.min(self.lowest_top());
+    }
+
+    /// The viewport top that shows the end of the buffer.
+    fn lowest_top(&self) -> usize {
+        self.buffer.len().saturating_sub(self.viewport_height)
+    }
+
+    fn last_row(&self) -> usize {
+        self.buffer.len() - 1
     }
 
     fn clamp(&self, mut position: Position) -> Position {
-        position.row = position.row.min(self.buffer.len() - 1);
+        position.row = position.row.min(self.last_row());
         position.col = position.col.min(self.line_end(position.row));
         position
     }
@@ -905,128 +839,102 @@ impl VimMode {
             .unwrap_or(0)
     }
 
+    /// `gg` and `G`: line `count`, or `default_row` when no count was given.
+    fn line_motion(&self, count: usize, default_row: usize) -> Motion {
+        let row = if count == 1 {
+            default_row
+        } else {
+            (count - 1).min(self.last_row())
+        };
+        Motion {
+            destination: Position {
+                row,
+                col: self.first_nonblank(row),
+            },
+            inclusive: false,
+            linewise: true,
+        }
+    }
+
     fn motion(&self, action: Action, count: usize) -> Option<Motion> {
         let mut position = self.cursor;
-        let count = count.max(1);
-        let (inclusive, linewise) = match action {
+        let half_page = (self.viewport_height / 2).max(1);
+        if let Some((down, lines)) = vertical_step(action, half_page) {
+            let distance = lines.saturating_mul(count);
+            position.row = if down {
+                position.row.saturating_add(distance).min(self.last_row())
+            } else {
+                position.row.saturating_sub(distance)
+            };
+            return Some(Motion {
+                destination: self.clamp(position),
+                inclusive: false,
+                linewise: true,
+            });
+        }
+        let big = matches!(
+            action,
+            Action::BigWordForward | Action::BigWordEnd | Action::BigWordBackward
+        );
+        let inclusive = match action {
             Action::CursorLeft => {
                 position.col = position.col.saturating_sub(count);
-                (true, false)
+                true
             }
             Action::CursorRight => {
                 position.col = min(
                     position.col.saturating_add(count),
                     self.line_end(position.row),
                 );
-                (true, false)
+                true
             }
-            Action::CursorDown => {
-                position.row = min(position.row.saturating_add(count), self.buffer.len() - 1);
-                (false, true)
+            Action::WordForward | Action::BigWordForward => {
+                position = self.word_motion(position, |text, index| {
+                    word_forward(text, index, count, big)
+                });
+                false
             }
-            Action::CursorUp => {
-                position.row = position.row.saturating_sub(count);
-                (false, true)
+            Action::WordEnd | Action::BigWordEnd => {
+                position =
+                    self.word_motion(position, |text, index| word_end(text, index, count, big));
+                true
             }
-            Action::CursorDown3 => {
-                position.row = min(
-                    position.row.saturating_add(count.saturating_mul(3)),
-                    self.buffer.len() - 1,
-                );
-                (false, true)
-            }
-            Action::CursorUp3 => {
-                position.row = position.row.saturating_sub(count.saturating_mul(3));
-                (false, true)
-            }
-            Action::CursorDown10 => {
-                position.row = min(
-                    position.row.saturating_add(count.saturating_mul(10)),
-                    self.buffer.len() - 1,
-                );
-                (false, true)
-            }
-            Action::CursorUp10 => {
-                position.row = position.row.saturating_sub(count.saturating_mul(10));
-                (false, true)
-            }
-            Action::HalfPageDown | Action::HalfPageDownCenter => {
-                position.row = min(
-                    position
-                        .row
-                        .saturating_add((self.viewport_height / 2).max(1).saturating_mul(count)),
-                    self.buffer.len() - 1,
-                );
-                (false, true)
-            }
-            Action::HalfPageUp | Action::HalfPageUpCenter => {
-                position.row = position
-                    .row
-                    .saturating_sub((self.viewport_height / 2).max(1).saturating_mul(count));
-                (false, true)
-            }
-            Action::WordForward => {
-                position = self.word_forward(position, count, false);
-                (false, false)
-            }
-            Action::BigWordForward => {
-                position = self.word_forward(position, count, true);
-                (false, false)
-            }
-            Action::WordEnd => {
-                position = self.word_end(position, count, false);
-                (true, false)
-            }
-            Action::BigWordEnd => {
-                position = self.word_end(position, count, true);
-                (true, false)
-            }
-            Action::WordBackward => {
-                position = self.word_backward(position, count, false);
-                (false, false)
-            }
-            Action::BigWordBackward => {
-                position = self.word_backward(position, count, true);
-                (false, false)
+            Action::WordBackward | Action::BigWordBackward => {
+                position = self.word_motion(position, |text, index| {
+                    word_backward(text, index, count, big)
+                });
+                false
             }
             Action::LineStart => {
                 position.col = 0;
-                (false, false)
+                false
             }
             Action::FirstNonBlank => {
                 position.col = self.first_nonblank(position.row);
-                (false, false)
+                false
             }
             Action::LineEnd => {
                 position.col = self.line_end(position.row);
-                (true, false)
+                true
             }
-            Action::GoBottom => {
-                position.row = if count == 1 {
-                    self.buffer.len() - 1
-                } else {
-                    count.saturating_sub(1).min(self.buffer.len() - 1)
-                };
-                position.col = self.first_nonblank(position.row);
-                (false, true)
-            }
+            Action::GoBottom => return Some(self.line_motion(count, self.last_row())),
             _ => return None,
         };
-        position = self.clamp(position);
         Some(Motion {
-            destination: position,
+            destination: self.clamp(position),
             inclusive,
-            linewise,
+            linewise: false,
         })
     }
 
+    /// The whole buffer as characters, lines joined by `\n`.
     fn flat(&self) -> Vec<char> {
         let mut result = Vec::new();
         for (index, line) in self.buffer.texts().enumerate() {
-            result.extend(line.chars());
-            if index + 1 < self.buffer.len() {
+            if index > 0 {
                 result.push('\n');
             }
+            result.extend(line.chars());
         }
         result
     }
@@ -1051,164 +959,70 @@ impl VimMode {
                 };
             }
             if remaining == len {
-                if row + 1 < self.buffer.len() {
-                    return Position {
+                // The newline: it belongs to the start of the next line.
+                return if row < self.last_row() {
+                    Position {
                         row: row + 1,
                         col: 0,
-                    };
-                }
-                return Position {
-                    row,
-                    col: len.saturating_sub(1),
+                    }
+                } else {
+                    Position {
+                        row,
+                        col: len.saturating_sub(1),
+                    }
                 };
             }
-            remaining = remaining.saturating_sub(len + 1);
+            remaining -= len + 1;
         }
+        let row = self.last_row();
         Position {
-            row: self.buffer.len() - 1,
-            col: self.line_end(self.buffer.len() - 1),
+            row,
+            col: self.line_end(row),
         }
     }
 
-    fn category(character: char, big: bool) -> u8 {
-        if character.is_whitespace() {
-            0
-        } else if big || character.is_alphanumeric() || character == '_' {
-            1
-        } else {
-            2
-        }
-    }
-
-    fn word_forward(&self, start: Position, count: usize, big: bool) -> Position {
+    /// Runs a word motion over the flattened buffer.
+    fn word_motion(&self, start: Position, step: impl FnOnce(&[char], usize) -> usize) -> Position {
         let text = self.flat();
         if text.is_empty() {
             return start;
         }
-        let mut index = self.position_index(start).min(text.len().saturating_sub(1));
-        for _ in 0..count {
-            let category = Self::category(text[index], big);
-            if category != 0 {
-                while index + 1 < text.len() && Self::category(text[index + 1], big) == category {
-                    index += 1;
-                }
-                if index + 1 < text.len() {
-                    index += 1;
-                }
-            }
-            while index + 1 < text.len() && Self::category(text[index], big) == 0 {
-                index += 1;
-            }
-        }
-        self.index_position(index)
-    }
-
-    fn word_end(&self, start: Position, count: usize, big: bool) -> Position {
-        let text = self.flat();
-        if text.is_empty() {
-            return start;
-        }
-        let mut index = self.position_index(start).min(text.len().saturating_sub(1));
-        for iteration in 0..count {
-            if iteration > 0 && index + 1 < text.len() {
-                index += 1;
-            }
-            while index + 1 < text.len() && Self::category(text[index], big) == 0 {
-                index += 1;
-            }
-            if index + 1 < text.len()
-                && Self::category(text[index], big) != 0
-                && iteration == 0
-                && Self::category(text[index + 1], big) == Self::category(text[index], big)
-            {
-                // remain in the current word
-            } else if index + 1 < text.len()
-                && Self::category(text[index], big) != 0
-                && iteration == 0
-                && Self::category(text[index + 1], big) != Self::category(text[index], big)
-            {
-                index += 1;
-                while index + 1 < text.len() && Self::category(text[index], big) == 0 {
-                    index += 1;
-                }
-            }
-            let category = Self::category(text[index], big);
-            while index + 1 < text.len()
-                && category != 0
-                && Self::category(text[index + 1], big) == category
-            {
-                index += 1;
-            }
-        }
-        self.index_position(index)
-    }
-
-    fn word_backward(&self, start: Position, count: usize, big: bool) -> Position {
-        let text = self.flat();
-        if text.is_empty() {
-            return start;
-        }
-        let mut index = self.position_index(start).min(text.len().saturating_sub(1));
-        for _ in 0..count {
-            index = index.saturating_sub(1);
-            while index > 0 && Self::category(text[index], big) == 0 {
-                index -= 1;
-            }
-            let category = Self::category(text[index], big);
-            while index > 0 && Self::category(text[index - 1], big) == category {
-                index -= 1;
-            }
-        }
-        self.index_position(index)
+        let index = self.position_index(start).min(text.len() - 1);
+        self.index_position(step(&text, index))
     }
 
     fn apply_find(&mut self, find: Find, count: usize) -> bool {
         let characters: Vec<_> = self.buffer.text(self.cursor.row).chars().collect();
+        let is_target = |index: &usize| characters[*index] == find.character;
         let found = if find.forward {
-            ((self.cursor.col + 1)..characters.len())
-                .filter(|index| characters[*index] == find.character)
+            (self.cursor.col + 1..characters.len())
+                .filter(is_target)
                 .nth(count - 1)
         } else {
-            (0..self.cursor.col)
-                .rev()
-                .filter(|index| characters[*index] == find.character)
-                .nth(count - 1)
+            (0..self.cursor.col).rev().filter(is_target).nth(count - 1)
         };
-        if let Some(mut col) = found {
-            if find.till {
-                col = if find.forward {
-                    col.saturating_sub(1)
-                } else {
-                    min(col + 1, self.line_end(self.cursor.row))
-                };
-            }
-            self.cursor.col = col;
-            self.ensure_visible();
-            true
-        } else {
+        let Some(mut col) = found else {
             self.message = Some(format!("character {:?} not found", find.character));
-            false
+            return false;
+        };
+        if find.till {
+            col = if find.forward {
+                col.saturating_sub(1)
+            } else {
+                min(col + 1, self.line_end(self.cursor.row))
+            };
         }
+        self.cursor.col = col;
+        self.ensure_visible();
+        true
     }
 
     fn apply_search(&mut self, query: &str, forward: bool, count: usize) {
-        self.highlight_search(query);
-        let mut matches = Vec::new();
-        for (row, line) in self.buffer.texts().enumerate() {
-            let mut byte_start = 0;
-            while let Some(offset) = line[byte_start..].find(query) {
-                let byte = byte_start + offset;
-                matches.push(Position {
-                    row,
-                    col: line[..byte].chars().count(),
-                });
-                byte_start = byte + query.len();
-            }
-        }
-        if matches.is_empty() {
+        let matches = self.highlight_search(query);
+        let (Some(&first), Some(&last)) = (matches.first(), matches.last()) else {
             self.message = Some(format!("pattern not found: {query}"));
             return;
-        }
+        };
         let mut current = self.cursor;
         for _ in 0..count {
             current = if forward {
@@ -1216,14 +1030,14 @@ impl VimMode {
                     .iter()
                     .copied()
                     .find(|position| *position > current)
-                    .unwrap_or(matches[0])
+                    .unwrap_or(first)
             } else {
                 matches
                     .iter()
                     .rev()
                     .copied()
                     .find(|position| *position < current)
-                    .unwrap_or(*matches.last().unwrap())
+                    .unwrap_or(last)
             };
         }
         self.cursor = current;
@@ -1232,32 +1046,21 @@ impl VimMode {
 
     fn yank_selection(&self) -> String {
         let selection = self.selection.as_ref().unwrap();
+        let (top, bottom) = self.selection_corners(selection);
         match selection.kind {
             SelectionKind::Character => self.text_between(selection.anchor, self.cursor, true),
-            SelectionKind::Line => {
-                let start = min(selection.anchor.row, self.cursor.row);
-                self.yank_lines(
-                    start,
-                    max(selection.anchor.row, self.cursor.row) - start + 1,
-                )
-            }
-            SelectionKind::Block => {
-                let start_row = min(selection.anchor.row, self.cursor.row);
-                let end_row = max(selection.anchor.row, self.cursor.row);
-                let start_col = min(selection.anchor.col, self.cursor.col);
-                let end_col = max(selection.anchor.col, self.cursor.col);
-                (start_row..=end_row)
-                    .map(|row| {
-                        self.buffer
-                            .text(row)
-                            .chars()
-                            .skip(start_col)
-                            .take(end_col - start_col + 1)
-                            .collect::<String>()
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
+            SelectionKind::Line => self.yank_rows(top.row, bottom.row),
+            SelectionKind::Block => (top.row..=bottom.row)
+                .map(|row| {
+                    self.buffer
+                        .text(row)
+                        .chars()
+                        .skip(top.col)
+                        .take(bottom.col - top.col + 1)
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
         }
     }
 
@@ -1271,19 +1074,25 @@ impl VimMode {
         text
     }
 
+    /// Every line from `a` to `b`, in whichever order they come.
+    fn yank_rows(&self, a: usize, b: usize) -> String {
+        let first = min(a, b);
+        self.yank_lines(first, max(a, b) - first + 1)
+    }
+
     fn yank_motion(&self, start: Position, motion: Motion) -> String {
         if motion.linewise {
-            let first = min(start.row, motion.destination.row);
-            return self.yank_lines(first, max(start.row, motion.destination.row) - first + 1);
+            self.yank_rows(start.row, motion.destination.row)
+        } else {
+            self.text_between(start, motion.destination, motion.inclusive)
         }
-        self.text_between(start, motion.destination, motion.inclusive)
     }
 
     fn text_between(&self, a: Position, b: Position, inclusive: bool) -> String {
         let flat = self.flat();
         let a = self.position_index(a);
         let b = self.position_index(b);
-        let (start, mut end) = if a <= b { (a, b) } else { (b, a) };
+        let (start, mut end) = (min(a, b), max(a, b));
         if inclusive {
             end = end.saturating_add(1);
         }
@@ -1291,6 +1100,78 @@ impl VimMode {
             .iter()
             .collect()
     }
+}
+
+/// Whitespace, word characters, and punctuation, with `big` folding the last
+/// two together as `W`, `E` and `B` do.
+fn category(character: char, big: bool) -> u8 {
+    if character.is_whitespace() {
+        0
+    } else if big || character.is_alphanumeric() || character == '_' {
+        1
+    } else {
+        2
+    }
+}
+
+fn word_forward(text: &[char], mut index: usize, count: usize, big: bool) -> usize {
+    let last = text.len() - 1;
+    let class = |index: usize| category(text[index], big);
+    for _ in 0..count {
+        let category = class(index);
+        if category != 0 {
+            while index < last && class(index + 1) == category {
+                index += 1;
+            }
+            if index < last {
+                index += 1;
+            }
+        }
+        while index < last && class(index) == 0 {
+            index += 1;
+        }
+    }
+    index
+}
+
+fn word_end(text: &[char], mut index: usize, count: usize, big: bool) -> usize {
+    let last = text.len() - 1;
+    let class = |index: usize| category(text[index], big);
+    for iteration in 0..count {
+        if iteration > 0 && index < last {
+            index += 1;
+        }
+        while index < last && class(index) == 0 {
+            index += 1;
+        }
+        // Already on the end of a word, the first press moves on to the next.
+        if iteration == 0 && index < last && class(index) != 0 && class(index + 1) != class(index) {
+            index += 1;
+            while index < last && class(index) == 0 {
+                index += 1;
+            }
+        }
+        let category = class(index);
+        while index < last && category != 0 && class(index + 1) == category {
+            index += 1;
+        }
+    }
+    index
+}
+
+fn word_backward(text: &[char], mut index: usize, count: usize, big: bool) -> usize {
+    let class = |index: usize| category(text[index], big);
+    for _ in 0..count {
+        index = index.saturating_sub(1);
+        while index > 0 && class(index) == 0 {
+            index -= 1;
+        }
+        let category = class(index);
+        while index > 0 && class(index - 1) == category {
+            index -= 1;
+        }
+    }
+    index
 }
 
 #[cfg(test)]
@@ -1302,6 +1183,16 @@ mod tests {
         VimMode::new(VimBuffer::from_text(lines), cursor, viewport_height)
     }
 
+    fn numbered(count: usize, prefix: &str) -> Vec<String> {
+        (0..count)
+            .map(|number| format!("{prefix}{number}"))
+            .collect()
+    }
+
+    fn at(row: usize, col: usize) -> Position {
+        Position { row, col }
+    }
+
     fn sample_vim() -> VimMode {
         mode(
             vec![
@@ -1309,64 +1200,96 @@ mod tests {
                 "  alpha beta alpha".into(),
                 "last line".into(),
             ],
-            Position { row: 0, col: 0 },
+            at(0, 0),
             2,
         )
     }
 
-    fn press(vim: &mut VimMode, name: &str) -> VimOutcome {
-        let key = parse_for_test(name);
-        let action = Bindings::defaults().get(Mode::Vim, &key);
-        vim.handle(action, &key)
+    /// Presses each space-separated key name in turn, returning the last
+    /// outcome. An empty name is the space bar, so `" a"` is space then `a`.
+    fn press(vim: &mut VimMode, keys: &str) -> VimOutcome {
+        let bindings = Bindings::defaults();
+        let mut outcome = VimOutcome::None;
+        for name in keys.split(' ') {
+            let key = parse_for_test(if name.is_empty() { " " } else { name });
+            outcome = vim.handle(bindings.get(Mode::Vim, &key), &key);
+        }
+        outcome
+    }
+
+    fn type_text(vim: &mut VimMode, text: &str) {
+        for character in text.chars() {
+            press(vim, &character.to_string());
+        }
+    }
+
+    impl VimOutcome {
+        fn yank(self) -> String {
+            match self {
+                Self::Yank(text) => text,
+                other => panic!("expected yank, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn yy_completes_the_operator() {
+        let mut vim = sample_vim();
+        assert_eq!(press(&mut vim, "y y").yank(), "one two-three\n");
+        // The next motion just moves; it does not yank again.
+        assert!(matches!(press(&mut vim, "j"), VimOutcome::None));
+        assert_eq!(vim.cursor, at(1, 0));
     }
 
     #[test]
     fn counts_and_word_motions() {
         let mut vim = sample_vim();
-        press(&mut vim, "2");
-        press(&mut vim, "w");
-        assert_eq!(vim.cursor, Position { row: 0, col: 7 });
+        press(&mut vim, "2 w");
+        assert_eq!(vim.cursor, at(0, 7));
         press(&mut vim, "b");
-        assert_eq!(vim.cursor, Position { row: 0, col: 4 });
+        assert_eq!(vim.cursor, at(0, 4));
         press(&mut vim, "e");
-        assert_eq!(vim.cursor, Position { row: 0, col: 6 });
+        assert_eq!(vim.cursor, at(0, 6));
     }
 
     #[test]
-    fn jumps_move_backward_and_forward_with_counts() {
-        let lines = (0..30)
-            .map(|number| format!("line {number}"))
-            .collect::<Vec<_>>();
-        let mut vim = mode(lines, Position { row: 20, col: 0 }, 6);
+    fn word_and_big_word_classes_differ() {
+        let mut vim = mode(vec!["one-two three".into()], at(0, 0), 1);
+        press(&mut vim, "w");
+        assert_eq!(vim.cursor.col, 3);
+        press(&mut vim, "0 W");
+        assert_eq!(vim.cursor.col, 8);
+        press(&mut vim, "B");
+        assert_eq!(vim.cursor.col, 0);
+        press(&mut vim, "E");
+        assert_eq!(vim.cursor.col, 6);
+    }
 
+    #[test]
+    fn word_motions_are_safe_on_an_empty_screen() {
+        let mut vim = mode(vec![String::new()], at(0, 0), 1);
+        press(&mut vim, "w e b");
+        assert_eq!(vim.cursor, at(0, 0));
+    }
+
+    #[test]
+    fn jumps_move_backward_and_forward_and_a_new_jump_discards_newer_ones() {
+        let mut vim = mode(numbered(30, "line "), at(20, 0), 6);
         press(&mut vim, "Ctrl-u");
         assert_eq!(vim.cursor.row, 17);
         press(&mut vim, "G");
         assert_eq!(vim.cursor.row, 29);
 
-        press(&mut vim, "2");
-        press(&mut vim, "Ctrl-o");
+        press(&mut vim, "2 Ctrl-o");
         assert_eq!(vim.cursor.row, 20);
         press(&mut vim, "Ctrl-l");
         assert_eq!(vim.cursor.row, 17);
         press(&mut vim, "Tab");
         assert_eq!(vim.cursor.row, 29);
-    }
 
-    #[test]
-    fn a_new_jump_discards_newer_jump_positions() {
-        let lines = (0..30)
-            .map(|number| format!("line {number}"))
-            .collect::<Vec<_>>();
-        let mut vim = mode(lines, Position { row: 20, col: 0 }, 6);
-
-        press(&mut vim, "Ctrl-u");
-        press(&mut vim, "G");
         press(&mut vim, "Ctrl-o");
         assert_eq!(vim.cursor.row, 17);
-
-        press(&mut vim, "g");
-        press(&mut vim, "g");
+        press(&mut vim, "g g");
         assert_eq!(vim.cursor.row, 0);
         press(&mut vim, "Ctrl-l");
         assert_eq!(vim.cursor.row, 0);
@@ -1377,8 +1300,7 @@ mod tests {
     #[test]
     fn ordinary_motions_do_not_enter_the_jump_list() {
         let mut vim = sample_vim();
-        press(&mut vim, "j");
-        press(&mut vim, "w");
+        press(&mut vim, "j w");
         let position = vim.cursor;
         press(&mut vim, "Ctrl-o");
         assert_eq!(vim.cursor, position);
@@ -1386,16 +1308,13 @@ mod tests {
 
     #[test]
     fn the_wheel_scrolls_the_viewport_and_stops_at_the_bottom() {
-        let lines = (0..20)
-            .map(|number| format!("line {number}"))
-            .collect::<Vec<_>>();
-        let mut vim = mode(lines, Position { row: 19, col: 0 }, 6);
+        let mut vim = mode(numbered(20, "line "), at(19, 0), 6);
         // Entering vim mode starts at the end of the buffer.
         assert_eq!(vim.viewport_top, 14);
         assert!(vim.scroll(true, 3));
         assert_eq!(vim.viewport_top, 11);
         assert!(
-            vim.cursor.row < 11 + 6 && vim.cursor.row >= 11,
+            (11..17).contains(&vim.cursor.row),
             "the cursor came along with the view"
         );
         assert!(vim.scroll(false, 3));
@@ -1404,278 +1323,187 @@ mod tests {
         assert!(!vim.scroll(false, 3));
         while vim.scroll(true, 5) {}
         assert_eq!(vim.viewport_top, 0);
-        assert!(!vim.scroll(true, 5));
     }
 
     #[test]
     fn line_vertical_page_and_file_motions() {
-        let lines = (0..20)
-            .map(|number| format!("  line {number}"))
-            .collect::<Vec<_>>();
-        let mut vim = mode(lines, Position { row: 10, col: 4 }, 6);
+        let mut vim = mode(numbered(20, "  line "), at(10, 4), 6);
         press(&mut vim, "0");
         assert_eq!(vim.cursor.col, 0);
         press(&mut vim, "^");
         assert_eq!(vim.cursor.col, 2);
         press(&mut vim, "$");
         assert_eq!(vim.cursor.col, 8);
-        press(&mut vim, "2");
-        press(&mut vim, "k");
+        press(&mut vim, "2 k");
         assert_eq!(vim.cursor.row, 8);
         press(&mut vim, "Ctrl-u");
         assert_eq!(vim.cursor.row, 5);
         press(&mut vim, "G");
-        assert_eq!(vim.cursor, Position { row: 19, col: 2 });
-        press(&mut vim, "g");
-        press(&mut vim, "g");
-        assert_eq!(vim.cursor, Position { row: 0, col: 2 });
-        press(&mut vim, "5");
-        press(&mut vim, "G");
-        assert_eq!(vim.cursor, Position { row: 4, col: 2 });
+        assert_eq!(vim.cursor, at(19, 2));
+        press(&mut vim, "g g");
+        assert_eq!(vim.cursor, at(0, 2));
+        press(&mut vim, "5 G");
+        assert_eq!(vim.cursor, at(4, 2));
     }
 
     #[test]
     fn arrow_keys_follow_basic_motions() {
         let mut vim = sample_vim();
         press(&mut vim, "Right");
-        assert_eq!(vim.cursor, Position { row: 0, col: 1 });
+        assert_eq!(vim.cursor, at(0, 1));
         press(&mut vim, "Down");
-        assert_eq!(vim.cursor, Position { row: 1, col: 1 });
+        assert_eq!(vim.cursor, at(1, 1));
         press(&mut vim, "Left");
-        assert_eq!(vim.cursor, Position { row: 1, col: 0 });
+        assert_eq!(vim.cursor, at(1, 0));
         press(&mut vim, "Up");
-        assert_eq!(vim.cursor, Position { row: 0, col: 0 });
-    }
-
-    #[test]
-    fn word_and_big_word_classes_differ() {
-        let mut vim = mode(vec!["one-two three".into()], Position { row: 0, col: 0 }, 1);
-        press(&mut vim, "w");
-        assert_eq!(vim.cursor.col, 3);
-        press(&mut vim, "0");
-        press(&mut vim, "W");
-        assert_eq!(vim.cursor.col, 8);
-        press(&mut vim, "B");
-        assert_eq!(vim.cursor.col, 0);
-        press(&mut vim, "E");
-        assert_eq!(vim.cursor.col, 6);
+        assert_eq!(vim.cursor, at(0, 0));
     }
 
     #[test]
     fn find_till_and_swappable_repeats() {
         let mut vim = sample_vim();
-        press(&mut vim, "f");
-        press(&mut vim, "-");
+        press(&mut vim, "f -");
         assert_eq!(vim.cursor.col, 7);
         press(&mut vim, ",");
         assert_eq!(vim.cursor.col, 7);
-        press(&mut vim, "t");
-        press(&mut vim, "e");
+        press(&mut vim, "t e");
         assert_eq!(vim.cursor.col, 10);
     }
 
     #[test]
     fn space_labels_visible_character_matches_and_jumps_by_hint() {
         let mut vim = sample_vim();
-        press(&mut vim, " ");
+        press(&mut vim, "");
         assert_eq!(vim.prompt().as_deref(), Some("jump to character"));
         press(&mut vim, "a");
-        assert_eq!(vim.jump_hint(Position { row: 1, col: 2 }), Some("a"));
-        assert_eq!(vim.jump_hint(Position { row: 1, col: 6 }), Some("s"));
+        assert_eq!(vim.jump_hint(at(1, 2)), Some("a"));
+        assert_eq!(vim.jump_hint(at(1, 6)), Some("s"));
         press(&mut vim, "s");
-        assert_eq!(vim.cursor, Position { row: 1, col: 6 });
-        assert_eq!(vim.jump_hint(Position { row: 1, col: 2 }), None);
-    }
+        assert_eq!(vim.cursor, at(1, 6));
+        assert_eq!(vim.jump_hint(at(1, 2)), None);
 
-    #[test]
-    fn a_mode_started_on_a_jump_is_already_asking_for_the_character() {
+        // Entering the mode on a jump is already asking for the character.
         let mut vim = sample_vim();
         vim.start_jump();
         assert_eq!(vim.prompt().as_deref(), Some("jump to character"));
-        press(&mut vim, "a");
-        press(&mut vim, "s");
-        assert_eq!(vim.cursor, Position { row: 1, col: 6 });
+        press(&mut vim, "a s");
+        assert_eq!(vim.cursor, at(1, 6));
     }
 
     #[test]
     fn jump_hints_alternate_forward_and_backward_from_the_cursor() {
-        let mut vim = mode(vec!["a.a.a".into()], Position { row: 0, col: 2 }, 1);
-        press(&mut vim, " ");
-        press(&mut vim, "a");
-        assert_eq!(vim.jump_hint(Position { row: 0, col: 4 }), Some("a"));
-        assert_eq!(vim.jump_hint(Position { row: 0, col: 0 }), Some("s"));
+        let mut vim = mode(vec!["a.a.a".into()], at(0, 2), 1);
+        press(&mut vim, " a");
+        assert_eq!(vim.jump_hint(at(0, 4)), Some("a"));
+        assert_eq!(vim.jump_hint(at(0, 0)), Some("s"));
     }
 
     #[test]
     fn jump_hints_use_two_keys_after_single_keys_run_out() {
-        let mut vim = mode(vec!["a".repeat(30)], Position { row: 0, col: 0 }, 1);
-        press(&mut vim, " ");
-        press(&mut vim, "a");
-
-        assert_eq!(vim.jump_hint(Position { row: 0, col: 1 }), Some("a"));
-        assert_eq!(vim.jump_hint(Position { row: 0, col: 26 }), Some("ja"));
+        let mut vim = mode(vec!["a".repeat(30)], at(0, 0), 1);
+        press(&mut vim, " a");
+        assert_eq!(vim.jump_hint(at(0, 1)), Some("a"));
+        assert_eq!(vim.jump_hint(at(0, 26)), Some("ja"));
         press(&mut vim, "j");
-        assert_eq!(vim.jump_hint(Position { row: 0, col: 26 }), Some("a"));
-        assert_eq!(vim.jump_hint(Position { row: 0, col: 27 }), Some("s"));
+        assert_eq!(vim.jump_hint(at(0, 26)), Some("a"));
+        assert_eq!(vim.jump_hint(at(0, 27)), Some("s"));
         press(&mut vim, "s");
-        assert_eq!(vim.cursor, Position { row: 0, col: 27 });
+        assert_eq!(vim.cursor, at(0, 27));
     }
 
     #[test]
     fn forward_backward_search_and_repeats_wrap() {
         let mut vim = sample_vim();
         press(&mut vim, "/");
-        for character in "alpha".chars() {
-            press(&mut vim, &character.to_string());
-        }
+        type_text(&mut vim, "alpha");
         press(&mut vim, "Enter");
-        assert_eq!(vim.cursor, Position { row: 1, col: 2 });
+        assert_eq!(vim.cursor, at(1, 2));
         press(&mut vim, "n");
-        assert_eq!(vim.cursor, Position { row: 1, col: 13 });
+        assert_eq!(vim.cursor, at(1, 13));
         press(&mut vim, "N");
-        assert_eq!(vim.cursor, Position { row: 1, col: 2 });
+        assert_eq!(vim.cursor, at(1, 2));
 
         press(&mut vim, "?");
-        for character in "one".chars() {
-            press(&mut vim, &character.to_string());
-        }
+        type_text(&mut vim, "one");
         press(&mut vim, "Enter");
-        assert_eq!(vim.cursor, Position { row: 0, col: 0 });
+        assert_eq!(vim.cursor, at(0, 0));
     }
 
     #[test]
     fn searching_highlights_every_match_while_the_pattern_is_typed() {
         let mut vim = sample_vim();
         press(&mut vim, "/");
-        for character in "alpha".chars() {
-            press(&mut vim, &character.to_string());
-        }
+        type_text(&mut vim, "alpha");
         // The highlight follows the prompt, before Enter accepts it.
-        assert!(vim.search_match(Position { row: 1, col: 2 }));
-        assert!(vim.search_match(Position { row: 1, col: 6 }));
-        assert!(vim.search_match(Position { row: 1, col: 13 }));
-        assert!(!vim.search_match(Position { row: 1, col: 7 }));
-        assert!(!vim.search_match(Position { row: 0, col: 0 }));
+        assert!(vim.search_match(at(1, 2)));
+        assert!(vim.search_match(at(1, 6)));
+        assert!(vim.search_match(at(1, 13)));
+        assert!(!vim.search_match(at(1, 7)));
+        assert!(!vim.search_match(at(0, 0)));
 
         // Backspacing shortens every highlight with the pattern.
         press(&mut vim, "Backspace");
-        assert!(vim.search_match(Position { row: 1, col: 5 }));
-        assert!(!vim.search_match(Position { row: 1, col: 6 }));
+        assert!(vim.search_match(at(1, 5)));
+        assert!(!vim.search_match(at(1, 6)));
 
-        press(&mut vim, "a");
-        press(&mut vim, "Enter");
-        assert_eq!(vim.cursor, Position { row: 1, col: 2 });
-        assert!(vim.current_search_match(Position { row: 1, col: 2 }));
-        assert!(vim.current_search_match(Position { row: 1, col: 6 }));
+        press(&mut vim, "a Enter");
+        assert_eq!(vim.cursor, at(1, 2));
+        assert!(vim.current_search_match(at(1, 2)));
+        assert!(vim.current_search_match(at(1, 6)));
         // Other matches stay highlighted, but only one is the current one.
-        assert!(vim.search_match(Position { row: 1, col: 13 }));
-        assert!(!vim.current_search_match(Position { row: 1, col: 13 }));
+        assert!(vim.search_match(at(1, 13)));
+        assert!(!vim.current_search_match(at(1, 13)));
 
         press(&mut vim, "n");
-        assert!(vim.current_search_match(Position { row: 1, col: 13 }));
-        assert!(!vim.current_search_match(Position { row: 1, col: 2 }));
+        assert!(vim.current_search_match(at(1, 13)));
+        assert!(!vim.current_search_match(at(1, 2)));
 
         // Escape clears the highlight without leaving the mode.
         assert!(matches!(press(&mut vim, "Escape"), VimOutcome::None));
-        assert!(!vim.search_match(Position { row: 1, col: 2 }));
+        assert!(!vim.search_match(at(1, 2)));
         assert!(matches!(press(&mut vim, "Escape"), VimOutcome::Exit));
     }
 
     #[test]
     fn a_cancelled_search_leaves_nothing_highlighted() {
         let mut vim = sample_vim();
-        press(&mut vim, "/");
-        press(&mut vim, "a");
-        assert!(vim.search_match(Position { row: 1, col: 2 }));
+        press(&mut vim, "/ a");
+        assert!(vim.search_match(at(1, 2)));
         press(&mut vim, "Escape");
-        assert!(!vim.search_match(Position { row: 1, col: 2 }));
-        assert_eq!(vim.cursor, Position { row: 0, col: 0 });
+        assert!(!vim.search_match(at(1, 2)));
+        assert_eq!(vim.cursor, at(0, 0));
     }
 
     #[test]
     fn character_line_and_block_selections_yank() {
         let mut vim = sample_vim();
-        press(&mut vim, "v");
-        press(&mut vim, "e");
-        assert_eq!(press(&mut vim, "y").yank(), "one");
+        assert_eq!(press(&mut vim, "v e y").yank(), "one");
 
         let mut vim = sample_vim();
-        press(&mut vim, "V");
-        press(&mut vim, "j");
         assert_eq!(
-            press(&mut vim, "y").yank(),
+            press(&mut vim, "V j y").yank(),
             "one two-three\n  alpha beta alpha\n"
         );
 
-        let mut vim = mode(
-            vec!["abcd".into(), "efgh".into()],
-            Position { row: 0, col: 1 },
-            2,
-        );
-        press(&mut vim, "Ctrl-v");
-        press(&mut vim, "l");
-        press(&mut vim, "j");
-        assert_eq!(press(&mut vim, "y").yank(), "bc\nfg");
+        let mut vim = mode(vec!["abcd".into(), "efgh".into()], at(0, 1), 2);
+        assert_eq!(press(&mut vim, "Ctrl-v l j y").yank(), "bc\nfg");
     }
 
     #[test]
     fn yank_with_motion_and_escape_selection_rule() {
-        let mut vim = sample_vim();
-        press(&mut vim, "y");
-        assert_eq!(press(&mut vim, "e").yank(), "one");
-
-        let mut vim = sample_vim();
-        press(&mut vim, "y");
-        press(&mut vim, "f");
-        assert_eq!(press(&mut vim, "-").yank(), "one two-");
-
-        let mut vim = sample_vim();
-        press(&mut vim, "G");
-        press(&mut vim, "y");
-        press(&mut vim, "g");
-        assert_eq!(
-            press(&mut vim, "g").yank(),
-            "one two-three\n  alpha beta alpha\nlast line\n"
-        );
-
-        let mut vim = sample_vim();
-        press(&mut vim, "2");
-        press(&mut vim, "y");
-        assert_eq!(
-            press(&mut vim, "y").yank(),
-            "one two-three\n  alpha beta alpha\n"
-        );
-
-        let mut vim = sample_vim();
-        press(&mut vim, "w");
-        assert_eq!(press(&mut vim, "Y").yank(), "two-three");
-
-        let mut vim = sample_vim();
-        press(&mut vim, "w");
-        press(&mut vim, "2");
-        assert_eq!(press(&mut vim, "Y").yank(), "two-three\n  alpha beta alpha");
-
-        let mut vim = sample_vim();
-        press(&mut vim, "v");
-        assert!(matches!(press(&mut vim, "Escape"), VimOutcome::None));
-        assert!(matches!(press(&mut vim, "Escape"), VimOutcome::Exit));
-    }
-
-    #[test]
-    fn word_motions_are_safe_on_an_empty_screen() {
-        let mut vim = mode(vec![String::new()], Position { row: 0, col: 0 }, 1);
-        press(&mut vim, "w");
-        press(&mut vim, "e");
-        press(&mut vim, "b");
-        assert_eq!(vim.cursor, Position { row: 0, col: 0 });
-    }
-
-    impl VimOutcome {
-        fn yank(self) -> String {
-            match self {
-                Self::Yank(text) => text,
-                other => panic!("expected yank, got {other:?}"),
-            }
+        for (keys, expected) in [
+            ("y e", "one"),
+            ("y f -", "one two-"),
+            ("G y g g", "one two-three\n  alpha beta alpha\nlast line\n"),
+            ("2 y y", "one two-three\n  alpha beta alpha\n"),
+            ("w Y", "two-three"),
+            ("w 2 Y", "two-three\n  alpha beta alpha"),
+        ] {
+            assert_eq!(press(&mut sample_vim(), keys).yank(), expected, "{keys}");
         }
+
+        let mut vim = sample_vim();
+        assert!(matches!(press(&mut vim, "v Escape"), VimOutcome::None));
+        assert!(matches!(press(&mut vim, "Escape"), VimOutcome::Exit));
     }
 }

@@ -34,13 +34,16 @@ impl TerminalSession {
         let config = root.join("config.toml");
         fs::write(&config, "mouse = true\n").unwrap();
         let socket = runtime.join("mux.sock");
+        let environment = [
+            ("HOME", home.into_os_string()),
+            ("SHELL", "/bin/sh".into()),
+            ("XDG_STATE_HOME", root.join("state").into_os_string()),
+            ("XDG_RUNTIME_DIR", runtime.into_os_string()),
+        ];
         let daemon = Command::new(env!("CARGO_BIN_EXE_mux"))
             .arg("__server")
             .arg(&socket)
-            .env("HOME", &home)
-            .env("SHELL", "/bin/sh")
-            .env("XDG_STATE_HOME", root.join("state"))
-            .env("XDG_RUNTIME_DIR", &runtime)
+            .envs(environment.clone())
             .env_remove("MUX")
             .env_remove("MUX_PANE")
             .stdin(Stdio::null())
@@ -64,10 +67,9 @@ impl TerminalSession {
             "interactive",
         ]);
         command.cwd(&root);
-        command.env("HOME", &home);
-        command.env("SHELL", "/bin/sh");
-        command.env("XDG_STATE_HOME", root.join("state"));
-        command.env("XDG_RUNTIME_DIR", &runtime);
+        for (name, value) in environment {
+            command.env(name, value);
+        }
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
         command.env_remove("MUX");

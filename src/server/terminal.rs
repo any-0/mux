@@ -14,11 +14,15 @@ use crate::{
 pub(super) const SCROLLBACK_LINES: usize = 20_000;
 const SYNCHRONIZED_OUTPUT_TIMEOUT: Duration = Duration::from_secs(1);
 
+#[derive(Default)]
 pub(super) struct TerminalCallbacks {
     pub(super) bell_count: u64,
     pub(super) prompt_checkpoint: Option<vt100::Screen>,
     pub(super) prompt_ready: Option<PromptReady>,
     pub(super) cursor_shape: Option<CursorShape>,
+    /// The cursor colour the program set (OSC 12), shown instead of the
+    /// theme's while this pane's cursor is the one on screen.
+    pub(super) cursor_color: Option<Rgb>,
     pub(super) synchronized_output: Option<SynchronizedOutput>,
     pub(super) responses: Vec<u8>,
     colors: TerminalColors,
@@ -26,22 +30,6 @@ pub(super) struct TerminalCallbacks {
     /// with no name of its own is called.
     pub(super) title: Option<String>,
     pub(super) clipboard_writes: Vec<ClipboardWrite>,
-}
-
-impl Default for TerminalCallbacks {
-    fn default() -> Self {
-        Self {
-            bell_count: 0,
-            prompt_checkpoint: None,
-            prompt_ready: None,
-            cursor_shape: None,
-            synchronized_output: None,
-            responses: Vec::new(),
-            colors: TerminalColors::from(&Theme::default()),
-            title: None,
-            clipboard_writes: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -62,15 +50,9 @@ impl TerminalCallbacks {
     }
 
     pub(super) fn expire_synchronized_output(&mut self, now: Instant) -> bool {
-        if self
-            .synchronized_output
-            .as_ref()
-            .is_some_and(|update| now >= update.expires)
-        {
-            self.synchronized_output = None;
-            return true;
-        }
-        false
+        self.synchronized_output
+            .take_if(|update| now >= update.expires)
+            .is_some()
     }
 }
 
@@ -134,15 +116,13 @@ impl vt100::Callbacks for TerminalCallbacks {
         params: &[&[u16]],
         final_character: char,
     ) {
-        if second_intermediate.is_none() {
-            if first_intermediate.is_none() && params == [&[5][..]] && final_character == 'n' {
-                self.responses.extend_from_slice(b"\x1b[0n");
-            } else if matches!(first_intermediate, None | Some(b'?'))
-                && params == [&[6][..]]
-                && final_character == 'n'
-            {
+        let only = |value: u16| params == [&[value][..]];
+        let synchronized = params.contains(&&[2026][..]);
+        match (first_intermediate, second_intermediate, final_character) {
+            (None, None, 'n') if only(5) => self.responses.extend_from_slice(b"\x1b[0n"),
+            (None | Some(b'?'), None, 'n') if only(6) => {
                 let (row, col) = screen.cursor_position();
-                let private = if first_intermediate == Some(b'?') {
+                let private = if first_intermediate.is_some() {
                     "?"
                 } else {
                     ""
@@ -150,37 +130,25 @@ impl vt100::Callbacks for TerminalCallbacks {
                 self.responses.extend_from_slice(
                     format!("\x1b[{private}{};{}R", row + 1, col + 1).as_bytes(),
                 );
-            } else if params == [&[0][..]] && final_character == 'c' {
-                match first_intermediate {
-                    None => self.responses.extend_from_slice(b"\x1b[?1;2c"),
-                    Some(b'>') => self.responses.extend_from_slice(b"\x1b[>0;100;0c"),
-                    _ => {}
+            }
+            (None, None, 'c') if only(0) => self.responses.extend_from_slice(b"\x1b[?1;2c"),
+            (Some(b'>'), None, 'c') if only(0) => {
+                self.responses.extend_from_slice(b"\x1b[>0;100;0c");
+            }
+            (Some(b'?'), None, 'h') if synchronized => {
+                let expires = Instant::now() + SYNCHRONIZED_OUTPUT_TIMEOUT;
+                if let Some(update) = &mut self.synchronized_output {
+                    update.expires = expires;
+                } else {
+                    self.synchronized_output = Some(SynchronizedOutput {
+                        screen: screen.clone(),
+                        cursor_shape: self.cursor_shape,
+                        expires,
+                    });
                 }
             }
-        }
-        if first_intermediate == Some(b'?') {
-            if second_intermediate.is_none()
-                && params.contains(&&[2026][..])
-                && matches!(final_character, 'h' | 'l')
-            {
-                if final_character == 'h' {
-                    let expires = Instant::now() + SYNCHRONIZED_OUTPUT_TIMEOUT;
-                    if let Some(update) = &mut self.synchronized_output {
-                        update.expires = expires;
-                    } else {
-                        self.synchronized_output = Some(SynchronizedOutput {
-                            screen: screen.clone(),
-                            cursor_shape: self.cursor_shape,
-                            expires,
-                        });
-                    }
-                } else {
-                    self.synchronized_output = None;
-                }
-            } else if second_intermediate == Some(b'$')
-                && params == [&[2026][..]]
-                && final_character == 'p'
-            {
+            (Some(b'?'), None, 'l') if synchronized => self.synchronized_output = None,
+            (Some(b'?'), Some(b'$'), 'p') if only(2026) => {
                 self.responses
                     .extend_from_slice(if self.synchronized_output.is_some() {
                         b"\x1b[?2026;1$y"
@@ -188,26 +156,52 @@ impl vt100::Callbacks for TerminalCallbacks {
                         b"\x1b[?2026;2$y"
                     });
             }
+            (Some(b' '), None, 'q') => {
+                let style = params.first().and_then(|param| param.first());
+                self.cursor_shape = match style.copied().unwrap_or(0) {
+                    0 => None,
+                    1 | 2 => Some(CursorShape::Block),
+                    3 | 4 => Some(CursorShape::Underline),
+                    5 | 6 => Some(CursorShape::Bar),
+                    _ => return,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    /// DECRQSS (`DCS $ q Pt ST`). Only SGR is reported: Neovim sets an
+    /// undercurl and reads it back this way, and only then sends undercurls and
+    /// underline colours at all.
+    fn unhandled_dcs(
+        &mut self,
+        screen: &mut vt100::Screen,
+        intermediates: &[u8],
+        final_character: char,
+        data: &[u8],
+    ) {
+        if intermediates != b"$" || final_character != 'q' {
             return;
         }
-        if first_intermediate != Some(b' ')
-            || second_intermediate.is_some()
-            || final_character != 'q'
+        if data != b"m" {
+            self.responses.extend_from_slice(b"\x1bP0$r\x1b\\");
+            return;
+        }
+        // `attributes_formatted` is a reset followed by SGR sequences; the
+        // reply is their parameters as one list.
+        let formatted = screen.attributes_formatted();
+        let mut reply = b"\x1bP1$r0".to_vec();
+        for parameters in formatted
+            .split(|&byte| byte == 0x1b)
+            .filter_map(|sequence| sequence.strip_prefix(b"["))
+            .filter_map(|sequence| sequence.strip_suffix(b"m"))
+            .filter(|parameters| !parameters.is_empty())
         {
-            return;
+            reply.push(b';');
+            reply.extend_from_slice(parameters);
         }
-        let style = params
-            .first()
-            .and_then(|param| param.first())
-            .copied()
-            .unwrap_or(0);
-        self.cursor_shape = match style {
-            0 => None,
-            1 | 2 => Some(CursorShape::Block),
-            3 | 4 => Some(CursorShape::Underline),
-            5 | 6 => Some(CursorShape::Bar),
-            _ => return,
-        };
+        reply.extend_from_slice(b"m\x1b\\");
+        self.responses.extend_from_slice(&reply);
     }
 
     fn unhandled_osc(&mut self, screen: &mut vt100::Screen, params: &[&[u8]]) {
@@ -218,9 +212,16 @@ impl vt100::Callbacks for TerminalCallbacks {
             [b"11", b"?"] => self
                 .responses
                 .extend(color_response(b"11", self.colors.background)),
-            [b"12", b"?"] => self
-                .responses
-                .extend(color_response(b"12", self.colors.cursor)),
+            [b"12", b"?"] => self.responses.extend(color_response(
+                b"12",
+                self.cursor_color.unwrap_or(self.colors.cursor),
+            )),
+            [b"12", spec] => {
+                if let Some(color) = parse_color_spec(spec) {
+                    self.cursor_color = Some(color);
+                }
+            }
+            [b"112"] | [b"112", b""] => self.cursor_color = None,
             [b"777", b"mux-prompt-start"] => {
                 self.prompt_checkpoint = Some(screen.clone());
                 self.prompt_ready = None;
@@ -280,14 +281,10 @@ pub(super) fn mouse_report(screen: &vt100::Screen, mouse: Mouse) -> Option<Vec<u
         },
     };
     let button = button
-        + if matches!(mouse.kind, MouseKind::Drag) {
-            32
-        } else {
-            0
-        }
-        + if mouse.modifiers & SHIFT != 0 { 4 } else { 0 }
-        + if mouse.modifiers & ALT != 0 { 8 } else { 0 }
-        + if mouse.modifiers & CTRL != 0 { 16 } else { 0 };
+        + 32 * u8::from(matches!(mouse.kind, MouseKind::Drag))
+        + 4 * u8::from(mouse.modifiers & SHIFT != 0)
+        + 8 * u8::from(mouse.modifiers & ALT != 0)
+        + 16 * u8::from(mouse.modifiers & CTRL != 0);
     let (col, row) = (mouse.col + 1, mouse.row + 1);
     match screen.mouse_protocol_encoding() {
         MouseProtocolEncoding::Sgr => {
@@ -309,11 +306,14 @@ pub(super) fn mouse_report(screen: &vt100::Screen, mouse: Mouse) -> Option<Vec<u
             } else {
                 button
             };
-            let mut report = b"\x1b[M".to_vec();
-            report.push(32u8.saturating_add(button as u8));
-            report.push(32 + col as u8);
-            report.push(32 + row as u8);
-            Some(report)
+            Some(vec![
+                0x1b,
+                b'[',
+                b'M',
+                32u8.saturating_add(button),
+                32 + col as u8,
+                32 + row as u8,
+            ])
         }
     }
 }
@@ -395,6 +395,12 @@ pub(super) struct TerminalColors {
     pub(super) cursor: Rgb,
 }
 
+impl Default for TerminalColors {
+    fn default() -> Self {
+        Self::from(&Theme::default())
+    }
+}
+
 impl From<&Theme> for TerminalColors {
     fn from(theme: &Theme) -> Self {
         Self {
@@ -405,6 +411,39 @@ impl From<&Theme> for TerminalColors {
     }
 }
 
+/// An X11 colour specification as programs send it: `#rgb`, `#rrggbb`,
+/// `#rrrgggbbb`, `#rrrrggggbbbb`, or `rgb:r/g/b` with one to four hex digits
+/// per channel. Colour names are not understood.
+fn parse_color_spec(spec: &[u8]) -> Option<Rgb> {
+    let spec = std::str::from_utf8(spec).ok()?;
+    if !spec.is_ascii() {
+        return None;
+    }
+    let channels: Vec<&str> = if let Some(hex) = spec.strip_prefix('#') {
+        let width = match hex.len() {
+            3 | 6 | 9 | 12 => hex.len() / 3,
+            _ => return None,
+        };
+        (0..3).map(|index| &hex[index * width..][..width]).collect()
+    } else {
+        spec.strip_prefix("rgb:")?.split('/').collect()
+    };
+    let [red, green, blue] = channels[..] else {
+        return None;
+    };
+    // Each channel is a fraction of its own width: `f` and `ffff` are both
+    // full intensity.
+    let channel = |digits: &str| {
+        if digits.is_empty() || digits.len() > 4 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let value = u32::from_str_radix(digits, 16).ok()?;
+        let max = (1 << (4 * digits.len())) - 1;
+        u8::try_from((value * 255 + max / 2) / max).ok()
+    };
+    Some((channel(red)?, channel(green)?, channel(blue)?))
+}
+
 fn color_response(kind: &[u8], (red, green, blue): Rgb) -> Vec<u8> {
     let kind = String::from_utf8_lossy(kind);
     format!("\x1b]{kind};rgb:{red:02x}{red:02x}/{green:02x}{green:02x}/{blue:02x}{blue:02x}\x1b\\")
@@ -412,6 +451,9 @@ fn color_response(kind: &[u8], (red, green, blue): Rgb) -> Vec<u8> {
 }
 
 pub(super) fn terminal_key_bytes(key: &Key, application_cursor: bool) -> Vec<u8> {
+    let cursor =
+        |final_byte| cursor_sequence(final_byte, key.modifiers, application_cursor).into_bytes();
+    let tilde = |code| tilde_sequence(code, key.modifiers).into_bytes();
     let mut bytes = Vec::new();
     if key.modifiers & ALT != 0
         && matches!(
@@ -448,34 +490,26 @@ pub(super) fn terminal_key_bytes(key: &Key, application_cursor: bool) -> Vec<u8>
         KeyCode::Backspace => bytes.push(0x7f),
         KeyCode::Tab => bytes.push(b'\t'),
         KeyCode::BackTab => bytes.extend_from_slice(b"\x1b[Z"),
-        KeyCode::Up => bytes
-            .extend_from_slice(cursor_sequence(b'A', key.modifiers, application_cursor).as_bytes()),
-        KeyCode::Down => bytes
-            .extend_from_slice(cursor_sequence(b'B', key.modifiers, application_cursor).as_bytes()),
-        KeyCode::Right => bytes
-            .extend_from_slice(cursor_sequence(b'C', key.modifiers, application_cursor).as_bytes()),
-        KeyCode::Left => bytes
-            .extend_from_slice(cursor_sequence(b'D', key.modifiers, application_cursor).as_bytes()),
         // Home and End follow the cursor keys: SS3 in application cursor mode,
         // which is what terminfo's khome and kend expect once curses sends smkx.
-        KeyCode::Home => bytes
-            .extend_from_slice(cursor_sequence(b'H', key.modifiers, application_cursor).as_bytes()),
-        KeyCode::End => bytes
-            .extend_from_slice(cursor_sequence(b'F', key.modifiers, application_cursor).as_bytes()),
-        KeyCode::Delete => bytes.extend_from_slice(tilde_sequence(3, key.modifiers).as_bytes()),
-        KeyCode::Insert => bytes.extend_from_slice(tilde_sequence(2, key.modifiers).as_bytes()),
-        KeyCode::PageUp => bytes.extend_from_slice(tilde_sequence(5, key.modifiers).as_bytes()),
-        KeyCode::PageDown => bytes.extend_from_slice(tilde_sequence(6, key.modifiers).as_bytes()),
-        KeyCode::F(number) => {
-            let sequence = match number {
-                1..=4 => modified_csi(b'P' + number - 1, key.modifiers),
-                5 => tilde_sequence(15, key.modifiers),
-                6..=10 => tilde_sequence(11 + u16::from(number), key.modifiers),
-                11..=12 => tilde_sequence(12 + u16::from(number), key.modifiers),
-                _ => String::new(),
-            };
-            bytes.extend_from_slice(sequence.as_bytes());
+        KeyCode::Up => bytes.extend(cursor(b'A')),
+        KeyCode::Down => bytes.extend(cursor(b'B')),
+        KeyCode::Right => bytes.extend(cursor(b'C')),
+        KeyCode::Left => bytes.extend(cursor(b'D')),
+        KeyCode::Home => bytes.extend(cursor(b'H')),
+        KeyCode::End => bytes.extend(cursor(b'F')),
+        KeyCode::Delete => bytes.extend(tilde(3)),
+        KeyCode::Insert => bytes.extend(tilde(2)),
+        KeyCode::PageUp => bytes.extend(tilde(5)),
+        KeyCode::PageDown => bytes.extend(tilde(6)),
+        // F1-F4 are SS3 P-S unmodified, whatever the cursor mode.
+        KeyCode::F(number @ 1..=4) => {
+            bytes.extend(cursor_sequence(b'P' + number - 1, key.modifiers, true).into_bytes());
         }
+        KeyCode::F(5) => bytes.extend(tilde(15)),
+        KeyCode::F(number @ 6..=10) => bytes.extend(tilde(11 + u16::from(number))),
+        KeyCode::F(number @ 11..=12) => bytes.extend(tilde(12 + u16::from(number))),
+        KeyCode::F(_) => {}
     }
     bytes
 }
@@ -497,32 +531,11 @@ fn control_byte(character: char) -> Option<u8> {
 }
 
 fn cursor_sequence(final_byte: u8, modifiers: u8, application_cursor: bool) -> String {
-    let modifiers = modifiers & (SHIFT | ALT | CTRL);
-    if modifiers == 0 {
-        if application_cursor {
-            format!("\x1bO{}", final_byte as char)
-        } else {
-            format!("\x1b[{}", final_byte as char)
-        }
-    } else {
-        let parameter = 1
-            + usize::from(modifiers & SHIFT != 0)
-            + 2 * usize::from(modifiers & ALT != 0)
-            + 4 * usize::from(modifiers & CTRL != 0);
-        format!("\x1b[1;{parameter}{}", final_byte as char)
-    }
-}
-
-fn modified_csi(final_byte: u8, modifiers: u8) -> String {
+    let final_byte = final_byte as char;
     match modifier_parameter(modifiers) {
-        None => {
-            if matches!(final_byte, b'P'..=b'S') {
-                format!("\x1bO{}", final_byte as char)
-            } else {
-                format!("\x1b[{}", final_byte as char)
-            }
-        }
-        Some(parameter) => format!("\x1b[1;{parameter}{}", final_byte as char),
+        Some(parameter) => format!("\x1b[1;{parameter}{final_byte}"),
+        None if application_cursor => format!("\x1bO{final_byte}"),
+        None => format!("\x1b[{final_byte}"),
     }
 }
 

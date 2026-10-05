@@ -47,9 +47,8 @@ fn process_stat(stat: &str) -> Option<(i32, i32)> {
     // comm can itself contain spaces and closing parentheses.
     let (_, fields) = stat.rsplit_once(')')?;
     let mut fields = fields.split_whitespace();
-    match fields.next()? {
-        "Z" | "X" | "x" | "T" | "t" => return None,
-        _ => {}
+    if matches!(fields.next()?, "Z" | "X" | "x" | "T" | "t") {
+        return None;
     }
     Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
 }

@@ -1,5 +1,3 @@
-use crate::term::BufWrite as _;
-
 #[derive(Clone, Debug)]
 pub struct Grid {
     size: Size,
@@ -27,7 +25,7 @@ pub struct Grid {
 }
 
 impl Grid {
-    pub fn new(size: Size, scrollback_len: usize) -> Self {
+    pub fn new(size: Size, scrollback_len: usize, reflow: bool) -> Self {
         Self {
             size,
             pos: Pos::default(),
@@ -41,15 +39,9 @@ impl Grid {
             scrollback_len,
             scrollback_offset: 0,
             history_continues: false,
-            // A grid that keeps history is a normal screen; one without is
-            // cropped as before.
-            reflow: scrollback_len > 0,
+            reflow,
             fill: crate::attrs::Attrs::default(),
         }
-    }
-
-    pub fn set_reflow(&mut self, reflow: bool) {
-        self.reflow = reflow;
     }
 
     pub fn set_fill(&mut self, fill: crate::attrs::Attrs) {
@@ -58,12 +50,7 @@ impl Grid {
 
     pub fn allocate_rows(&mut self) {
         if self.rows.is_empty() {
-            self.rows.extend(
-                std::iter::repeat_with(|| {
-                    crate::row::Row::new(self.size.cols)
-                })
-                .take(usize::from(self.size.rows)),
-            );
+            self.rows = vec![crate::row::Row::new(self.size.cols); usize::from(self.size.rows)];
         }
     }
 
@@ -73,10 +60,6 @@ impl Grid {
             row.clear(self.fill);
         }
         row
-    }
-
-    fn blank_row(&self) -> crate::row::Row {
-        crate::row::Row::new(self.size.cols)
     }
 
     pub fn clear(&mut self) {
@@ -90,7 +73,7 @@ impl Grid {
     /// entering the alternate screen again finds its saved cursor intact.
     pub fn clear_keeping_saved_cursor(&mut self) {
         self.pos = Pos::default();
-        for row in self.drawing_rows_mut() {
+        for row in &mut self.rows {
             row.clear(crate::attrs::Attrs::default());
         }
         self.scroll_top = 0;
@@ -110,13 +93,8 @@ impl Grid {
             self.resize_reflowing(size);
             return;
         }
-        if size.cols != self.size.cols {
-            self.reflow_scrollback(size.cols);
-            for row in &mut self.rows {
-                row.wrap(false);
-            }
-        }
-
+        // A grid that does not reflow (the alternate screen) never holds
+        // history, so it is only cropped. Resizing a row ends its wrap.
         if self.scroll_bottom == self.size.rows - 1 {
             self.scroll_bottom = size.rows - 1;
         }
@@ -125,7 +103,8 @@ impl Grid {
         for row in &mut self.rows {
             row.resize(size.cols, crate::Cell::new());
         }
-        self.rows.resize(usize::from(size.rows), self.blank_row());
+        self.rows
+            .resize(usize::from(size.rows), crate::row::Row::new(size.cols));
 
         if self.scroll_bottom >= size.rows {
             self.scroll_bottom = size.rows - 1;
@@ -161,8 +140,7 @@ impl Grid {
             std::mem::take(&mut self.rows).into();
 
         if size.cols != old.cols {
-            let mut history =
-                std::mem::take(&mut self.scrollback).into_rows();
+            let mut history = std::mem::take(&mut self.scrollback).into_rows();
             if !self.history_continues {
                 if let Some(last) = history.last_mut() {
                     last.wrap(false);
@@ -177,15 +155,15 @@ impl Grid {
             );
             // The screen keeps its height for now: its last rows, but never
             // starting below the cursor.
-            let start =
-                all.len().saturating_sub(usize::from(old.rows)).min(row);
+            let start = all.len().saturating_sub(usize::from(old.rows)).min(row);
             for _ in 0..start {
                 let row = all.pop_front().unwrap();
                 self.push_history(row);
             }
-            self.saved_pos.row = self.saved_pos.row.saturating_sub(
-                u16::try_from(start).unwrap_or(u16::MAX),
-            );
+            self.saved_pos.row = self
+                .saved_pos
+                .row
+                .saturating_sub(u16::try_from(start).unwrap_or(u16::MAX));
             visible = all;
             cursor_row = row - start;
             cursor_col = col;
@@ -254,8 +232,7 @@ impl Grid {
         };
         self.saved_pos.row = self.saved_pos.row.min(size.rows - 1);
         self.saved_pos.col = self.saved_pos.col.min(size.cols - 1);
-        self.scrollback_offset =
-            self.scrollback_offset.min(self.scrollback.len());
+        self.scrollback_offset = self.scrollback_offset.min(self.scrollback.len());
     }
 
     fn push_history(&mut self, mut row: crate::row::Row) {
@@ -269,8 +246,7 @@ impl Grid {
         }
         self.scrollback.push_back(row);
         if self.scrollback_offset > 0 {
-            self.scrollback_offset =
-                self.scrollback.len().min(self.scrollback_offset + 1);
+            self.scrollback_offset = self.scrollback.len().min(self.scrollback_offset + 1);
         }
     }
 
@@ -301,8 +277,7 @@ impl Grid {
                 logical_line.pop();
             }
             if index == cursor_row {
-                cursor_offset =
-                    Some(logical_line.len() + usize::from(cursor_col));
+                cursor_offset = Some(logical_line.len() + usize::from(cursor_col));
             }
             logical_line.append(&mut cells);
             if !wrapped {
@@ -352,110 +327,38 @@ impl Grid {
             if width > 1 {
                 crate::row::repair_wide_cells(&mut row);
             }
-            output.push_back(crate::row::Row::from_reflow_cells(
-                row, cols, true,
-            ));
+            output.push_back(crate::row::Row::from_reflow_cells(row, cols, true));
         }
         taken.push(usize::MAX);
         let mut row = std::mem::take(cells);
+        // At one column a wide character's halves land on consecutive rows.
+        // They are kept, so widening again joins them back together.
         if width > 1 {
             crate::row::repair_wide_cells(&mut row);
         }
         output.push_back(crate::row::Row::from_reflow_cells(row, cols, false));
         if let Some(mut remaining) = cursor_offset.take() {
-            let rows = taken.len();
             for (index, count) in taken.iter().enumerate() {
                 if remaining < *count {
-                    // Just past the end of the text is a pending wrap; further
-                    // out than that, the cursor stops at the last column.
-                    let text =
-                        cells_in_last_row(output, first + index, width);
-                    let col = if index + 1 == rows
+                    // Just past the end of text that fills the last row is a
+                    // pending wrap; anywhere further out, the cursor stops at
+                    // the last column.
+                    let col = if index + 1 == taken.len()
                         && remaining == width
-                        && text == width
+                        && output[first + index]
+                            .get(cols - 1)
+                            .is_some_and(|cell| cell != crate::Cell::new())
                     {
                         width
                     } else {
                         remaining.min(width - 1)
                     };
-                    *cursor = (
-                        first + index,
-                        u16::try_from(col).unwrap_or(cols - 1),
-                    );
+                    *cursor = (first + index, u16::try_from(col).unwrap_or(cols - 1));
                     break;
                 }
                 remaining -= count;
             }
         }
-    }
-
-    fn reflow_scrollback(&mut self, cols: u16) {
-        let old_rows = std::mem::take(&mut self.scrollback).into_rows();
-        let mut rows = std::collections::VecDeque::new();
-        let mut logical_line = Vec::new();
-
-        for row in old_rows {
-            let (mut cells, wrapped) = row.into_reflow_cells();
-            logical_line.append(&mut cells);
-            if !wrapped {
-                Self::push_reflowed_line(
-                    &mut rows,
-                    &mut logical_line,
-                    cols,
-                    false,
-                );
-            }
-        }
-        if !logical_line.is_empty() {
-            Self::push_reflowed_line(
-                &mut rows,
-                &mut logical_line,
-                cols,
-                true,
-            );
-        }
-
-        while rows.len() > self.scrollback_len {
-            rows.pop_front();
-        }
-        rows.shrink_to_fit();
-        self.scrollback = rows.into_iter().collect();
-        self.scrollback_offset = self.scrollback_offset.min(self.scrollback.len());
-    }
-
-    fn push_reflowed_line(
-        rows: &mut std::collections::VecDeque<crate::row::Row>,
-        cells: &mut Vec<crate::Cell>,
-        cols: u16,
-        final_wrapped: bool,
-    ) {
-        let width = usize::from(cols);
-        if cells.is_empty() {
-            rows.push_back(crate::row::Row::from_reflow_cells(
-                Vec::new(),
-                cols,
-                final_wrapped,
-            ));
-            return;
-        }
-
-        while cells.len() > width {
-            let split = if width > 1 && cells[width].is_wide_continuation() {
-                width - 1
-            } else {
-                width
-            };
-            let remainder = cells.split_off(split);
-            let row = std::mem::replace(cells, remainder);
-            rows.push_back(crate::row::Row::from_reflow_cells(
-                row, cols, true,
-            ));
-        }
-        rows.push_back(crate::row::Row::from_reflow_cells(
-            std::mem::take(cells),
-            cols,
-            final_wrapped,
-        ));
     }
 
     pub fn pos(&self) -> Pos {
@@ -480,18 +383,14 @@ impl Grid {
         }
     }
 
-    pub fn reset_saved_cursor(&mut self) {
+    /// DECSTR's share: no origin mode, full-screen margins and a fresh saved
+    /// cursor, but the cursor itself stays put.
+    pub fn soft_reset(&mut self) {
+        self.origin_mode = false;
+        self.scroll_top = 0;
+        self.scroll_bottom = self.size.rows - 1;
         self.saved_pos = Pos::default();
         self.saved_origin_mode = false;
-    }
-
-    pub fn set_origin_mode_only(&mut self, mode: bool) {
-        self.origin_mode = mode;
-    }
-
-    pub fn set_scroll_region_only(&mut self, top: u16, bottom: u16) {
-        self.scroll_top = top;
-        self.scroll_bottom = bottom;
     }
 
     pub fn save_cursor(&mut self) {
@@ -507,25 +406,16 @@ impl Grid {
     /// Packs the scrollback into bytes, in the same form the blocks it is
     /// stored in already use.
     pub fn encode_history(&self) -> Vec<u8> {
+        let rows = u32::try_from(self.scrollback.len()).unwrap();
         let mut raw = Vec::new();
-        let mut rows: u32 = 0;
         for row in self.scrollback.iter() {
             row.encode(&mut raw);
-            rows += 1;
         }
         let uncompressed_len = raw.len();
-        let compressed =
-            zstd::bulk::compress(&raw, 1).expect("compress scrollback for persistence");
-        let (body, compressed) = if compressed.len() < raw.len() {
-            (compressed, true)
-        } else {
-            (raw, false)
-        };
+        let (body, compressed) = crate::scrollback::compress_if_smaller(raw);
         let mut output = Vec::with_capacity(body.len() + 13);
         output.extend_from_slice(&rows.to_le_bytes());
-        output.extend_from_slice(
-            &u64::try_from(uncompressed_len).unwrap().to_le_bytes(),
-        );
+        output.extend_from_slice(&u64::try_from(uncompressed_len).unwrap().to_le_bytes());
         output.push(u8::from(compressed));
         output.extend_from_slice(&body);
         output
@@ -534,12 +424,12 @@ impl Grid {
     /// Puts a scrollback packed by [`Self::encode_history`] back, in place of
     /// whatever this grid was holding.
     pub fn restore_history(&mut self, packed: &[u8]) -> bool {
+        use std::io::Read as _;
+
         if packed.len() < 13 {
             return false;
         }
         let rows = u32::from_le_bytes(packed[..4].try_into().unwrap());
-        use std::io::Read as _;
-
         let uncompressed_len = u64::from_le_bytes(packed[4..12].try_into().unwrap());
         if packed[12] > 1 || u64::from(rows) > uncompressed_len / 15 {
             return false;
@@ -570,25 +460,22 @@ impl Grid {
             if remaining < 15 || reader.read_exact(&mut header).is_err() {
                 return false;
             }
-            let cells = usize::from(u16::from_le_bytes(
-                header[7..9].try_into().unwrap(),
-            ));
-            let data_len =
-                u32::from_le_bytes(header[9..13].try_into().unwrap())
-                    as usize;
-            let attrs_len = usize::from(u16::from_le_bytes(
-                header[13..15].try_into().unwrap(),
-            ));
+            let cells = usize::from(u16::from_le_bytes(header[7..9].try_into().unwrap()));
+            let Ok(data_len) =
+                usize::try_from(u32::from_le_bytes(header[9..13].try_into().unwrap()))
+            else {
+                return false;
+            };
+            let attrs_len = usize::from(u16::from_le_bytes(header[13..15].try_into().unwrap()));
             // Every cell has at most a two-byte shape entry and 22 text bytes,
             // and at most one 17- or 18-byte attribute span. These format bounds make
             // the allocation independent of a forged total-length declaration.
             if data_len > cells * 24 || attrs_len > cells {
                 return false;
             }
-            let length = 15
-                + data_len
-                + attrs_len * crate::row::span_length(header[2]);
-            if length as u64 > remaining {
+            let length = 15 + data_len + attrs_len * crate::row::span_length(header[2]);
+            let length64 = u64::try_from(length).unwrap_or(u64::MAX);
+            if length64 > remaining {
                 return false;
             }
             let mut record = Vec::with_capacity(length);
@@ -600,7 +487,7 @@ impl Grid {
             let Some(row) = crate::row::Row::decode_checked(&mut record.as_slice()) else {
                 return false;
             };
-            remaining -= length as u64;
+            remaining -= length64;
             if self.scrollback_len > 0 {
                 if restored.len() == self.scrollback_len {
                     restored.pop_front();
@@ -627,28 +514,14 @@ impl Grid {
         self.scrollback
             .iter()
             .skip(scrollback_len - self.scrollback_offset)
-            // when scrollback_offset > rows_len (e.g. rows = 3,
-            // scrollback_len = 10, offset = 9) the skip(10 - 9)
-            // will take 9 rows instead of 3. we need to set
-            // the upper bound to rows_len (e.g. 3)
+            // Scrolled back further than a screenful, the screen shows
+            // nothing but history.
             .take(rows_len)
-            // same for rows_len - scrollback_offset (e.g. 3 - 9).
-            // it'll panic with overflow. we have to saturate the subtraction.
             .chain(
                 self.rows
                     .iter()
                     .take(rows_len.saturating_sub(self.scrollback_offset)),
             )
-    }
-
-    pub fn drawing_rows(&self) -> impl Iterator<Item = &crate::row::Row> {
-        self.rows.iter()
-    }
-
-    pub fn drawing_rows_mut(
-        &mut self,
-    ) -> impl Iterator<Item = &mut crate::row::Row> {
-        self.rows.iter_mut()
     }
 
     pub fn visible_row(&self, row: u16) -> Option<&crate::row::Row> {
@@ -666,20 +539,15 @@ impl Grid {
     }
 
     pub fn drawing_row(&self, row: u16) -> Option<&crate::row::Row> {
-        self.drawing_rows().nth(usize::from(row))
+        self.rows.get(usize::from(row))
     }
 
-    pub fn drawing_row_mut(
-        &mut self,
-        row: u16,
-    ) -> Option<&mut crate::row::Row> {
-        self.drawing_rows_mut().nth(usize::from(row))
+    pub fn drawing_row_mut(&mut self, row: u16) -> Option<&mut crate::row::Row> {
+        self.rows.get_mut(usize::from(row))
     }
 
-    pub fn current_row_mut(&mut self) -> &mut crate::row::Row {
-        self.drawing_row_mut(self.pos.row)
-            // we assume self.pos.row is always valid
-            .unwrap()
+    fn current_row_mut(&mut self) -> &mut crate::row::Row {
+        &mut self.rows[usize::from(self.pos.row)]
     }
 
     pub fn visible_cell(&self, pos: Pos) -> Option<crate::Cell> {
@@ -739,40 +607,26 @@ impl Grid {
         }
     }
 
-    pub fn write_contents_formatted(
-        &self,
-        contents: &mut Vec<u8>,
-    ) -> crate::attrs::Attrs {
-        crate::term::ClearAttrs.write_buf(contents);
-        crate::term::ClearScreen.write_buf(contents);
+    pub fn write_contents_formatted(&self, contents: &mut Vec<u8>) -> crate::attrs::Attrs {
+        crate::term::clear_attrs(contents);
+        crate::term::clear_screen(contents);
 
         let mut prev_attrs = crate::attrs::Attrs::default();
         let mut prev_pos = Pos::default();
         let mut wrapping = false;
-        for (i, row) in self.visible_rows().enumerate() {
-            // we limit the number of cols to a u16 (see Size), so
-            // visible_rows() can never return more rows than will fit
-            let i = i.try_into().unwrap();
-            let (new_pos, new_attrs) = row.write_contents_formatted(
+        for (row, i) in self.visible_rows().zip(0..) {
+            (prev_pos, prev_attrs) = row.write_contents_formatted(
                 contents,
-                0,
                 self.size.cols,
                 i,
                 wrapping,
-                Some(prev_pos),
-                Some(prev_attrs),
+                prev_pos,
+                prev_attrs,
             );
-            prev_pos = new_pos;
-            prev_attrs = new_attrs;
             wrapping = row.wrapped();
         }
 
-        self.write_cursor_position_formatted(
-            contents,
-            Some(prev_pos),
-            Some(prev_attrs),
-        );
-
+        self.write_cursor_position_formatted(contents, prev_pos, prev_attrs);
         prev_attrs
     }
 
@@ -785,16 +639,10 @@ impl Grid {
         let mut prev_pos = prev.pos;
         let mut wrapping = false;
         let mut prev_wrapping = false;
-        for (i, (row, prev_row)) in
-            self.visible_rows().zip(prev.visible_rows()).enumerate()
-        {
-            // we limit the number of cols to a u16 (see Size), so
-            // visible_rows() can never return more rows than will fit
-            let i = i.try_into().unwrap();
-            let (new_pos, new_attrs) = row.write_contents_diff(
+        for ((row, prev_row), i) in self.visible_rows().zip(prev.visible_rows()).zip(0..) {
+            (prev_pos, prev_attrs) = row.write_contents_diff(
                 contents,
                 prev_row,
-                0,
                 self.size.cols,
                 i,
                 wrapping,
@@ -802,181 +650,87 @@ impl Grid {
                 prev_pos,
                 prev_attrs,
             );
-            prev_pos = new_pos;
-            prev_attrs = new_attrs;
             wrapping = row.wrapped();
             prev_wrapping = prev_row.wrapped();
         }
 
-        self.write_cursor_position_formatted(
-            contents,
-            Some(prev_pos),
-            Some(prev_attrs),
-        );
-
+        self.write_cursor_position_formatted(contents, prev_pos, prev_attrs);
         prev_attrs
     }
 
-    pub fn write_cursor_position_formatted(
+    /// Where the last character of `row` starts: the last column, or the
+    /// one before it when that holds the second half of a wide character.
+    fn last_char_pos(&self, row: u16) -> Pos {
+        let mut pos = Pos {
+            row,
+            col: self.size.cols - 1,
+        };
+        if self.size.cols >= 2 && self.drawing_cell(pos).unwrap().is_wide_continuation() {
+            pos.col -= 1;
+        }
+        pos
+    }
+
+    fn write_cursor_position_formatted(
         &self,
         contents: &mut Vec<u8>,
-        prev_pos: Option<Pos>,
-        prev_attrs: Option<crate::attrs::Attrs>,
+        prev_pos: Pos,
+        prev_attrs: crate::attrs::Attrs,
     ) {
-        let prev_attrs = prev_attrs.unwrap_or_default();
+        if prev_pos == self.pos || self.pos.col < self.size.cols {
+            crate::term::move_from_to(contents, prev_pos, self.pos);
+            return;
+        }
         // writing a character to the last column of a row doesn't wrap the
         // cursor immediately - it waits until the next character is actually
         // drawn. it is only possible for the cursor to have this kind of
         // position after drawing a character though, so if we end in this
         // position, we need to redraw the character at the end of the row.
-        if prev_pos != Some(self.pos) && self.pos.col >= self.size.cols {
-            let mut pos = Pos {
-                row: self.pos.row,
-                col: self.size.cols - 1,
-            };
-            if self.size.cols >= 2
-                && self
-                    .drawing_cell(pos)
-                    // we assume self.pos.row is always valid, and
-                    // self.size.cols - 1 is always a valid column
-                    .unwrap()
-                    .is_wide_continuation()
-            {
-                pos.col = self.size.cols - 2;
-            }
-            let cell =
-                // we assume self.pos.row is always valid, and self.size.cols
-                // - 2 must be a valid column because self.size.cols - 1 is
-                // always valid and we just checked that the cell at
-                // self.size.cols - 1 is a wide continuation character, which
-                // means that the first half of the wide character must be
-                // before it
-                self.drawing_cell(pos).unwrap();
-            if cell.has_contents() {
-                if let Some(prev_pos) = prev_pos {
-                    crate::term::MoveFromTo::new(prev_pos, pos)
-                        .write_buf(contents);
-                } else {
-                    crate::term::MoveTo::new(pos).write_buf(contents);
-                }
-                cell.attrs().write_escape_code_diff(contents, &prev_attrs);
-                contents.extend(cell.contents().as_bytes());
-                prev_attrs.write_escape_code_diff(contents, cell.attrs());
-            } else {
-                // if the cell doesn't have contents, we can't have gotten
-                // here by drawing a character in the last column. this means
-                // that as far as i'm aware, we have to have reached here from
-                // a newline when we were already after the end of an earlier
-                // row. in the case where we are already after the end of an
-                // earlier row, we can just write a few newlines, otherwise we
-                // also need to do the same as above to get ourselves to after
-                // the end of a row.
-                let mut found = false;
-                for i in (0..self.pos.row).rev() {
-                    pos.row = i;
-                    pos.col = self.size.cols - 1;
-                    if self.size.cols >= 2
-                        && self
-                            .drawing_cell(pos)
-                            // i is always less than self.pos.row, which we
-                            // assume to be always valid, so it must also be
-                            // valid. self.size.cols - 1 is always a valid col.
-                            .unwrap()
-                            .is_wide_continuation()
-                    {
-                        pos.col = self.size.cols - 2;
-                    }
-                    let cell = self
-                        .drawing_cell(pos)
-                        // i is always less than self.pos.row, which we assume
-                        // to be always valid, so it must also be valid.
-                        // self.size.cols - 2 is valid because self.size.cols
-                        // - 1 is always valid, and col gets set to
-                        // self.size.cols - 2 when the cell at self.size.cols
-                        // - 1 is a wide continuation character, meaning that
-                        // the first half of the wide character must be before
-                        // it
-                        .unwrap();
-                    if cell.has_contents() {
-                        if let Some(prev_pos) = prev_pos {
-                            if prev_pos.row != i
-                                || prev_pos.col < self.size.cols
-                            {
-                                crate::term::MoveFromTo::new(prev_pos, pos)
-                                    .write_buf(contents);
-                                cell.attrs().write_escape_code_diff(
-                                    contents,
-                                    &prev_attrs,
-                                );
-                                contents.extend(cell.contents().as_bytes());
-                                prev_attrs.write_escape_code_diff(
-                                    contents,
-                                    cell.attrs(),
-                                );
-                            }
-                        } else {
-                            crate::term::MoveTo::new(pos).write_buf(contents);
-                            cell.attrs().write_escape_code_diff(
-                                contents,
-                                &prev_attrs,
-                            );
-                            contents.extend(cell.contents().as_bytes());
-                            prev_attrs.write_escape_code_diff(
-                                contents,
-                                cell.attrs(),
-                            );
-                        }
-                        contents.extend(
-                            "\n".repeat(usize::from(self.pos.row - i))
-                                .as_bytes(),
-                        );
-                        found = true;
-                        break;
-                    }
-                }
-
-                // this can happen if you get the cursor off the end of a row,
-                // and then do something to clear the end of the current row
-                // without moving the cursor (IL, DL, ED, EL, etc). we know
-                // there can't be something in the last column because we
-                // would have caught that above, so it should be safe to
-                // overwrite it.
-                if !found {
-                    pos = Pos {
-                        row: self.pos.row,
-                        col: self.size.cols - 1,
-                    };
-                    if let Some(prev_pos) = prev_pos {
-                        crate::term::MoveFromTo::new(prev_pos, pos)
-                            .write_buf(contents);
-                    } else {
-                        crate::term::MoveTo::new(pos).write_buf(contents);
-                    }
-                    contents.push(b' ');
-                    // we know that the cell has no contents, but it still may
-                    // have drawing attributes (background color, etc)
-                    let end_cell = self
-                        .drawing_cell(pos)
-                        // we assume self.pos.row is always valid, and
-                        // self.size.cols - 1 is always a valid column
-                        .unwrap();
-                    end_cell
-                        .attrs()
-                        .write_escape_code_diff(contents, &prev_attrs);
-                    crate::term::SaveCursor.write_buf(contents);
-                    crate::term::Backspace.write_buf(contents);
-                    crate::term::EraseChar::new(1).write_buf(contents);
-                    crate::term::RestoreCursor.write_buf(contents);
-                    prev_attrs
-                        .write_escape_code_diff(contents, end_cell.attrs());
-                }
-            }
-        } else if let Some(prev_pos) = prev_pos {
-            crate::term::MoveFromTo::new(prev_pos, self.pos)
-                .write_buf(contents);
-        } else {
-            crate::term::MoveTo::new(self.pos).write_buf(contents);
+        let redraw = |contents: &mut Vec<u8>, pos, cell: &crate::Cell| {
+            crate::term::move_from_to(contents, prev_pos, pos);
+            cell.attrs().write_escape_code_diff(contents, &prev_attrs);
+            contents.extend(cell.contents().as_bytes());
+            prev_attrs.write_escape_code_diff(contents, cell.attrs());
+        };
+        let pos = self.last_char_pos(self.pos.row);
+        let cell = self.drawing_cell(pos).unwrap();
+        if cell.has_contents() {
+            redraw(contents, pos, &cell);
+            return;
         }
+
+        // Otherwise we got here from a newline while already after the end
+        // of an earlier row: get after that row and write the newlines.
+        for row in (0..self.pos.row).rev() {
+            let pos = self.last_char_pos(row);
+            let cell = self.drawing_cell(pos).unwrap();
+            if cell.has_contents() {
+                if prev_pos.row != row || prev_pos.col < self.size.cols {
+                    redraw(contents, pos, &cell);
+                }
+                contents.extend("\n".repeat(usize::from(self.pos.row - row)).as_bytes());
+                return;
+            }
+        }
+
+        // The end of the row was cleared (IL, DL, ED, EL, ...) without
+        // moving the cursor. Nothing is in the last column, so it is safe to
+        // draw there and erase it again, keeping its attributes.
+        let pos = Pos {
+            row: self.pos.row,
+            col: self.size.cols - 1,
+        };
+        crate::term::move_from_to(contents, prev_pos, pos);
+        contents.push(b' ');
+        let end_cell = self.drawing_cell(pos).unwrap();
+        end_cell
+            .attrs()
+            .write_escape_code_diff(contents, &prev_attrs);
+        crate::term::save_cursor(contents);
+        crate::term::backspace(contents);
+        crate::term::erase_char(contents, 1);
+        crate::term::restore_cursor(contents);
+        prev_attrs.write_escape_code_diff(contents, end_cell.attrs());
     }
 
     /// ED 3: forgets the scrollback.
@@ -994,30 +748,27 @@ impl Grid {
 
     pub fn erase_all(&mut self, attrs: crate::attrs::Attrs) {
         self.first_row_replaced();
-        for row in self.drawing_rows_mut() {
+        for row in &mut self.rows {
             row.clear(attrs);
         }
     }
 
     pub fn erase_all_forward(&mut self, attrs: crate::attrs::Attrs) {
-        let pos = self.pos;
-        if pos.row == 0 && pos.col == 0 {
+        let row = usize::from(self.pos.row);
+        if row == 0 && self.pos.col == 0 {
             self.first_row_replaced();
         }
-        for row in self.drawing_rows_mut().skip(usize::from(pos.row) + 1) {
+        for row in &mut self.rows[row + 1..] {
             row.clear(attrs);
         }
-
         self.erase_row_forward(attrs);
     }
 
     pub fn erase_all_backward(&mut self, attrs: crate::attrs::Attrs) {
-        let pos = self.pos;
         self.first_row_replaced();
-        for row in self.drawing_rows_mut().take(usize::from(pos.row)) {
+        for row in &mut self.rows[..usize::from(self.pos.row)] {
             row.clear(attrs);
         }
-
         self.erase_row_backward(attrs);
     }
 
@@ -1174,10 +925,7 @@ impl Grid {
         )
     }
 
-    pub fn set_shared_state(
-        &mut self,
-        (pos, top, bottom, origin): (Pos, u16, u16, bool),
-    ) {
+    pub fn set_shared_state(&mut self, (pos, top, bottom, origin): (Pos, u16, u16, bool)) {
         self.pos = pos;
         self.scroll_top = top;
         self.scroll_bottom = bottom;
@@ -1225,8 +973,7 @@ impl Grid {
             return;
         }
         let lines = count.saturating_sub(self.pos.row - self.scroll_top);
-        self.pos.row =
-            self.pos.row.saturating_sub(count).max(self.scroll_top);
+        self.pos.row = self.pos.row.saturating_sub(count).max(self.scroll_top);
         self.scroll_down(lines);
     }
 
@@ -1332,12 +1079,13 @@ mod history_restore_tests {
     use super::{Grid, Pos, Size};
 
     fn labeled_grid(limit: usize) -> Grid {
-        let mut grid = Grid::new(Size { rows: 6, cols: 8 }, limit);
+        let mut grid = Grid::new(Size { rows: 6, cols: 8 }, limit, limit > 0);
         grid.allocate_rows();
         for (index, row) in grid.rows.iter_mut().enumerate() {
-            row.get_mut(0)
-                .unwrap()
-                .set(char::from(b'A' + index as u8), crate::attrs::Attrs::default());
+            row.get_mut(0).unwrap().set(
+                char::from(b'A' + u8::try_from(index).unwrap()),
+                crate::attrs::Attrs::default(),
+            );
         }
         grid
     }
@@ -1462,6 +1210,7 @@ mod history_restore_tests {
                 cols: 4096,
             },
             960,
+            true,
         );
         for index in 0..960 {
             let mut row = template.clone();
@@ -1471,7 +1220,9 @@ mod history_restore_tests {
                 959 => 'Z',
                 _ => 'A',
             };
-            row.get_mut(0).unwrap().set(character, crate::attrs::Attrs::default());
+            row.get_mut(0)
+                .unwrap()
+                .set(character, crate::attrs::Attrs::default());
             source.scrollback.push_back(row);
         }
         let packed = source.encode_history();
@@ -1488,6 +1239,7 @@ mod history_restore_tests {
                 cols: 4096,
             },
             3,
+            true,
         );
         assert!(restored.restore_history(&packed));
         let check_tail = |grid: &Grid| {
@@ -1511,28 +1263,12 @@ mod history_restore_tests {
         assert!(!restored.restore_history(&forged));
         check_tail(&restored);
 
-        let raw = zstd::bulk::decompress(&packed[13..], expanded as usize).unwrap();
+        let raw =
+            zstd::bulk::decompress(&packed[13..], usize::try_from(expanded).unwrap()).unwrap();
         let mut uncompressed = packed[..13].to_vec();
         uncompressed[12] = 0;
         uncompressed.extend_from_slice(&raw);
         assert!(restored.restore_history(&uncompressed));
         check_tail(&restored);
     }
-}
-
-/// How many columns of the row at `index` hold text: all of them for a row
-/// the line continues from, otherwise up to its last non-blank cell.
-fn cells_in_last_row(
-    output: &std::collections::VecDeque<crate::row::Row>,
-    index: usize,
-    width: usize,
-) -> usize {
-    let blank = crate::Cell::new();
-    output[index]
-        .cells()
-        .take(width)
-        .collect::<Vec<_>>()
-        .iter()
-        .rposition(|cell| *cell != blank)
-        .map_or(0, |last| last + 1)
 }

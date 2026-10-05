@@ -136,11 +136,8 @@ pub(super) fn bell_render_token(elapsed: u128, repeat: bool) -> u64 {
     }
     let cycle_micros = BELL_SHIMMER_MICROS + BELL_BREAK_MICROS;
     let cycle = elapsed / cycle_micros;
-    let state = if elapsed % cycle_micros < BELL_SHIMMER_MICROS {
-        elapsed % cycle_micros
-    } else {
-        BELL_SHIMMER_MICROS
-    };
+    // Every moment of the pause between passes shares one token.
+    let state = (elapsed % cycle_micros).min(BELL_SHIMMER_MICROS);
     (cycle * (BELL_SHIMMER_MICROS + 1) + state) as u64
 }
 

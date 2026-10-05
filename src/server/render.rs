@@ -30,6 +30,7 @@ impl Server {
             let (rows, cols) = (client.rows.max(1), client.cols.max(1));
             let mut frame = std::mem::take(&mut client.scratch);
             frame.reset(rows, cols);
+            frame.set_default_cursor_color(Some(client.rendered_theme().cursor));
             // A bug in painting one client must not end the daemon and every
             // shell with it. It would recur on every frame, so that client is
             // let go with the error; the panes keep running, ready for it to
@@ -202,10 +203,9 @@ impl Server {
                 )
             })
         };
-        let Some((popup, anchor)) = popup else {
-            return;
-        };
-        render_popup_box(frame, (rows, cols), anchor, &popup, &theme);
+        if let Some((popup, anchor)) = popup {
+            render_popup_box(frame, (rows, cols), anchor, &popup, &theme);
+        }
     }
 
     fn render_bar(
@@ -256,41 +256,14 @@ impl Server {
         for offset in 0..visible {
             let window = first_window + offset;
             let row = (first_row + offset * 3) as u16 + 2;
-            let label = bar_window_label(window, current_window, number_width);
             let bell = active
                 .and_then(|(session, _)| self.sessions[session].windows[window].bell.as_ref())
                 .and_then(|bell| bell_visual(bell, bell_style));
-            let background = if window == current_window {
-                current_rgb
+            let (background, animation_width) = if window == current_window {
+                (current_rgb, active_animation_width)
             } else {
-                normal_rgb
+                (normal_rgb, label_width)
             };
-            if let Some(visual) = bell {
-                let animation_width = if window == current_window {
-                    active_animation_width
-                } else {
-                    label_width
-                };
-                render_bell_label(
-                    frame,
-                    (row, 1),
-                    &label,
-                    BellLabel {
-                        visual,
-                        animation_width,
-                        resting: (background, theme.bar_label_foreground),
-                        bold: false,
-                    },
-                    &theme,
-                );
-            } else {
-                frame.set_text(
-                    row,
-                    1,
-                    &label,
-                    CellAttributes::colors(theme.bar_label_foreground, background),
-                );
-            }
             let icon = session_index
                 .map(|session| self.sessions[session].windows[window].active_process_icon())
                 .unwrap_or(IDLE_ICON);
@@ -307,28 +280,28 @@ impl Server {
             // Window numbers widen the tile at 10, 100, ... windows. Paint
             // the process line across that same width, including its blanks;
             // otherwise its right edge loses the active/inactive background.
-            let icon_label = format!("{icon_label:label_width$}");
-            let icon_row = row + 1;
-            if let Some(visual) = bell {
-                render_bell_label(
-                    frame,
-                    (icon_row, 1),
-                    &icon_label,
-                    BellLabel {
-                        visual,
-                        animation_width: if window == current_window {
-                            active_animation_width
-                        } else {
-                            label_width
+            let lines = [
+                bar_window_label(window, current_window, number_width),
+                format!("{icon_label:label_width$}"),
+            ];
+            for (row, line) in (row..).zip(lines) {
+                if let Some(visual) = bell {
+                    render_bell_label(
+                        frame,
+                        (row, 1),
+                        &line,
+                        BellLabel {
+                            visual,
+                            animation_width,
+                            resting: (background, theme.bar_label_foreground),
+                            bold: false,
                         },
-                        resting: (background, theme.bar_label_foreground),
-                        bold: false,
-                    },
-                    &theme,
-                );
-            } else {
-                let attributes = CellAttributes::colors(theme.bar_label_foreground, background);
-                frame.set_text(icon_row, 1, &icon_label, attributes);
+                        &theme,
+                    );
+                } else {
+                    let attributes = CellAttributes::colors(theme.bar_label_foreground, background);
+                    frame.set_text(row, 1, &line, attributes);
+                }
             }
         }
         // The notification uses the reserved bottom row. A one-row client
@@ -357,12 +330,10 @@ impl Server {
         let area = self.content_area(id);
         let window = &self.sessions[session_index].windows[window_index];
         let (regions, dividers) = window.regions(area);
+        let default_cursor_shape = self.clients[&id].default_cursor_shape;
         for pane in &window.panes {
             // A zoomed window hides every pane but the active one.
-            let Some(rect) = regions
-                .iter()
-                .find_map(|(pane_id, rect)| (*pane_id == pane.id).then_some(*rect))
-            else {
+            let Some(rect) = pane_region(&regions, pane.id) else {
                 continue;
             };
             if rect.rows == 0 || rect.cols == 0 {
@@ -370,7 +341,7 @@ impl Server {
             }
             render_screen_region(
                 frame,
-                rendered_terminal(&pane.parser, self.clients[&id].default_cursor_shape).0,
+                rendered_terminal(&pane.parser, default_cursor_shape).0,
                 0,
                 Rect {
                     row: rect.row + 1,
@@ -403,10 +374,8 @@ impl Server {
             .iter()
             .find(|pane| pane.id == window.active_pane)
             .context("active pane missing from window")?;
-        let rect = regions
-            .iter()
-            .find_map(|(pane_id, rect)| (*pane_id == active_pane.id).then_some(*rect))
-            .context("active pane missing from layout")?;
+        let rect =
+            pane_region(regions, active_pane.id).context("active pane missing from layout")?;
         if rect.rows > 0 && rect.cols > 0 {
             let (screen, cursor_shape) =
                 rendered_terminal(&active_pane.parser, self.clients[&id].default_cursor_shape);
@@ -420,6 +389,9 @@ impl Server {
                 shape: cursor_shape,
                 visible: !screen.hide_cursor(),
             });
+            if let Some(color) = active_pane.parser.callbacks().cursor_color {
+                frame.set_cursor_color(Some(color));
+            }
         }
         Ok(())
     }
@@ -441,9 +413,7 @@ impl Server {
             }
         }
         if let Some(state) = client.vim.get(&window.active_pane) {
-            let rect = regions
-                .iter()
-                .find_map(|(pane_id, rect)| (*pane_id == window.active_pane).then_some(*rect))
+            let rect = pane_region(&regions, window.active_pane)
                 .context("active pane missing from layout")?;
             Self::render_vim_region(state, frame, rect, bar_width, true, &theme);
         } else {
@@ -465,23 +435,20 @@ impl Server {
         }
         let vim = &state.mode;
         let width = rect.cols as usize;
+        let left = bar_width + rect.col + 1;
         for screen_row in 0..rect.rows as usize {
             let buffer_row = vim.viewport_top + screen_row;
             let row = rect.row + screen_row as u16 + 1;
-            let left = bar_width + rect.col + 1;
             let mut skip_until = 0;
-            let Some(line) = (buffer_row < state.mode.buffer().len())
-                .then(|| state.mode.buffer().line(buffer_row))
+            let Some(line) =
+                (buffer_row < vim.buffer().len()).then(|| vim.buffer().line(buffer_row))
             else {
                 frame.fill(row, left, rect.cols, CellAttributes::default());
                 continue;
             };
             let rendered_cols = line.cells.len().min(width);
             for (offset, cell) in line.cells.iter().take(rendered_cols).enumerate() {
-                if offset < skip_until {
-                    continue;
-                }
-                if cell.wide_continuation {
+                if offset < skip_until || cell.wide_continuation {
                     continue;
                 }
                 let col = left + offset as u16;
@@ -519,18 +486,18 @@ impl Server {
                 } else {
                     cell.attributes
                 };
-                let contents = cell.contents(&line.text);
                 if let Some(hint) = hint {
                     frame.set_text(row, col, hint, attributes);
                     skip_until = offset + hint.chars().count();
                     continue;
                 }
+                let contents = cell.contents(&line.text);
                 let text = if contents.is_empty() { " " } else { contents };
                 let wide = line
                     .cells
                     .get(offset + 1)
                     .is_some_and(|next| next.wide_continuation);
-                if wide && hint.is_none() {
+                if wide {
                     frame.set_wide_cell(row, col, text, attributes);
                 } else {
                     frame.set_cell(row, col, text, attributes);
@@ -595,7 +562,7 @@ impl Server {
             &format!(
                 "{} session{} ",
                 self.sessions.len(),
-                if self.sessions.len() == 1 { "" } else { "s" }
+                plural_suffix(self.sessions.len())
             ),
             panel_width as usize,
         );
@@ -656,7 +623,7 @@ impl Server {
                         &format!(
                             "{} window{} ",
                             session.windows.len(),
-                            if session.windows.len() == 1 { "" } else { "s" }
+                            plural_suffix(session.windows.len())
                         ),
                         panel_width as usize,
                     )
@@ -696,7 +663,8 @@ impl Server {
         if preview_width == 0 || rows < 3 {
             return;
         }
-        let title = if let Some(window_index) = item.window {
+        // A window row previews its active pane.
+        let selected_pane = item.window.map(|window_index| {
             let window = &session.windows[window_index];
             let pane_index = item.pane.unwrap_or_else(|| {
                 window
@@ -705,27 +673,27 @@ impl Server {
                     .position(|pane| pane.id == window.active_pane)
                     .unwrap()
             });
-            match window.label() {
-                Some(label) => format!(
-                    "{}  ·  window {} · {label}  ·  pane {}",
+            (window_index, pane_index)
+        });
+        let title = match selected_pane {
+            Some((window_index, pane_index)) => {
+                let label = session.windows[window_index]
+                    .label()
+                    .map(|label| format!(" · {label}"))
+                    .unwrap_or_default();
+                format!(
+                    "{}  ·  window {}{label}  ·  pane {}",
                     session.name,
                     window_index + 1,
                     pane_index + 1
-                ),
-                None => format!(
-                    "{}  ·  window {}  ·  pane {}",
-                    session.name,
-                    window_index + 1,
-                    pane_index + 1
-                ),
+                )
             }
-        } else {
-            format!(
+            None => format!(
                 "{}  ·  {} window{}",
                 session.name,
                 session.windows.len(),
-                if session.windows.len() == 1 { "" } else { "s" }
-            )
+                plural_suffix(session.windows.len())
+            ),
         };
         frame.set_text(
             1,
@@ -740,7 +708,7 @@ impl Server {
             CellAttributes::foreground(theme.panel_heading).dim(),
         );
         let preview_height = rows.saturating_sub(3);
-        let Some(window_index) = item.window else {
+        let Some((window_index, pane_index)) = selected_pane else {
             render_session_overview(
                 frame,
                 session,
@@ -757,17 +725,8 @@ impl Server {
             return;
         };
 
-        let window = &session.windows[window_index];
-        let pane_index = item.pane.unwrap_or_else(|| {
-            window
-                .panes
-                .iter()
-                .position(|pane| pane.id == window.active_pane)
-                .unwrap()
-        });
-        let pane = &window.panes[pane_index];
-        let (screen, cursor_shape) =
-            rendered_terminal(&pane.parser, self.clients[&id].default_cursor_shape);
+        let pane = &session.windows[window_index].panes[pane_index];
+        let (screen, cursor_shape) = rendered_terminal(&pane.parser, client.default_cursor_shape);
         let (source_top, source_height) = preview_source_region(screen, preview_height);
         let destination = Rect {
             row: 4,
@@ -780,6 +739,12 @@ impl Server {
             frame.set_cursor(cursor);
         }
     }
+}
+
+fn pane_region(regions: &[(usize, Rect)], pane_id: usize) -> Option<Rect> {
+    regions
+        .iter()
+        .find_map(|(id, rect)| (*id == pane_id).then_some(*rect))
 }
 
 /// Shows every window of a session at once, laid out in a grid.
