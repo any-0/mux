@@ -103,7 +103,7 @@ fn hello(cwd: PathBuf) -> ClientMessage {
 
 fn shutdown(socket: &Path) {
     let mut stream = connect(socket);
-    write_message(&mut stream, &ClientMessage::Shutdown).unwrap();
+    crate::protocol::write_shutdown(&mut stream).unwrap();
     assert!(matches!(
         read_message(&mut stream).unwrap(),
         Some(ServerMessage::Detached)

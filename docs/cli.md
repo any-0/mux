@@ -113,6 +113,10 @@ a top position or a bottom position.
 | `mux set-theme PATH` | Exactly one path | Applies the colors of that file |
 | `mux kill-server` | None | Stops the daemon and each of its panes |
 
+`mux kill-server` can stop a daemon using the previous framed protocol after
+updating mux. Shutdown keeps a stable control message across protocol versions,
+so the daemon still flushes its saved state and closes its panes normally.
+
 `mux stop` is an alias for `mux kill-server`, and `mux refresh` for `mux
 refresh-client`.
 

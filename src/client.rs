@@ -377,11 +377,33 @@ fn origin_pane() -> Option<usize> {
 }
 
 pub fn stop() -> Result<()> {
-    match request(ClientMessage::Shutdown)? {
-        Some(ServerMessage::Detached) => Ok(()),
-        Some(ServerMessage::Error(error)) => bail!("server: {error}"),
-        _ => bail!("multiplexer server disconnected before confirming shutdown"),
+    stop_at(&socket_path())
+}
+
+fn stop_at(path: &Path) -> Result<()> {
+    let mut stream =
+        UnixStream::connect(path).with_context(|| format!("connect to {}", path.display()))?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    // Existing version 2 daemons predate the stable shutdown control message.
+    // Try their ordinary request first, then reconnect using version 1's
+    // permanent encoding if the daemon rejects our interactive protocol.
+    let response = (|| -> Result<Option<ServerMessage>> {
+        write_message(&mut stream, &ClientMessage::Shutdown)?;
+        read_message(&mut stream)
+    })();
+    match response {
+        Ok(Some(ServerMessage::Detached)) => return Ok(()),
+        Ok(Some(ServerMessage::Error(error))) => bail!("server: {error}"),
+        _ => {}
     }
+    drop(stream);
+    let mut stream =
+        UnixStream::connect(path).with_context(|| format!("connect to {}", path.display()))?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    crate::protocol::write_shutdown(&mut stream)?;
+    crate::protocol::read_shutdown_response(&mut stream)
 }
 
 pub fn command(command: MuxCommand, pane: Option<usize>) -> Result<()> {
@@ -672,6 +694,33 @@ impl Drop for TerminalGuard {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stop_retries_with_the_old_daemons_shutdown_encoding() {
+        let directory = env::temp_dir().join(format!("mux-stop-test-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let socket = directory.join("daemon.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let daemon = thread::spawn(move || {
+            let (mut first, _) = listener.accept().unwrap();
+            let mut header = [0; 6];
+            first.read_exact(&mut header).unwrap();
+            assert_eq!(&header[..4], b"MUXP");
+            assert_eq!(&header[4..], &crate::protocol::WIRE_VERSION.to_be_bytes());
+            drop(first); // Version 1 rejects the current protocol header.
+            let (mut retry, _) = listener.accept().unwrap();
+            let mut shutdown = [0; 11];
+            retry.read_exact(&mut shutdown).unwrap();
+            assert_eq!(&shutdown, b"MUXP\x00\x01\x00\x00\x00\x01\x08");
+            retry
+                .write_all(b"MUXP\x00\x01\x00\x00\x00\x01\x03")
+                .unwrap();
+        });
+        let result = stop_at(&socket);
+        daemon.join().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+        result.unwrap();
+    }
+
     use super::*;
 
     #[test]

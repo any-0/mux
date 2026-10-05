@@ -74,7 +74,7 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 use crate::{
     config::{BellStyle, Bindings, Theme},
     frame::{Frame, TerminalFeatures},
-    protocol::{ClientMessage, Hello, ServerMessage, read_message, write_message},
+    protocol::{ClientMessage, Hello, ServerMessage, write_message},
     vim::{Position, VimMode, VimOutcome},
 };
 
@@ -466,7 +466,7 @@ fn accept_clients(listener: UnixListener, sender: mpsc::SyncSender<Event>) {
             thread::spawn(move || {
                 let mut reader = stream;
                 loop {
-                    match read_message(&mut reader) {
+                    match crate::protocol::read_client_message(&mut reader) {
                         Ok(Some(message)) => {
                             if connection_sender.send(Event::Client(id, message)).is_err() {
                                 return;
