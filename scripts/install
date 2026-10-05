@@ -1,0 +1,10 @@
+#!/bin/sh
+# Builds mux and installs it to ~/.local/bin. Release builds are incremental,
+# so a small change rebuilds in seconds. A running daemon keeps its old binary
+# until `mux kill-server`.
+set -eu
+cd "$(dirname "$0")/.."
+CARGO_PROFILE_RELEASE_INCREMENTAL=true cargo build --release --locked
+mkdir -p "$HOME/.local/bin"
+install -m 755 target/release/mux "$HOME/.local/bin/mux"
+echo "installed $HOME/.local/bin/mux; 'mux kill-server' restarts the daemon on it"

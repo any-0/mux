@@ -25,8 +25,7 @@ Further docs:
 ## Build and run
 
 ```sh
-cargo build --release
-install -m 755 target/release/mux ~/.local/bin/mux
+scripts/install         # incremental release build, installed to ~/.local/bin/mux
 mux                     # attach, starting the daemon and "Session 1" if needed
 mux --session work      # attach to (or create) a named session
 mux kill-server         # stop the daemon and every pane (alias: mux stop)
