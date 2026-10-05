@@ -273,10 +273,19 @@ fn terminal_has_truecolor() -> bool {
     truecolor_from(
         env::var_os("COLORTERM").as_deref(),
         env::var_os("TERM").as_deref(),
+        env::var_os("WT_SESSION").as_deref(),
     )
 }
 
-fn truecolor_from(colorterm: Option<&OsStr>, term: Option<&OsStr>) -> bool {
+fn truecolor_from(
+    colorterm: Option<&OsStr>,
+    term: Option<&OsStr>,
+    wt_session: Option<&OsStr>,
+) -> bool {
+    // Windows Terminal exposes WT_SESSION in WSL but may omit COLORTERM.
+    if wt_session.is_some_and(|value| !value.is_empty()) {
+        return true;
+    }
     if colorterm.is_some_and(|value| value == "truecolor" || value == "24bit") {
         return true;
     }
@@ -749,14 +758,26 @@ mod tests {
     #[test]
     fn truecolor_is_taken_from_colorterm_or_a_direct_term() {
         let colorterm = |value| Some(OsStr::new(value));
-        assert!(truecolor_from(colorterm("truecolor"), None));
-        assert!(truecolor_from(colorterm("24bit"), None));
-        assert!(truecolor_from(None, colorterm("xterm-direct")));
-        assert!(truecolor_from(None, colorterm("xterm-kitty")));
+        assert!(truecolor_from(colorterm("truecolor"), None, None));
+        assert!(truecolor_from(colorterm("24bit"), None, None));
+        assert!(truecolor_from(None, colorterm("xterm-direct"), None));
+        assert!(truecolor_from(None, colorterm("xterm-kitty"), None));
         // Anything that has not said so is painted for 256 colours.
-        assert!(!truecolor_from(None, None));
-        assert!(!truecolor_from(None, colorterm("xterm-256color")));
-        assert!(!truecolor_from(colorterm("8bit"), colorterm("screen")));
+        assert!(!truecolor_from(None, None, None));
+        assert!(!truecolor_from(None, colorterm("xterm-256color"), None));
+        assert!(!truecolor_from(
+            colorterm("8bit"),
+            colorterm("screen"),
+            None
+        ));
+    }
+
+    #[test]
+    fn windows_terminal_session_enables_truecolor_without_colorterm() {
+        let term = Some(OsStr::new("xterm-256color"));
+        assert!(truecolor_from(None, term, Some(OsStr::new("session-id"))));
+        assert!(!truecolor_from(None, term, Some(OsStr::new(""))));
+        assert!(!truecolor_from(None, term, None));
     }
 
     #[test]
