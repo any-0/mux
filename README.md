@@ -5,7 +5,8 @@ shells keep running when the attached terminal goes away, and sessions, layouts
 and scrollback survive a daemon restart or reboot.
 
 - A narrow numbered strip on the left shows each window's number and an icon
-  for the active pane's foreground program. Bells animate the window's label.
+  for the active pane's foreground program, looked up by the name it was
+  started as in a table in `src/server/process.rs`. Bells animate the label.
 - Split panes, focus (zoom) mode, a session tree with live previews, a theme
   picker, and a Vim-style scrollback/copy mode.
 - Only changed cells are sent to the terminal, at most one frame every 8 ms.

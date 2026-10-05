@@ -184,15 +184,20 @@ fn wire_config() -> impl bincode::config::Config {
 }
 
 pub fn write_message<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<()> {
-    let bytes =
-        bincode::serde::encode_to_vec(value, wire_config()).context("encode protocol message")?;
-    if bytes.len() > MAX_MESSAGE_SIZE {
+    // One buffer, header first, so a frame is one write: sockets are
+    // unbuffered, and four writes per frame were four syscalls.
+    let mut frame = Vec::with_capacity(256);
+    frame.extend_from_slice(&WIRE_MAGIC);
+    frame.extend_from_slice(&WIRE_VERSION.to_be_bytes());
+    frame.extend_from_slice(&[0; 4]);
+    bincode::serde::encode_into_std_write(value, &mut frame, wire_config())
+        .context("encode protocol message")?;
+    let length = frame.len() - 10;
+    if length > MAX_MESSAGE_SIZE {
         bail!("protocol message exceeds 16 MiB");
     }
-    writer.write_all(&WIRE_MAGIC)?;
-    writer.write_all(&WIRE_VERSION.to_be_bytes())?;
-    writer.write_all(&(bytes.len() as u32).to_be_bytes())?;
-    writer.write_all(&bytes)?;
+    frame[6..10].copy_from_slice(&(length as u32).to_be_bytes());
+    writer.write_all(&frame)?;
     writer.flush()?;
     Ok(())
 }
@@ -303,6 +308,19 @@ mod tests {
         write_message(&mut bytes, &ServerMessage::Done).unwrap();
         assert!(read_shutdown_response(&mut bytes.as_slice()).is_err());
         assert!(read_shutdown_response(&mut &[][..]).is_err());
+    }
+
+    #[test]
+    fn a_frame_is_magic_version_length_then_payload() {
+        let message = ServerMessage::Render(b"\x1b[4:3mframe".to_vec());
+        let mut written = Vec::new();
+        write_message(&mut written, &message).unwrap();
+        let payload = bincode::serde::encode_to_vec(&message, wire_config()).unwrap();
+        let mut expected = WIRE_MAGIC.to_vec();
+        expected.extend_from_slice(&WIRE_VERSION.to_be_bytes());
+        expected.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        expected.extend_from_slice(&payload);
+        assert_eq!(written, expected);
     }
 
     #[test]

@@ -8,9 +8,9 @@ use std::fs;
 #[derive(Debug)]
 pub(super) struct Process {
     pub pid: i32,
-    pub parent: i32,
     pub group: i32,
-    pub program: String,
+    /// The name it was started as: `nvim`, `claude`, `python3`.
+    pub name: String,
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -18,9 +18,15 @@ pub(super) fn process_cwd(pid: u32) -> Option<PathBuf> {
     fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
-/// Read executable identities, never terminal titles or command arguments.
+/// Each process's name is the file name of `argv[0]`: what it was started as,
+/// whatever the executable behind it is called (`claude` runs `claude.exe`,
+/// Nix's `nvim` runs `.nvim-wrapped`). With `groups`, only processes in those
+/// process groups are returned, skipping the rest before reading their names.
 #[cfg(not(target_os = "macos"))]
-pub(super) fn processes() -> Vec<Process> {
+pub(super) fn processes(groups: Option<&[i32]>) -> Vec<Process> {
+    if groups.is_some_and(<[i32]>::is_empty) {
+        return Vec::new();
+    }
     let Ok(entries) = fs::read_dir("/proc") else {
         return Vec::new();
     };
@@ -29,28 +35,33 @@ pub(super) fn processes() -> Vec<Process> {
         .filter_map(|entry| {
             let pid = entry.file_name().to_str()?.parse::<i32>().ok()?;
             let stat = fs::read_to_string(entry.path().join("stat")).ok()?;
-            let (parent, group) = process_stat(&stat)?;
-            let executable = fs::read_link(entry.path().join("exe")).ok()?;
-            let program = executable.file_name()?.to_str()?.to_owned();
-            Some(Process {
+            let group = process_group(&stat)?;
+            if groups.is_some_and(|groups| !groups.contains(&group)) {
+                return None;
+            }
+            let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
+            let argv0 = cmdline.split(|&byte| byte == 0).next()?;
+            let name = std::str::from_utf8(argv0).ok()?.rsplit('/').next()?;
+            (!name.is_empty()).then(|| Process {
                 pid,
-                parent,
                 group,
-                program,
+                name: name.to_owned(),
             })
         })
         .collect()
 }
 
+/// The process group of a live, running process; `None` for stopped and dead
+/// ones, which are not what a pane is showing.
 #[cfg(not(target_os = "macos"))]
-fn process_stat(stat: &str) -> Option<(i32, i32)> {
+fn process_group(stat: &str) -> Option<i32> {
     // comm can itself contain spaces and closing parentheses.
     let (_, fields) = stat.rsplit_once(')')?;
     let mut fields = fields.split_whitespace();
     if matches!(fields.next()?, "Z" | "X" | "x" | "T" | "t") {
         return None;
     }
-    Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+    fields.nth(1)?.parse().ok()
 }
 
 #[cfg(target_os = "macos")]
@@ -79,7 +90,10 @@ pub(super) fn process_cwd(pid: u32) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn processes() -> Vec<Process> {
+pub(super) fn processes(groups: Option<&[i32]>) -> Vec<Process> {
+    if groups.is_some_and(<[i32]>::is_empty) {
+        return Vec::new();
+    }
     let Ok(output) = std::process::Command::new("ps")
         .args(["-axo", "pid=,ppid=,pgid=,stat=,comm="])
         .output()
@@ -91,52 +105,40 @@ pub(super) fn processes() -> Vec<Process> {
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
             let pid = fields.next()?.parse().ok()?;
-            let parent = fields.next()?.parse().ok()?;
+            let _parent = fields.next()?;
             let group = fields.next()?.parse().ok()?;
+            if groups.is_some_and(|groups| !groups.contains(&group)) {
+                return None;
+            }
             let state = fields.next()?;
             if state.starts_with(['Z', 'T', 'X']) {
                 return None;
             }
             // comm is an executable path; its spaces are part of the name.
             let path = fields.collect::<Vec<_>>().join(" ");
-            let program = std::path::Path::new(&path)
+            let name = std::path::Path::new(&path)
                 .file_name()?
                 .to_str()?
                 .to_owned();
-            Some(Process {
-                pid,
-                parent,
-                group,
-                program,
-            })
+            Some(Process { pid, group, name })
         })
         .collect()
 }
 
-/// Prefer the foreground job's root to its helpers. Node launchers are the one
-/// exception: command-line tools installed through npm start as a Node wrapper
-/// whose child is the actual executable. PID order breaks ties for pipelines
-/// deterministically, without consulting the icon table.
-pub(super) fn foreground_program(processes: &[Process], group: i32) -> Option<&str> {
-    let candidates: Vec<_> = processes
+/// The icon for a foreground job: the first of its processes with one, the
+/// job's leader first and then the others in the order they started. So
+/// `claude` keeps its icon while it runs shell commands, and an npm `node`
+/// launcher, `sudo` or the head of a pipeline gives way to the program after it.
+pub(super) fn foreground_icon(processes: &[Process], group: i32) -> &'static str {
+    let mut job: Vec<_> = processes
         .iter()
         .filter(|process| process.group == group)
         .collect();
-    candidates
-        .iter()
-        .copied()
-        .min_by_key(|process| {
-            let is_node_launcher = process.program == "node"
-                && candidates.iter().any(|child| child.parent == process.pid);
-            let has_parent = candidates.iter().any(|parent| parent.pid == process.parent);
-            (
-                is_node_launcher,
-                has_parent,
-                process.pid != group,
-                process.pid,
-            )
-        })
-        .map(|process| process.program.as_str())
+    job.sort_by_key(|process| (process.pid != group, process.pid));
+    job.iter()
+        .map(|process| program_icon(&process.name))
+        .find(|icon| *icon != IDLE_ICON)
+        .unwrap_or(IDLE_ICON)
 }
 
 /// What each icon reads as for a font without mux's glyphs: three columns
@@ -163,7 +165,7 @@ pub(super) fn text_icon(icon: &'static str) -> &'static str {
         .map_or(icon, |(_, text)| *text)
 }
 
-/// Adding an icon only requires adding exact executable names here.
+/// Program names and their icons. Adding one is adding its name here.
 const PROCESS_ICONS: &[(&[&str], &str)] = &[
     (&["opencode"], "\u{e02b}\u{e02c}\u{e02d}"),
     (&["codex"], "\u{e015}\u{e016}\u{e017}"),
@@ -205,16 +207,10 @@ const PROCESS_ICONS: &[(&[&str], &str)] = &[
 
 pub(super) const IDLE_ICON: &str = "·";
 
-pub(super) fn program_icon(program: &str) -> &'static str {
-    // Nix wraps executables as .<name>-wrapped. This is packaging syntax,
-    // applied equally to every program rather than an icon-specific match.
-    let program = program
-        .strip_prefix('.')
-        .and_then(|name| name.strip_suffix("-wrapped"))
-        .unwrap_or(program);
+pub(super) fn program_icon(name: &str) -> &'static str {
     PROCESS_ICONS
         .iter()
-        .find(|(names, _)| names.contains(&program))
+        .find(|(names, _)| names.contains(&name))
         .map_or(IDLE_ICON, |(_, icon)| *icon)
 }
 
@@ -222,77 +218,67 @@ pub(super) fn program_icon(program: &str) -> &'static str {
 mod tests {
     use super::*;
 
-    fn process(pid: i32, parent: i32, group: i32, program: &str) -> Process {
+    fn process(pid: i32, group: i32, name: &str) -> Process {
         Process {
             pid,
-            parent,
             group,
-            program: program.into(),
+            name: name.into(),
         }
     }
 
     #[test]
-    fn icons_match_exact_executable_names() {
+    fn icons_match_exact_program_names() {
         for name in [
             "codex.txt",
             "my-codex",
-            "python-tools",
             "notjj",
-            "nvim codex",
-            "claude.log",
+            "claude.exe",
+            ".nvim-wrapped",
         ] {
             assert_eq!(program_icon(name), IDLE_ICON, "{name}");
         }
         assert_eq!(program_icon("nvim"), "\u{e01f}\u{e020}\u{e021}");
-        assert_eq!(program_icon(".nvim-wrapped"), program_icon("nvim"));
         assert_eq!(program_icon("python3.13"), "\u{e028}\u{e029}\u{e02a}");
-        assert_eq!(program_icon("jj"), "");
         assert_eq!(program_icon("zsh"), "❯");
     }
 
     #[test]
-    fn foreground_selection_ignores_icons_background_jobs_and_helpers() {
-        let mut jobs = vec![
-            process(10, 1, 10, "zsh"),
-            process(20, 10, 20, "nvim"),
-            process(21, 20, 20, "codex"),
-            process(30, 10, 30, "claude"),
+    fn a_job_shows_its_first_process_with_an_icon_leader_first() {
+        let claude = program_icon("claude");
+        let codex = program_icon("codex");
+        let nvim = program_icon("nvim");
+        // The leader wins over the commands it runs.
+        let jobs = [process(30, 30, "claude"), process(31, 30, "bash")];
+        assert_eq!(foreground_icon(&jobs, 30), claude);
+        // A launcher without an icon gives way to what it started.
+        let jobs = [process(20, 20, "node"), process(21, 20, "codex")];
+        assert_eq!(foreground_icon(&jobs, 20), codex);
+        // Followers in the order they started; other jobs never count.
+        let jobs = [
+            process(42, 40, "nvim"),
+            process(41, 40, "cat"),
+            process(43, 40, "ssh"),
+            process(50, 50, "claude"),
         ];
-        assert_eq!(foreground_program(&jobs, 20), Some("nvim"));
-        assert_eq!(foreground_program(&jobs, 10), Some("zsh"));
-        jobs[1].program = "unknown-editor".into();
-        assert_eq!(foreground_program(&jobs, 20), Some("unknown-editor"));
-        jobs.reverse();
-        assert_eq!(foreground_program(&jobs, 20), Some("unknown-editor"));
-        assert_eq!(foreground_program(&jobs, 99), None);
-    }
-
-    #[test]
-    fn foreground_selection_steps_past_a_node_command_launcher() {
-        let jobs = vec![process(20, 10, 20, "node"), process(21, 20, 20, "codex")];
-        assert_eq!(foreground_program(&jobs, 20), Some("codex"));
-        assert_eq!(foreground_program(&jobs[0..1], 20), Some("node"));
-    }
-
-    #[test]
-    fn a_pipeline_with_an_exited_leader_still_has_a_program() {
-        let jobs = vec![process(22, 10, 20, "ssh"), process(21, 10, 20, "watch")];
-        assert_eq!(foreground_program(&jobs, 20), Some("watch"));
-        assert_eq!(foreground_program(&jobs[0..1], 20), Some("ssh"));
-        assert_eq!(foreground_program(&[], 20), None);
+        assert_eq!(foreground_icon(&jobs, 40), nvim);
+        assert_eq!(foreground_icon(&jobs, 60), IDLE_ICON);
+        assert_eq!(
+            foreground_icon(&[process(70, 70, "mystery")], 70),
+            IDLE_ICON
+        );
     }
 
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn stat_parser_handles_parentheses_and_excludes_stopped_and_dead_jobs() {
-        assert_eq!(
-            process_stat("20 (a tricky ) name) S 10 20 10 0"),
-            Some((10, 20))
-        );
+        assert_eq!(process_group("20 (a tricky ) name) S 10 20 10 0"), Some(20));
         for state in ["T", "t", "Z", "X", "x"] {
-            assert_eq!(process_stat(&format!("20 (nvim) {state} 10 20 10 0")), None);
+            assert_eq!(
+                process_group(&format!("20 (nvim) {state} 10 20 10 0")),
+                None
+            );
         }
-        assert_eq!(process_stat("not a stat record"), None);
+        assert_eq!(process_group("not a stat record"), None);
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -305,24 +291,15 @@ mod tests {
 
     #[cfg(not(target_os = "macos"))]
     #[test]
-    fn live_identity_ignores_argv_and_disappears_after_exit() {
+    fn a_live_process_is_named_by_what_it_was_started_as() {
         use std::{os::unix::process::CommandExt, process::Command};
-        let executable = std::env::current_exe().unwrap();
-        let expected_program = executable.file_name().unwrap().to_str().unwrap();
-        // Use our own executable: multicall utilities can exit when argv[0]
-        // is changed. The fixture blocks on stdin while we inspect its identity.
-        let mut child = Command::new(&executable)
-            .arg0("codex")
+        // Our own executable, started as `codex`, blocks on stdin while we look.
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .arg0("/some/where/codex")
             .args([
                 "--ignored",
                 "--exact",
                 "server::process::tests::identity_child",
-                "--skip",
-                "claude",
-                "--skip",
-                "opencode",
-                "--skip",
-                "jj",
             ])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
@@ -330,16 +307,15 @@ mod tests {
             .spawn()
             .unwrap();
         let pid = child.id() as i32;
-        let snapshot = processes();
+        let snapshot = processes(None);
+        let found = snapshot.iter().find(|process| process.pid == pid).unwrap();
+        assert_eq!(found.name, "codex");
+        let filtered = processes(Some(&[found.group]));
+        assert!(filtered.iter().all(|process| process.group == found.group));
+        assert!(filtered.iter().any(|process| process.pid == pid));
+        assert!(processes(Some(&[])).is_empty());
         child.kill().unwrap();
         child.wait().unwrap();
-        let program = &snapshot
-            .iter()
-            .find(|process| process.pid == pid)
-            .unwrap()
-            .program;
-        assert_eq!(program, expected_program);
-        assert_eq!(program_icon(program), IDLE_ICON);
-        assert!(!processes().iter().any(|process| process.pid == pid));
+        assert!(!processes(None).iter().any(|process| process.pid == pid));
     }
 }

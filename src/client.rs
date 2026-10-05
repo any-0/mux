@@ -148,7 +148,7 @@ pub fn attach(config: Option<&Path>, session: Option<String>) -> Result<()> {
     // the present in full once the terminal drains, instead of the client
     // buffering and replaying everything it missed.
     let (sender, receiver) = mpsc::sync_channel(CLIENT_EVENT_QUEUE);
-    let mut reader = stream.try_clone()?;
+    let mut reader = std::io::BufReader::new(stream.try_clone()?);
     forward(&sender, move || match read_message(&mut reader) {
         Ok(Some(message)) => ControlFlow::Continue(ClientEvent::Server(message)),
         Ok(None) => ControlFlow::Break(Some(ClientEvent::ServerDisconnected)),
@@ -789,6 +789,9 @@ mod tests {
             .unwrap();
         let stderr = child.stderr.take().unwrap();
         let stderr = thread::spawn(move || capture_stderr(stderr));
+        // The daemon has failed before the deadline is checked, however slow
+        // the machine is.
+        assert!(!child.wait().unwrap().success());
         let error = wait_for_daemon(
             &socket,
             child,

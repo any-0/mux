@@ -80,24 +80,30 @@ fn binding(mode: Mode, key: &str) -> Option<Action> {
     Bindings::defaults().get(mode, &crate::config::parse_key(key).unwrap())
 }
 
-/// Decodes every frame the client has been sent into `terminal`.
-pub(super) fn read_frames(client: &mut UnixStream, terminal: &mut vt100::Parser) {
+const RENDER_BARRIER: &str = "mux-test-render-barrier";
+
+/// Renders, then decodes every frame client `id` was sent into `terminal`.
+/// A marker queued behind the frames ends the read, so a slow machine cannot
+/// cut it short the way a read timeout could.
+pub(super) fn render_frames(
+    server: &mut Server,
+    id: usize,
+    client: &mut UnixStream,
+    terminal: &mut vt100::Parser,
+) {
+    server.render_all();
+    assert!(
+        server.clients[&id]
+            .writer
+            .send(ServerMessage::Listing(vec![RENDER_BARRIER.into()]))
+    );
     loop {
         match read_message::<ServerMessage>(client) {
             Ok(Some(ServerMessage::Render(bytes))) => terminal.process(&bytes),
             Ok(Some(ServerMessage::Error(error))) => panic!("render failed: {error}"),
+            Ok(Some(ServerMessage::Listing(lines))) if lines == [RENDER_BARRIER] => break,
             Ok(Some(_)) => {}
             Ok(None) => panic!("client disconnected"),
-            Err(error)
-                if error.downcast_ref::<std::io::Error>().is_some_and(|error| {
-                    matches!(
-                        error.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    )
-                }) =>
-            {
-                break;
-            }
             Err(error) => panic!("read client frame: {error:#}"),
         }
     }
@@ -177,7 +183,7 @@ impl TestServer {
         let directory = scratch(name);
         let (server, receiver, client) = test_server(&directory);
         client
-            .set_read_timeout(Some(Duration::from_millis(100)))
+            .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
         Self {
             server,
@@ -1697,9 +1703,8 @@ fn two_digit_sidebar_process_tiles_keep_their_background_through_the_right_edge(
         test.server.new_window(1).unwrap();
     }
     let theme = test.server.clients[&1].rendered_theme();
-    test.server.render_all();
     let mut terminal = vt100::Parser::new(24, 80, 0);
-    read_frames(&mut test.client, &mut terminal);
+    render_frames(&mut test.server, 1, &mut test.client, &mut terminal);
     // Ten windows, the last selected, seven tiles visible: the first is
     // window 4 at row 2 and the last is window 10 at row 20 (one-based).
     let screen = terminal.screen();

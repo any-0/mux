@@ -519,7 +519,7 @@ fn accept_clients(listener: UnixListener, sender: mpsc::SyncSender<Event>) {
                 break;
             }
             thread::spawn(move || {
-                let mut reader = stream;
+                let mut reader = std::io::BufReader::new(stream);
                 loop {
                     match crate::protocol::read_client_message(&mut reader) {
                         Ok(Some(message)) => {
@@ -542,12 +542,12 @@ fn process_icon_sampler(events: mpsc::SyncSender<Event>) -> Sender<Vec<ProcessSa
     let (sender, receiver) = mpsc::channel::<Vec<ProcessSample>>();
     thread::spawn(move || {
         while let Ok(samples) = receiver.recv() {
-            let processes = processes();
+            let groups: Vec<i32> = samples.iter().filter_map(|sample| sample.group).collect();
+            let processes = processes(Some(&groups));
             for sample in samples {
                 let icon = sample
                     .group
-                    .and_then(|group| foreground_program(&processes, group))
-                    .map_or(IDLE_ICON, program_icon);
+                    .map_or(IDLE_ICON, |group| foreground_icon(&processes, group));
                 if events
                     .send(Event::ProcessIcon(sample.pane_id, sample.group, icon))
                     .is_err()

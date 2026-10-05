@@ -8,7 +8,7 @@ use std::{
 };
 
 use super::{
-    tests::{TestServer, hello, read_frames},
+    tests::{TestServer, hello, render_frames},
     *,
 };
 use crate::protocol::{Mouse, MouseButton, MouseKind, MuxCommand, parse_for_test};
@@ -106,8 +106,12 @@ impl Session {
     /// Decodes exactly the bytes the client receives, on top of what it
     /// showed before, so missed incremental clears are observable.
     fn capture(&mut self) -> &vt100::Screen {
-        self.test.server.render_all();
-        read_frames(&mut self.test.client, &mut self.terminal);
+        render_frames(
+            &mut self.test.server,
+            1,
+            &mut self.test.client,
+            &mut self.terminal,
+        );
         self.terminal.screen()
     }
 
@@ -443,7 +447,7 @@ impl Peer {
         let cwd = session.directory.clone();
         session.send(2, hello(rows, cols, cwd, "before"));
         client
-            .set_read_timeout(Some(Duration::from_millis(100)))
+            .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
         Self {
             client,
@@ -452,8 +456,7 @@ impl Peer {
     }
 
     fn contents(&mut self, server: &mut Server) -> String {
-        server.render_all();
-        read_frames(&mut self.client, &mut self.terminal);
+        render_frames(server, 2, &mut self.client, &mut self.terminal);
         self.terminal.screen().contents()
     }
 }
