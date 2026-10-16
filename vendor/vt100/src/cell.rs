@@ -1,5 +1,3 @@
-use unicode_width::UnicodeWidthChar as _;
-
 // chosen to keep the size of the cell struct bounded
 const CONTENT_BYTES: usize = 22;
 
@@ -59,7 +57,7 @@ impl Cell {
         self.append_char(0, c);
         // A cell holds one character and the zero-width ones combined with
         // it, so the first one decides the width.
-        if c.width().unwrap_or(1) > 1 {
+        if crate::character_width(c).unwrap_or(1) > 1 {
             self.len |= IS_WIDE;
         }
         self.attrs = a;

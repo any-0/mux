@@ -264,6 +264,7 @@ fn one_column_screens_never_panic() {
         "中\x1b[2J中a\u{301}",
         "😀\u{fe0f}\u{200d}🔥\r\nx\x08\u{301}",
         "\x1b[?7l中a\u{301}\x1b[P\x1b[@",
+        "\u{17d8}x\u{600}\u{903}\u{6dd}",
     ];
     for input in inputs {
         let mut parser = crate::Parser::new(3, 4, 20);
@@ -278,4 +279,19 @@ fn one_column_screens_never_panic() {
                 .restore_history(&history));
         }
     }
+}
+
+#[test]
+fn terminal_marks_attach_without_advancing_and_typographic_widths_fit_cells() {
+    let mut parser = crate::Parser::new(2, 8, 0);
+    parser.process("\u{600}\u{903}A\u{601}\u{6dd}\u{903}B\u{17d8}C".as_bytes());
+    assert_eq!(
+        parser.screen().cell(0, 0).unwrap().contents(),
+        "A\u{601}\u{6dd}\u{903}"
+    );
+    assert_eq!(parser.screen().cell(0, 1).unwrap().contents(), "B");
+    assert_eq!(parser.screen().cell(0, 2).unwrap().contents(), "\u{17d8}");
+    assert_eq!(parser.screen().cell(0, 3).unwrap().contents(), "C");
+    assert_eq!(parser.screen().cursor_position(), (0, 4));
+    assert!(!parser.screen().cell(0, 2).unwrap().is_wide());
 }

@@ -16,5 +16,6 @@ categories = ["command-line-interface", "encoding"]
 [dependencies]
 itoa = "1.0.15"
 unicode-width = "0.2.1"
+unicode-general-category = "1.1"
 vte = { version = "0.15.0", default-features = false }
 zstd = { version = "0.13.3", default-features = false }

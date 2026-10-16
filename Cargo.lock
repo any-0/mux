@@ -301,7 +301,6 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
- "unicode-width",
  "vt100",
 ]
 
@@ -650,6 +649,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
+name = "unicode-general-category"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b993bddc193ae5bd0d623b49ec06ac3e9312875fdae725a975c51db1cc1677f"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -684,6 +689,7 @@ name = "vt100"
 version = "0.16.2"
 dependencies = [
  "itoa",
+ "unicode-general-category",
  "unicode-width",
  "vte",
  "zstd",

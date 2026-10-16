@@ -62,7 +62,6 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use unicode_width::UnicodeWidthStr;
 
 use crate::{
     config::{BellStyle, Bindings, Theme},
@@ -2356,7 +2355,7 @@ fn yank_summary(text: &str, cols: u16) -> YankSummary {
     let line = text.trim_end_matches(['\r', '\n']);
     if lines > 1 {
         (format!("yanked {lines} lines"), None)
-    } else if line.width() <= usize::from(cols) / 2 && !line.chars().any(char::is_control) {
+    } else if ui::text_width(line) <= usize::from(cols) / 2 && !line.chars().any(char::is_control) {
         let start = "yanked \"".len();
         (
             format!("yanked \"{line}\""),

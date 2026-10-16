@@ -672,7 +672,15 @@ fn popups_are_placed_by_their_anchor_and_fit_small_screens() {
     // A reporting popup sits flush with the last row, centred across.
     let output = popup(9, 30, PopupAnchor::Bottom, &status, None);
     assert!(output.contains("\x1b[7;11H"), "{output:?}");
-    assert!(output.contains("\x1b[9;11H╰"), "{output:?}");
+    assert_eq!(
+        shown(9, 30, &output)
+            .screen()
+            .cell(8, 10)
+            .unwrap()
+            .contents(),
+        "╰",
+        "{output:?}"
+    );
 
     // Too short for a border: the text alone takes the last row.
     let output = popup(
@@ -751,6 +759,20 @@ fn pane_preview_renders_current_terminal_cells() {
     parser.process(b"older\r\nlatest");
     assert_eq!(preview_source_region(parser.screen(), 1), (1, 1));
     assert_eq!(preview_source_region(parser.screen(), 4), (0, 2));
+}
+
+#[test]
+fn a_cropped_wide_character_cannot_overwrite_the_neighbouring_panel() {
+    let mut parser = vt100::Parser::new(1, 4, 0);
+    parser.process("ab界".as_bytes());
+    let output = painted(1, 8, |frame| {
+        frame.set_text(1, 5, "|UI", crate::frame::CellAttributes::default());
+        render_screen_region(frame, parser.screen(), 0, rect(1, 2, 1, 3));
+    });
+    let mut terminal = vt100::Parser::new(1, 8, 0);
+    terminal.process(output.as_bytes());
+    assert_eq!(terminal.screen().cell(0, 4).unwrap().contents(), "|");
+    assert_eq!(terminal.screen().cell(0, 3).unwrap().contents(), " ");
 }
 
 #[test]

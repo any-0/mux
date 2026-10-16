@@ -95,11 +95,21 @@ The client tells the daemon what its terminal supports. mux sends curly
 underlines and underline colors only to a terminal that draws them. Other
 terminals get a plain underline. The configuration can override each answer.
 
-Terminals do not agree on the width of each character. After a character of
-uncertain width, mux moves the cursor to the next cell explicitly. Thus one
-wrong width does not move the rest of the line. mux turns autowrap off in the
-terminal of each client. Thus a character at the right edge cannot scroll the
-screen.
+The pane parser and UI share a terminal cell width policy: combining and format
+marks attach to a base cell, and spacing characters occupy one or two cells.
+Leading marks cannot attach across a renderer's boundary. Cropped wide
+characters cannot reserve a cell in the neighbouring pane or panel.
+Unicode format controls are retained in pane text and history but are not
+forwarded into the enclosing terminal's text stream. Join controls and emoji
+tags remain in their base cell so composed emoji continue to work.
+
+Terminals can use different Unicode width tables. After every non-ASCII cell,
+mux positions the next cell explicitly. The diff also tracks the possible
+footprint of both old and new Unicode text and repairs affected neighbouring
+cells in the same update. Wide cells are cleared before drawing so a terminal
+that draws the glyph narrowly cannot leave their second column stale. Unchanged
+frames still send nothing. Autowrap is disabled so the right edge cannot scroll
+the screen.
 
 A resize of a client makes the next frame a full repaint. This is also true for a
 resize back to the same size, because the terminal can crop its screen in

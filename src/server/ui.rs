@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use vt100::character_width;
 
 use crate::{
     config::{BellStyle, Glyphs, Theme},
@@ -240,7 +240,11 @@ pub(super) fn render_screen_region(
             };
             let at = destination.col + col;
             if cell.is_wide() {
-                frame.set_wide_cell(row, at, contents, attributes);
+                // A preview or a client smaller than the pane may crop the
+                // second half. Never reserve it outside this pane's rectangle.
+                if col + 1 < width {
+                    frame.set_wide_cell(row, at, contents, attributes);
+                }
             } else {
                 frame.set_cell(row, at, contents, attributes);
             }
@@ -370,7 +374,10 @@ pub(super) fn render_preview_window_title(
         ),
     };
     let title = truncate(&title, rect.cols as usize);
-    let line = format!("{title}{}", " ".repeat(rect.cols as usize - title.width()));
+    let line = format!(
+        "{title}{}",
+        " ".repeat(rect.cols as usize - text_width(&title))
+    );
     let background = if window_index == session.current_window {
         theme.bar_active
     } else {
@@ -421,8 +428,8 @@ pub(super) fn compact_path(path: &Path) -> String {
 }
 
 pub(super) fn two_sided_line(left: &str, right: &str, width: usize) -> String {
-    let left_width = left.width();
-    let right_width = right.width();
+    let left_width = text_width(left);
+    let right_width = text_width(right);
     if left_width + right_width >= width {
         return truncate(left, width);
     }
@@ -487,11 +494,13 @@ pub(super) fn render_popup_box(
     }
 
     let cursor_cell = usize::from(cursor.is_some());
-    let width = (text.width() + 4 + cursor_cell).max(10).min(cols as usize);
+    let width = (text_width(text) + 4 + cursor_cell)
+        .max(10)
+        .min(cols as usize);
     let inner_width = width - 2;
-    let text_width = inner_width - 2;
-    let (visible, cursor) = popup_text_window(text, cursor, text_width);
-    let padding = text_width.saturating_sub(visible.width());
+    let available_text_width = inner_width - 2;
+    let (visible, cursor) = popup_text_window(text, cursor, available_text_width);
+    let padding = available_text_width.saturating_sub(text_width(&visible));
     let left = ((cols as usize - width) / 2 + 1) as u16;
     let top = match anchor {
         PopupAnchor::Center => ((rows as usize - 3) / 2 + 1) as u16,
@@ -572,25 +581,29 @@ pub(super) fn popup_text_window(
     let mut start = cursor;
     let mut before_cursor = 0;
     while start > 0 {
-        let character_width = characters[start - 1].width().unwrap_or(0);
+        let character_width = character_width(characters[start - 1]).unwrap_or(0);
         if before_cursor + character_width >= width {
             break;
         }
         before_cursor += character_width;
         start -= 1;
     }
-    while start < cursor && characters[start].width().unwrap_or(0) == 0 {
+    while start < cursor && character_width(characters[start]).unwrap_or(0) == 0 {
         start += 1;
     }
     let visible: String = characters[start..].iter().collect();
     (truncate(&visible, width), Some(before_cursor))
 }
 
+pub(super) fn text_width(text: &str) -> usize {
+    text.chars().filter_map(character_width).sum()
+}
+
 pub(super) fn truncate(value: &str, width: usize) -> String {
     value
         .chars()
         .scan(0, |used, character| {
-            let character_width = character.width().unwrap_or(0);
+            let character_width = character_width(character).unwrap_or(0);
             if *used + character_width > width {
                 return None;
             }

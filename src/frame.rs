@@ -5,7 +5,7 @@
 //! already showing. Only the cells that actually changed are sent, so a frame
 //! that repeats its predecessor costs no bytes at all.
 
-use unicode_width::UnicodeWidthChar;
+use vt100::character_width;
 
 /// Inline capacity for one cell's text. A `vt100` cell holds at most 22 bytes,
 /// so this never truncates terminal content.
@@ -24,6 +24,15 @@ impl CellText {
     /// As much of `text` as fits, cut at a character boundary.
     fn new(text: &str) -> Self {
         let mut cell = Self::empty();
+        // Old packed history can contain a mark as a cell's first scalar.
+        // Give it its own base so it cannot attach to the cell on its left.
+        if text
+            .chars()
+            .next()
+            .is_some_and(|c| character_width(c) == Some(0))
+        {
+            cell.push(' ');
+        }
         for character in text.chars() {
             if !cell.push(character) {
                 break;
@@ -45,6 +54,12 @@ impl CellText {
 
     /// Appends `character` if it fits, returning whether it did.
     fn push(&mut self, character: char) -> bool {
+        // Cells are display data. Retain format controls in the pane's parsed
+        // text/history, but never let them change the enclosing terminal's
+        // ordering or attach a future write to this cell.
+        if character.is_control() || vt100::is_format_control(character) {
+            return true;
+        }
         let start = self.length as usize;
         let end = start + character.len_utf8();
         if end > CELL_TEXT_BYTES {
@@ -305,12 +320,14 @@ impl Frame {
 
     /// Paints `text` by terminal cell width and returns the column after it.
     pub fn set_text(&mut self, row: u16, col: u16, text: &str, attributes: CellAttributes) -> u16 {
+        let start = col;
         let mut col = col;
         let mut encoded = [0; 4];
         for character in text.chars() {
             let text = character.encode_utf8(&mut encoded);
-            match character.width() {
+            match character_width(character) {
                 None => {}
+                Some(0) if col == start => {}
                 Some(0) => {
                     let previous = col.saturating_sub(1);
                     if let Some(index) = self.index(row, previous) {
@@ -414,6 +431,27 @@ impl Frame {
             self.changed[col] =
                 !incremental || self.cells[offset + col] != previous.cells[offset + col];
         }
+        // A cell's logical width and the outer terminal's Unicode widths can
+        // differ. Account for the area actually at risk when either the old
+        // or new text changes; otherwise a diff leaves glyphs in cells it
+        // believes were never touched. Repairs are part of this same frame.
+        let mut damage_end = 0;
+        for col in 0..width {
+            if self.changed[col] {
+                let current = paint_extent(&self.cells[offset + col]);
+                let old = if incremental {
+                    paint_extent(&previous.cells[offset + col])
+                } else {
+                    0
+                };
+                damage_end = damage_end.max(col + current.max(old));
+            }
+            if col < damage_end {
+                self.changed[col] = true;
+                // This repair itself may paint another Unicode cell.
+                damage_end = damage_end.max(col + paint_extent(&self.cells[offset + col]));
+            }
+        }
         for col in 1..width {
             if self.changed[col] && self.cells[offset + col].continuation {
                 self.changed[col - 1] = true;
@@ -450,10 +488,12 @@ impl Frame {
                     continue;
                 }
                 let gap_start = probe;
+                let mut ascii_gap = true;
                 while probe <= self.cols && !self.changed[probe as usize - 1] {
+                    ascii_gap &= self.cell(row, probe).unwrap().text.as_bytes().is_ascii();
                     probe += 1;
                 }
-                if probe > self.cols || probe - gap_start > RUN_GAP {
+                if probe > self.cols || probe - gap_start > RUN_GAP || !ascii_gap {
                     break;
                 }
             }
@@ -492,6 +532,15 @@ impl Frame {
                     *attributes = Some(cell.attributes);
                 }
                 let text = cell.text.as_bytes();
+                if self
+                    .cell(row, current + 1)
+                    .is_some_and(|next| next.continuation)
+                {
+                    // Clear both owned columns before drawing: a terminal
+                    // with an older width table may draw this glyph narrowly.
+                    output.extend_from_slice(b"  ");
+                    move_to_column(output, current);
+                }
                 output.extend_from_slice(text);
                 resync = width_is_uncertain(text);
             }
@@ -506,40 +555,23 @@ fn move_to(output: &mut Vec<u8>, row: u16, col: u16) {
     output.extend_from_slice(format!("\x1b[{row};{col}H").as_bytes());
 }
 
-/// Whether terminals may disagree on how many columns `text` takes: a
-/// character with a variation selector, joiner or combining mark after it,
-/// an East Asian ambiguous one (box drawing, many symbols), or one that can
-/// be drawn as an emoji. Plain accented letters and CJK ideographs are the same
-/// width everywhere and need no help.
+/// Even a single scalar can have a different width in another terminal's
+/// Unicode tables. ASCII is the only text safe to advance through implicitly.
 fn width_is_uncertain(text: &[u8]) -> bool {
-    if text.is_ascii() {
-        return false;
+    !text.is_ascii()
+}
+
+/// Maximum cells the outer terminal could write for this cell's scalars.
+/// Combining/format characters in our model may be spacing characters there.
+fn paint_extent(cell: &FrameCell) -> usize {
+    if cell.text.as_bytes().is_ascii() {
+        return usize::from(!cell.continuation);
     }
-    let Ok(text) = std::str::from_utf8(text) else {
-        return true;
-    };
-    let mut characters = text.chars();
-    let Some(first) = characters.next() else {
-        return false;
-    };
-    if characters.next().is_some() {
-        return true;
-    }
-    first.width() != first.width_cjk()
-        || matches!(
-            u32::from(first),
-            0x2190..=0x21FF
-                | 0x2300..=0x23FF
-                | 0x2460..=0x24FF
-                | 0x25A0..=0x27BF
-                | 0x2900..=0x297F
-                | 0x2B00..=0x2BFF
-                | 0x3030
-                | 0x303D
-                | 0x3297
-                | 0x3299
-                | 0x1F000..=0x1FAFF
-        )
+    std::str::from_utf8(cell.text.as_bytes())
+        .unwrap()
+        .chars()
+        .map(|c| if c.is_ascii() { 1 } else { 2 })
+        .sum()
 }
 
 fn move_to_column(output: &mut Vec<u8>, col: u16) {
@@ -1005,7 +1037,7 @@ mod tests {
         later.set_wide_cell(1, 3, "界", PLAIN);
         let output = diff(&mut later, &current);
         assert!(
-            output.contains("\x1b[1;3H\x1b[0;39;49m界\x1b"),
+            output.contains("\x1b[1;3H\x1b[0;39;49m  \x1b[3G界\x1b"),
             "{output:?}"
         );
     }
@@ -1055,10 +1087,10 @@ mod tests {
     }
 
     #[test]
-    fn only_characters_of_uncertain_width_are_followed_by_a_reposition() {
+    fn every_non_ascii_cell_is_followed_by_a_reposition() {
         assert!(!width_is_uncertain(b"a"));
-        assert!(!width_is_uncertain("é".as_bytes()));
-        assert!(!width_is_uncertain("中".as_bytes()));
+        assert!(width_is_uncertain("é".as_bytes()));
+        assert!(width_is_uncertain("中".as_bytes()));
         assert!(width_is_uncertain("─".as_bytes()));
         assert!(width_is_uncertain("•".as_bytes()));
         assert!(width_is_uncertain("😀".as_bytes()));
@@ -1070,7 +1102,128 @@ mod tests {
         current.set_text(1, 1, "a─b中c", PLAIN);
         let output = diff(&mut current, &Frame::default());
         assert!(output.contains("─\x1b[3Gb"), "{output:?}");
-        assert!(output.contains("中c"), "{output:?}");
+        assert!(output.contains("中\x1b[6Gc"), "{output:?}");
+    }
+
+    #[test]
+    fn leading_marks_do_not_attach_to_another_renderers_cells() {
+        let mut current = frame(1, 12);
+        current.set_text(1, 1, "bar|", PLAIN);
+        current.set_text(1, 5, "\u{600}\u{903}Ae\u{301}", PLAIN);
+        assert_eq!(current.cell(1, 4).unwrap().text, CellText::new("|"));
+        assert_eq!(current.cell(1, 5).unwrap().text, CellText::new("A"));
+        assert_eq!(current.cell(1, 6).unwrap().text, CellText::new("e\u{301}"));
+        assert_eq!(CellText::new("\u{600}").as_bytes(), b" ");
+    }
+
+    #[test]
+    fn unicode_damage_includes_unchanged_neighbours_when_painted_or_erased() {
+        let mut previous = frame(1, 20);
+        previous.set_text(1, 5, "e\u{301}\u{903}", PLAIN);
+        let mut current = frame(1, 20);
+        current.mark_changed_cells(&previous, 1, true);
+        // One base plus two marks can occupy five columns in a different
+        // terminal. The old cell's entire footprint needs repairing.
+        assert_eq!(
+            current.changed.iter().filter(|changed| **changed).count(),
+            5
+        );
+        assert!(current.changed[4..9].iter().all(|changed| *changed));
+        previous.mark_changed_cells(&current, 1, true);
+        assert!(previous.changed[4..9].iter().all(|changed| *changed));
+    }
+
+    #[test]
+    #[ignore = "requires Kitty; set MUX_TEST_KITTY to its executable"]
+    fn unicode_diffs_in_kitty() {
+        use std::{
+            io::Write,
+            process::{Command, Stdio},
+        };
+
+        let (rows, cols) = (4, 32);
+        let paint = |text: &str, col| {
+            let mut current = frame(rows, cols);
+            for row in 1..=rows {
+                current.set_text(row, 1, "L|", PLAIN);
+                current.set_text(row, 31, "|R", PLAIN);
+            }
+            current.set_text(2, col, text, PLAIN);
+            current
+        };
+        let mut previous = Frame::default();
+        let mut frames = Vec::new();
+        let mut record = |mut current: Frame| {
+            let mut bytes = Vec::new();
+            current.diff(&previous, TerminalFeatures::FULL, &mut bytes);
+            let ascii: Vec<_> = current
+                .cells
+                .iter()
+                .enumerate()
+                .filter_map(|(index, cell)| {
+                    let text = cell.text.as_bytes();
+                    (!cell.continuation && text.is_ascii()).then(|| {
+                        (
+                            index / cols as usize,
+                            index % cols as usize,
+                            std::str::from_utf8(text).unwrap().to_owned(),
+                        )
+                    })
+                })
+                .collect();
+            frames.push(serde_json::json!({"bytes": bytes, "ascii": ascii}));
+            previous = current;
+        };
+        record(paint("", 3));
+        for mark in ["\u{600}", "\u{200c}", "\u{200d}", "\u{e0061}"] {
+            let mut legacy = paint("X", 4);
+            legacy.set_cell(2, 3, mark, PLAIN);
+            record(legacy);
+            record(paint("", 3));
+        }
+        for text in [
+            "\u{600}A\u{601}B\u{6dd}C\u{903}D",
+            "a\u{903}\u{17d8}z",
+            "e\u{301}\u{fe0f}X",
+            "❤\u{fe0f}X",
+            "😀\u{200d}🔥X",
+            "\u{e010}X",
+            "\u{1fae8}X",
+            "中X",
+        ] {
+            for col in [3, 15, 27] {
+                record(paint(text, col));
+                record(paint("", col));
+            }
+        }
+        // Sample across Unicode planes, including unassigned characters whose
+        // widths can differ between the emulator's and our Unicode versions.
+        let mut seed = 0x600_u32;
+        for _ in 0..1024 {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            if let Some(c) = char::from_u32(seed % 0x11_0000) {
+                record(paint(&format!("a{c}X"), 27));
+                record(paint("", 27));
+            }
+        }
+        let kitty = std::env::var_os("MUX_TEST_KITTY").expect("set MUX_TEST_KITTY");
+        let mut child = Command::new(kitty)
+            .args(["+runpy", include_str!("../tests/kitty_render.py")])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                &serde_json::to_vec(
+                    &serde_json::json!({"rows": rows, "cols": cols, "frames": frames}),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(child.wait().unwrap().success());
     }
 
     #[test]

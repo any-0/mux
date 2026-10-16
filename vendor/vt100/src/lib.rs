@@ -56,6 +56,7 @@ mod row;
 mod screen;
 mod scrollback;
 mod term;
+mod width;
 
 pub use attrs::{Color, UnderlineStyle};
 pub use callbacks::Callbacks;
@@ -63,6 +64,7 @@ pub use cell::Cell;
 pub use parser::{Parser, MAX_OSC_BYTES};
 pub use row::{Cells, Row};
 pub use screen::{MouseProtocolEncoding, MouseProtocolMode, Screen};
+pub use width::{character_width, is_format_control};
 
 #[cfg(test)]
 mod emulation_tests;

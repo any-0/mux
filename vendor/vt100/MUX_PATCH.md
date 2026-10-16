@@ -44,6 +44,12 @@ Checked against alacritty, and against xterm and tmux where those disagree:
 
 ## Resizing and wide characters
 
+- Parser cells and mux UI use the same terminal scalar width function, exported
+  as `character_width`: Unicode mark and format categories combine with the
+  preceding cell; typographic widths greater than two become one terminal cell.
+  This avoids storing visible prepended marks or three-column glyphs in a
+  representation that only supports zero-, one-, and two-cell characters.
+
 - The normal screen resizes like tmux: a new width rewraps history and screen
   together with the cursor kept in its text; a new height drops rows below the
   cursor before pushing rows into history, and growing pulls at most that many
