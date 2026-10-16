@@ -47,6 +47,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     io::{Read, Write},
+    ops::Range,
     os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -61,6 +62,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     config::{BellStyle, Bindings, Theme},
@@ -123,7 +125,7 @@ enum Event {
     PtyOutput(usize, Vec<u8>, OutputPermit),
     PtyClosed(usize),
     ProcessIcon(usize, Option<i32>, &'static str),
-    ClipboardCopied(usize, String, Result<(), String>),
+    ClipboardCopied(usize, YankSummary, Result<(), String>),
     ThemeSwitched(usize, String, Result<(), String>),
 }
 
@@ -984,8 +986,15 @@ impl Server {
     }
 
     fn set_message(&mut self, id: usize, text: String) {
+        self.set_highlighted_message(id, (text, None));
+    }
+
+    fn set_highlighted_message(&mut self, id: usize, (text, highlight): YankSummary) {
         if let Some(client) = self.clients.get_mut(&id) {
-            client.message = Some(StatusMessage::new(text));
+            client.message = Some(StatusMessage {
+                highlight,
+                ..StatusMessage::new(text)
+            });
         }
     }
 
@@ -1060,13 +1069,10 @@ impl Server {
                 }
             }
             Event::ClipboardCopied(id, summary, result) => {
-                self.set_message(
-                    id,
-                    match result {
-                        Ok(()) => summary,
-                        Err(error) => format!("clipboard: {error}"),
-                    },
-                );
+                match result {
+                    Ok(()) => self.set_highlighted_message(id, summary),
+                    Err(error) => self.set_message(id, format!("clipboard: {error}")),
+                }
                 self.dirty = true;
             }
             Event::ThemeSwitched(id, name, result) => {
@@ -2331,25 +2337,33 @@ fn copy_to_clipboard(
     id: usize,
     command: Vec<String>,
     text: String,
+    summary: YankSummary,
 ) {
     thread::spawn(move || {
-        let summary = yank_summary(&text);
         let result = run_clipboard_command(&command, &text).map_err(|error| format!("{error:#}"));
         let _ = sender.send(Event::ClipboardCopied(id, summary, result));
     });
 }
 
-/// Short text is shown as it is; anything longer is counted in lines, or in
-/// characters when it fits on one line.
-fn yank_summary(text: &str) -> String {
+/// What a yank reports, with the byte range of the text itself (when it is
+/// shown) to draw in the accent colour.
+type YankSummary = (String, Option<Range<usize>>);
+
+/// A single line that fits in half of `cols` is shown as it is; anything
+/// longer is counted in lines, or in characters when it is one line.
+fn yank_summary(text: &str, cols: u16) -> YankSummary {
     let lines = text.lines().count();
-    let characters = text.chars().count();
+    let line = text.trim_end_matches(['\r', '\n']);
     if lines > 1 {
-        format!("yanked {lines} lines")
-    } else if characters < 20 {
-        format!("yanked \"{}\"", text.trim_end_matches(['\r', '\n']))
+        (format!("yanked {lines} lines"), None)
+    } else if line.width() <= usize::from(cols) / 2 && !line.chars().any(char::is_control) {
+        let start = "yanked \"".len();
+        (
+            format!("yanked \"{line}\""),
+            Some(start..start + line.len()),
+        )
     } else {
-        format!("yanked {characters} characters")
+        (format!("yanked {} characters", line.chars().count()), None)
     }
 }
 

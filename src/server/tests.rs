@@ -1510,6 +1510,7 @@ fn clipboard_copy_finishes_on_a_worker() {
         7,
         command.map(String::from).to_vec(),
         "copied text".into(),
+        yank_summary("copied text", 80),
     );
     assert!(matches!(
         receiver.try_recv(),
@@ -1520,8 +1521,8 @@ fn clipboard_copy_finishes_on_a_worker() {
         panic!("clipboard worker sent the wrong event");
     };
     assert_eq!(
-        (id, summary.as_str(), result),
-        (7, "yanked \"copied text\"", Ok(()))
+        (id, summary, result),
+        (7, yank_summary("copied text", 80), Ok(()))
     );
     assert_eq!(fs::read_to_string(&path).unwrap(), "copied text");
     fs::remove_dir_all(directory).unwrap();
@@ -1741,13 +1742,52 @@ fn two_digit_sidebar_process_tiles_keep_their_background_through_the_right_edge(
 }
 
 #[test]
-fn a_yank_reports_short_text_itself_and_counts_the_rest() {
-    assert_eq!(yank_summary("ls -la"), "yanked \"ls -la\"");
-    assert_eq!(yank_summary("echo hi\n"), "yanked \"echo hi\"");
-    assert_eq!(yank_summary("exactly twenty chars"), "yanked 20 characters");
+fn a_yank_shows_text_that_fits_half_the_screen_and_counts_the_rest() {
+    let shown = |line: &str| {
+        let start = "yanked \"".len();
+        (
+            format!("yanked \"{line}\""),
+            Some(start..start + line.len()),
+        )
+    };
+    assert_eq!(yank_summary("ls -la", 80), shown("ls -la"));
+    assert_eq!(yank_summary("echo hi\n", 80), shown("echo hi"));
+    let forty = "x".repeat(40);
+    assert_eq!(yank_summary(&forty, 80), shown(&forty));
     assert_eq!(
-        yank_summary("ünïcödé ünïcödé"),
-        "yanked \"ünïcödé ünïcödé\""
+        yank_summary(&forty, 79),
+        ("yanked 40 characters".into(), None)
     );
-    assert_eq!(yank_summary("one\ntwo\nthree\n"), "yanked 3 lines");
+    // Width, not length, decides: each of these takes two columns.
+    assert_eq!(
+        yank_summary("日本語", 11),
+        ("yanked 3 characters".into(), None)
+    );
+    assert_eq!(yank_summary("日本語", 12), shown("日本語"));
+    // A tab would draw as nothing, so it is counted instead.
+    assert_eq!(
+        yank_summary("a\tb", 80),
+        ("yanked 3 characters".into(), None)
+    );
+    assert_eq!(
+        yank_summary("one\ntwo\nthree\n", 80),
+        ("yanked 3 lines".into(), None)
+    );
+}
+
+#[test]
+fn a_highlighted_status_draws_its_range_in_the_accent_colour() {
+    let theme = Theme::default();
+    let message = Popup::Highlighted("yanked \"ls\"".into(), 8..10);
+    let output = popup(5, 40, PopupAnchor::Bottom, &message, None);
+    let parser = shown(5, 40, &output);
+    let screen = parser.screen();
+    let start = (0..40)
+        .find(|&col| screen.cell(3, col).unwrap().contents() == "y")
+        .unwrap();
+    let foreground = |offset: u16| screen.cell(3, start + offset).unwrap().fgcolor();
+    assert_eq!(foreground(7), crate::frame::rgb(theme.popup_text));
+    assert_eq!(foreground(8), crate::frame::rgb(theme.popup_accent));
+    assert_eq!(foreground(9), crate::frame::rgb(theme.popup_accent));
+    assert_eq!(foreground(10), crate::frame::rgb(theme.popup_text));
 }

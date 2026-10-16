@@ -4,6 +4,7 @@
 use std::{
     collections::HashSet,
     env,
+    ops::Range,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -121,6 +122,8 @@ impl TreeState {
 /// A transient status line that disappears on its own.
 pub(super) struct StatusMessage {
     pub(super) text: String,
+    /// A byte range of `text` drawn in the accent colour.
+    pub(super) highlight: Option<Range<usize>>,
     pub(super) expires: Instant,
 }
 
@@ -128,6 +131,7 @@ impl StatusMessage {
     pub(super) fn new(text: String) -> Self {
         Self {
             text,
+            highlight: None,
             expires: Instant::now() + MESSAGE_DURATION,
         }
     }
@@ -158,6 +162,8 @@ pub(super) struct TreeDisplayRow {
 
 pub(super) enum Popup {
     Status(String),
+    /// A status with a byte range of its text drawn in the accent colour.
+    Highlighted(String, Range<usize>),
     Warning(String),
     Rename {
         text: String,
@@ -439,7 +445,9 @@ pub(super) fn render_popup_box(
     theme: &Theme,
 ) {
     let (text, cursor, cursor_shape, warning) = match popup {
-        Popup::Status(text) => (text.as_str(), None, CursorShape::Block, false),
+        Popup::Status(text) | Popup::Highlighted(text, _) => {
+            (text.as_str(), None, CursorShape::Block, false)
+        }
         Popup::Warning(text) => (text.as_str(), None, CursorShape::Block, true),
         Popup::Rename {
             text,
@@ -447,6 +455,11 @@ pub(super) fn render_popup_box(
             shape,
         } => (text.as_str(), Some(*cursor), *shape, false),
     };
+    let highlight = match popup {
+        Popup::Highlighted(_, highlight) => Some(highlight.clone()),
+        _ => None,
+    };
+    let highlighted = CellAttributes::colors(theme.popup_accent, theme.popup_background);
     if rows < 3 || cols < 6 {
         let width = cols as usize;
         let (visible, cursor) = popup_text_window(text, cursor, width);
@@ -454,11 +467,13 @@ pub(super) fn render_popup_box(
             PopupAnchor::Center => rows.saturating_add(1) / 2,
             PopupAnchor::Bottom => rows,
         };
-        frame.set_text(
-            row,
-            1,
+        set_highlighted_text(
+            frame,
+            (row, 1),
             &visible,
+            highlight,
             CellAttributes::colors(theme.popup_text, theme.popup_background),
+            highlighted,
         );
         if let Some(cursor) = cursor {
             frame.set_cursor(FrameCursor {
@@ -502,7 +517,14 @@ pub(super) fn render_popup_box(
         accent,
     );
     frame.set_text(top + 1, left, "│ ", accent);
-    let after_text = frame.set_text(top + 1, left + 2, &visible, body);
+    let after_text = set_highlighted_text(
+        frame,
+        (top + 1, left + 2),
+        &visible,
+        highlight,
+        body,
+        highlighted,
+    );
     frame.fill(top + 1, after_text, padding as u16, body);
     frame.set_text(top + 1, left + 1 + inner_width as u16 - 1, " │", accent);
 
@@ -514,6 +536,27 @@ pub(super) fn render_popup_box(
             visible: true,
         });
     }
+}
+
+/// Writes `text` with the part of it inside `highlight` (a byte range, which
+/// may run past the end of a truncated `text`) in the `highlighted` style,
+/// returning the column after it.
+fn set_highlighted_text(
+    frame: &mut Frame,
+    (row, col): (u16, u16),
+    text: &str,
+    highlight: Option<Range<usize>>,
+    body: CellAttributes,
+    highlighted: CellAttributes,
+) -> u16 {
+    let Some(highlight) = highlight else {
+        return frame.set_text(row, col, text, body);
+    };
+    let start = highlight.start.min(text.len());
+    let end = highlight.end.clamp(start, text.len());
+    let col = frame.set_text(row, col, &text[..start], body);
+    let col = frame.set_text(row, col, &text[start..end], highlighted);
+    frame.set_text(row, col, &text[end..], body)
 }
 
 pub(super) fn popup_text_window(

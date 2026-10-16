@@ -196,7 +196,12 @@ impl Server {
         } else {
             client.message.as_ref().map(|message| {
                 (
-                    Popup::Status(message.text.clone()),
+                    match &message.highlight {
+                        Some(highlight) => {
+                            Popup::Highlighted(message.text.clone(), highlight.clone())
+                        }
+                        None => Popup::Status(message.text.clone()),
+                    },
                     // Nothing to answer: this only confirms something already
                     // done, so it stays out of the middle of the screen.
                     PopupAnchor::Bottom,
