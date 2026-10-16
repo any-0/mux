@@ -1494,10 +1494,13 @@ fn clipboard_copy_finishes_on_a_worker() {
         Err(mpsc::TryRecvError::Empty)
     ));
     let event = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
-    let Event::ClipboardCopied(id, bytes, result) = event else {
+    let Event::ClipboardCopied(id, summary, result) = event else {
         panic!("clipboard worker sent the wrong event");
     };
-    assert_eq!((id, bytes, result), (7, 11, Ok(())));
+    assert_eq!(
+        (id, summary.as_str(), result),
+        (7, "yanked \"copied text\"", Ok(()))
+    );
     assert_eq!(fs::read_to_string(&path).unwrap(), "copied text");
     fs::remove_dir_all(directory).unwrap();
 }
@@ -1713,4 +1716,16 @@ fn two_digit_sidebar_process_tiles_keep_their_background_through_the_right_edge(
         rgb(theme.bar_inactive)
     );
     assert_eq!(screen.cell(20, 3).unwrap().bgcolor(), rgb(theme.bar_active));
+}
+
+#[test]
+fn a_yank_reports_short_text_itself_and_counts_the_rest() {
+    assert_eq!(yank_summary("ls -la"), "yanked \"ls -la\"");
+    assert_eq!(yank_summary("echo hi\n"), "yanked \"echo hi\"");
+    assert_eq!(yank_summary("exactly twenty chars"), "yanked 20 characters");
+    assert_eq!(
+        yank_summary("ünïcödé ünïcödé"),
+        "yanked \"ünïcödé ünïcödé\""
+    );
+    assert_eq!(yank_summary("one\ntwo\nthree\n"), "yanked 3 lines");
 }

@@ -308,13 +308,13 @@ impl Server {
                 self.clients.get_mut(&id).unwrap().vim.remove(&pane_id);
             }
             VimOutcome::Yank(text) => {
-                let bytes = text.len();
                 if self.clients[&id].terminal_clipboard {
+                    let summary = yank_summary(&text);
                     self.clients[&id].writer.send(ServerMessage::Clipboard {
                         selection: b"c".to_vec(),
                         data: text.into_bytes(),
                     });
-                    self.set_message(id, format!("yanked {bytes} bytes"));
+                    self.set_message(id, summary);
                     self.dirty = true;
                 } else {
                     let command = self.clients[&id].clipboard_command.clone();

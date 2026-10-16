@@ -123,7 +123,7 @@ enum Event {
     PtyOutput(usize, Vec<u8>, OutputPermit),
     PtyClosed(usize),
     ProcessIcon(usize, Option<i32>, &'static str),
-    ClipboardCopied(usize, usize, Result<(), String>),
+    ClipboardCopied(usize, String, Result<(), String>),
     ThemeSwitched(usize, String, Result<(), String>),
 }
 
@@ -1055,11 +1055,11 @@ impl Server {
                     }
                 }
             }
-            Event::ClipboardCopied(id, bytes, result) => {
+            Event::ClipboardCopied(id, summary, result) => {
                 self.set_message(
                     id,
                     match result {
-                        Ok(()) => format!("yanked {bytes} bytes"),
+                        Ok(()) => summary,
                         Err(error) => format!("clipboard: {error}"),
                     },
                 );
@@ -2329,10 +2329,24 @@ fn copy_to_clipboard(
     text: String,
 ) {
     thread::spawn(move || {
-        let bytes = text.len();
+        let summary = yank_summary(&text);
         let result = run_clipboard_command(&command, &text).map_err(|error| format!("{error:#}"));
-        let _ = sender.send(Event::ClipboardCopied(id, bytes, result));
+        let _ = sender.send(Event::ClipboardCopied(id, summary, result));
     });
+}
+
+/// Short text is shown as it is; anything longer is counted in lines, or in
+/// characters when it fits on one line.
+fn yank_summary(text: &str) -> String {
+    let lines = text.lines().count();
+    let characters = text.chars().count();
+    if lines > 1 {
+        format!("yanked {lines} lines")
+    } else if characters < 20 {
+        format!("yanked \"{}\"", text.trim_end_matches(['\r', '\n']))
+    } else {
+        format!("yanked {characters} characters")
+    }
 }
 
 fn run_clipboard_command(command: &[String], text: &str) -> Result<()> {
