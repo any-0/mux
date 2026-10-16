@@ -35,6 +35,12 @@ mux kill-server         # stop the daemon and every pane (alias: mux stop)
 Linux and macOS are supported. The socket is `$XDG_RUNTIME_DIR/mux.sock`, or
 `/tmp/mux-$UID/mux.sock`. Only one daemon at a time owns the state directory.
 
+On Nix Linux, the installer registers GC roots for the binary's loader and
+shared libraries under `$XDG_STATE_HOME/mux/install-roots` (default
+`~/.local/state/mux/install-roots`). These survive changes to the project's dev
+shell. Automatic `nh clean` jobs must use `--no-gcroots` to preserve them.
+Reinstalling replaces the roots; remove this directory when uninstalling mux.
+
 Interactive operations are also available as tmux-style commands, which act on
 the originating pane when run inside mux (`mux split-window -h`,
 `mux resize-pane -L 5`, `mux join-pane -h -t 2`, ...). Read-only queries

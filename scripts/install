@@ -5,6 +5,49 @@
 set -eu
 cd "$(dirname "$0")/.."
 CARGO_PROFILE_RELEASE_INCREMENTAL=true cargo build --release --locked
+
+# Locally copied ELF binaries are invisible to Nix's reference tracking. Root
+# their loader and shared libraries independently of the project's dev shell.
+roots=
+staged=
+cleanup() {
+    [ -z "$staged" ] || rm -f "$staged"
+    [ -z "$roots" ] || rm -rf "$roots"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+if [ "$(uname -s)" = Linux ] && command -v nix-store >/dev/null 2>&1; then
+    libraries=$(LC_ALL=C ldd target/release/mux)
+    case "$libraries" in
+        *'not found'*) echo "$libraries" >&2; exit 1 ;;
+    esac
+    state="${XDG_STATE_HOME:-$HOME/.local/state}/mux/install-roots"
+    mkdir -p "$state"
+    roots=$(mktemp -d "$state/runtime.XXXXXXXX")
+    # ldd includes the ELF interpreter as well as transitive shared libraries.
+    printf '%s\n' "$libraries" | awk '{
+        for (i = 1; i <= NF; i++)
+            if ($i ~ /^\/nix\/store\//) {
+                split($i, path, "/")
+                print "/nix/store/" path[4]
+            }
+    }' | sort -u > "$roots/paths"
+    while IFS= read -r dependency; do
+        nix-store --realise "$dependency" --indirect \
+            --add-root "$roots/${dependency##*/}" >/dev/null
+    done < "$roots/paths"
+fi
+
 mkdir -p "$HOME/.local/bin"
-install -m 755 target/release/mux "$HOME/.local/bin/mux"
+staged=$(mktemp "$HOME/.local/bin/.mux.XXXXXXXX")
+install -m 755 target/release/mux "$staged"
+mv -f "$staged" "$HOME/.local/bin/mux"
+staged=
+if [ -n "$roots" ]; then
+    installed_roots=$roots
+    roots= # Keep these roots after a successful install.
+    for previous in "$state"/runtime.*; do
+        [ "$previous" = "$installed_roots" ] || rm -rf "$previous"
+    done
+fi
 echo "installed $HOME/.local/bin/mux; 'mux kill-server' restarts the daemon on it"
