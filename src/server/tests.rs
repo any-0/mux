@@ -1112,6 +1112,28 @@ fn idle_prompt_markers_restore_the_screen_before_the_prompt() {
 }
 
 #[test]
+fn a_restored_screen_drops_the_input_modes_of_the_program_that_set_them() {
+    let mut parser = new_parser(4, 40);
+    parser.process(b"\x1b[?1004h\x1b[?1002h\x1b[?1006h\x1b[?1h\x1b[?2004h$ ");
+    let reset = restored_input_mode_reset(parser.screen()).unwrap();
+    parser.process(&reset);
+    let screen = parser.screen();
+    assert!(!screen.focus_reporting());
+    assert_eq!(screen.mouse_protocol_mode(), vt100::MouseProtocolMode::None);
+    assert_eq!(
+        screen.mouse_protocol_encoding(),
+        vt100::MouseProtocolEncoding::Default
+    );
+    assert!(!screen.application_cursor());
+    // The shell's own prompt state, and the screen, stay as they were.
+    assert!(screen.bracketed_paste());
+    assert_eq!(screen.contents(), "$ ");
+
+    // A screen with nothing to undo is left alone.
+    assert!(restored_input_mode_reset(new_parser(4, 40).screen()).is_none());
+}
+
+#[test]
 fn vim_snapshot_preserves_terminal_formatting() {
     let mut parser = vt100::Parser::new(2, 12, 0);
     parser.process(b"\x1b[1;3;4;31;44mstyled\x1b[0m plain");

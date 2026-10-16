@@ -336,6 +336,27 @@ pub(super) fn cursor_row(screen: &vt100::Screen) -> String {
         .unwrap_or_default()
 }
 
+/// Turns off the input modes a restored screen kept from the program that set
+/// them. The new shell never asked for them, so focus reports, mouse events and
+/// application cursor keys would reach it as stray input, which zsh answers
+/// with a bell.
+pub(super) fn restored_input_mode_reset(screen: &vt100::Screen) -> Option<Vec<u8>> {
+    let mut reset = Vec::new();
+    if screen.focus_reporting() {
+        reset.extend_from_slice(b"\x1b[?1004l");
+    }
+    if screen.mouse_protocol_mode() != vt100::MouseProtocolMode::None {
+        reset.extend_from_slice(b"\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l");
+    }
+    if screen.mouse_protocol_encoding() != vt100::MouseProtocolEncoding::Default {
+        reset.extend_from_slice(b"\x1b[?1005l\x1b[?1006l");
+    }
+    if screen.application_cursor() {
+        reset.extend_from_slice(b"\x1b[?1l");
+    }
+    (!reset.is_empty()).then_some(reset)
+}
+
 pub(super) fn restored_prompt_correction(
     parser: &vt100::Parser<TerminalCallbacks>,
 ) -> Option<Vec<u8>> {

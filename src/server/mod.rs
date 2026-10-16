@@ -685,6 +685,10 @@ impl Server {
                         let _ = pane.history.append_output(&correction, None);
                         process_terminal_bytes(&mut pane.parser, &correction);
                     }
+                    if let Some(reset) = restored_input_mode_reset(pane.parser.screen()) {
+                        let _ = pane.history.append_output(&reset, None);
+                        process_terminal_bytes(&mut pane.parser, &reset);
+                    }
                     panes.push(pane);
                 }
                 windows.push(Window {
